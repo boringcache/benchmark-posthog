@@ -317,9 +317,13 @@ jobs:
 
       - name: Purge BoringCache benchmark tags
         env:
-          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+          BORINGCACHE_API_TOKEN: ${{ github.event_name == 'pull_request' && '' || secrets.BORINGCACHE_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
+          if [[ -z "${BORINGCACHE_API_TOKEN:-}" ]]; then
+            echo "Skipping purge: BORINGCACHE_ADMIN_TOKEN not set"
+            exit 0
+          fi
           boringcache delete --no-git "$BENCHMARK_WORKSPACE" "${{ steps.scope.outputs.purge_registry_tags_csv }}" || true
           boringcache delete --no-platform --no-git "$BENCHMARK_WORKSPACE" "${{ steps.scope.outputs.purge_internal_tags_csv }}" || true
 

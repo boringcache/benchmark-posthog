@@ -132,9 +132,6 @@ jobs:
           python_tag="posthog-python-${run_suffix}"
           staticfiles_tag="posthog-staticfiles-${run_suffix}"
           playwright_tag="posthog-playwright-${run_suffix}"
-          internal_platform_suffix="debian-12-x86_64"
-          purge_internal_tags_csv="${pnpm_tag}-${internal_platform_suffix},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag}-${internal_platform_suffix},${python_tag}-${internal_platform_suffix},${staticfiles_tag}-${internal_platform_suffix},${playwright_tag}-${internal_platform_suffix}"
-          purge_registry_tags_csv="${docker_registry_tag}"
           tags_csv="${pnpm_tag},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "docker_registry_tag=${docker_registry_tag}" >> "$GITHUB_OUTPUT"
@@ -145,8 +142,6 @@ jobs:
           echo "python_tag=${python_tag}" >> "$GITHUB_OUTPUT"
           echo "staticfiles_tag=${staticfiles_tag}" >> "$GITHUB_OUTPUT"
           echo "playwright_tag=${playwright_tag}" >> "$GITHUB_OUTPUT"
-          echo "purge_internal_tags_csv=${purge_internal_tags_csv}" >> "$GITHUB_OUTPUT"
-          echo "purge_registry_tags_csv=${purge_registry_tags_csv}" >> "$GITHUB_OUTPUT"
           echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
           cat > ./run-boringcache-build.sh <<'SH'
           #!/usr/bin/env bash
@@ -315,18 +310,6 @@ jobs:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
 
-      - name: Purge BoringCache benchmark tags
-        env:
-          BORINGCACHE_API_TOKEN: ${{ github.event_name == 'pull_request' && '' || secrets.BORINGCACHE_ADMIN_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${BORINGCACHE_API_TOKEN:-}" ]]; then
-            echo "Skipping purge: BORINGCACHE_ADMIN_TOKEN not set"
-            exit 0
-          fi
-          boringcache delete --no-git "$BENCHMARK_WORKSPACE" "${{ steps.scope.outputs.purge_registry_tags_csv }}" || true
-          boringcache delete --no-platform --no-git "$BENCHMARK_WORKSPACE" "${{ steps.scope.outputs.purge_internal_tags_csv }}" || true
-
       - name: Run cold + seed cache build
         id: cold_baseline_build
         env:
@@ -421,9 +404,6 @@ jobs:
           python_tag="posthog-python-${run_suffix}"
           staticfiles_tag="posthog-staticfiles-${run_suffix}"
           playwright_tag="posthog-playwright-${run_suffix}"
-          internal_platform_suffix="debian-12-x86_64"
-          purge_internal_tags_csv="${pnpm_tag}-${internal_platform_suffix},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag}-${internal_platform_suffix},${python_tag}-${internal_platform_suffix},${staticfiles_tag}-${internal_platform_suffix},${playwright_tag}-${internal_platform_suffix}"
-          purge_registry_tags_csv="${docker_registry_tag}"
           tags_csv="${pnpm_tag},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "docker_registry_tag=${docker_registry_tag}" >> "$GITHUB_OUTPUT"
@@ -434,8 +414,6 @@ jobs:
           echo "python_tag=${python_tag}" >> "$GITHUB_OUTPUT"
           echo "staticfiles_tag=${staticfiles_tag}" >> "$GITHUB_OUTPUT"
           echo "playwright_tag=${playwright_tag}" >> "$GITHUB_OUTPUT"
-          echo "purge_internal_tags_csv=${purge_internal_tags_csv}" >> "$GITHUB_OUTPUT"
-          echo "purge_registry_tags_csv=${purge_registry_tags_csv}" >> "$GITHUB_OUTPUT"
           echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
           cat > ./run-boringcache-build.sh <<'SH'
           #!/usr/bin/env bash

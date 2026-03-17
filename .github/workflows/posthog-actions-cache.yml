@@ -93,34 +93,6 @@ jobs:
           echo "cache_scope_fallback=${cache_scope_fallback}" >> "$GITHUB_OUTPUT"
           echo "scope_started_at=${scope_started_at}" >> "$GITHUB_OUTPUT"
 
-      - name: Purge benchmark GHA cache keys
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          # Purge this run's scoped seed keys only.
-          for key_prefix in "index-${{ steps.scope.outputs.cache_scope_primary }}" "index-${{ steps.scope.outputs.cache_scope_fallback }}"; do
-            page=1
-            while true; do
-              response="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100&page=${page}&key=${key_prefix}" 2>/dev/null || true)"
-              if [[ -z "$response" ]] || ! jq -e '.actions_caches | type == "array"' <<<"$response" >/dev/null 2>&1; then
-                break
-              fi
-
-              mapfile -t cache_ids < <(jq -r '.actions_caches[].id' <<<"$response")
-              for cache_id in "${cache_ids[@]}"; do
-                gh api -X DELETE "/repos/${GITHUB_REPOSITORY}/actions/caches/${cache_id}" >/dev/null 2>&1 || true
-              done
-
-              count="$(jq '.actions_caches | length' <<<"$response")"
-              if [[ "$count" -lt 100 ]]; then
-                break
-              fi
-              page=$((page + 1))
-            done
-          done
-
       - name: Prepare AC write probe
         run: |
           set -euo pipefail

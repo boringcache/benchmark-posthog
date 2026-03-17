@@ -10,7 +10,7 @@
 # Usage:
 #   docker buildx build \
 #     --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
-#     --build-arg BORINGCACHE_WORKSPACE=boringcache/benchmark-posthog \
+#     --build-arg BORINGCACHE_WORKSPACE=boringcache/benchmarks \
 #     -f Dockerfile.benchmark .
 
 ARG BORINGCACHE_WORKSPACE="boringcache/benchmarks"

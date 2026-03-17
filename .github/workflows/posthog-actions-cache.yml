@@ -24,7 +24,7 @@ env:
   PROJECT_REPO: PostHog/posthog
   PROJECT_REF: "5ddbe2c9f8cf4877fa1739605aae1f05325ab4bb"
   BENCHMARK_ID: posthog
-  BENCHMARK_WORKSPACE: boringcache/benchmark-posthog
+  BENCHMARK_WORKSPACE: boringcache/benchmarks
 
 jobs:
   seed-cache:
@@ -48,7 +48,13 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
-          submodules: recursive
+          submodules: false
+
+      - name: Checkout pinned upstream submodule shallowly
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
 
       - name: Prepare base benchmark source tree
         run: ./scripts/prepare-source.sh base
@@ -230,7 +236,13 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
-          submodules: recursive
+          submodules: false
+
+      - name: Checkout pinned upstream submodule shallowly
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
 
       - name: Prepare scenario source tree
         run: ./scripts/prepare-source.sh "${{ matrix.phase }}"

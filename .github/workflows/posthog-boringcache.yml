@@ -46,7 +46,7 @@ env:
   PROJECT_REPO: PostHog/posthog
   PROJECT_REF: "5ddbe2c9f8cf4877fa1739605aae1f05325ab4bb"
   BENCHMARK_ID: posthog
-  BENCHMARK_WORKSPACE: boringcache/benchmark-posthog
+  BENCHMARK_WORKSPACE: boringcache/benchmarks
   INTERNAL_PROFILE: ${{ github.event.inputs.internal_profile || 'standard' }}
   TURBO_BACKEND: ${{ github.event.inputs.turbo_backend || 'proxy' }}
 
@@ -66,11 +66,32 @@ jobs:
           sudo docker image prune --all --force
           df -h /
 
+      - name: Validate BoringCache secrets
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${BORINGCACHE_RESTORE_TOKEN}" ]]; then
+            echo "Missing BORINGCACHE_RESTORE_TOKEN secret" >&2
+            exit 1
+          fi
+          if [[ -z "${BORINGCACHE_SAVE_TOKEN}" ]]; then
+            echo "Missing BORINGCACHE_SAVE_TOKEN secret" >&2
+            exit 1
+          fi
+
       - name: Checkout benchmark repo
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
-          submodules: recursive
+          submodules: false
+
+      - name: Checkout pinned upstream submodule shallowly
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
 
       - name: Prepare base benchmark source tree
         run: ./scripts/prepare-source.sh base
@@ -212,7 +233,7 @@ jobs:
               --tag "$IMAGE_TAG" \
               --progress=plain \
               "${cache_args[@]}" \
-              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
+              --secret id=boringcache_token,env=BORINGCACHE_RESTORE_TOKEN \
               --secret id=boringcache_save_token,env=BORINGCACHE_SAVE_TOKEN \
               --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
               --build-arg BORINGCACHE_TAG_PNPM="$BORINGCACHE_TAG_PNPM" \
@@ -290,12 +311,12 @@ jobs:
             network=host
           verbose: true
         env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
-          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
 
       - name: Purge BoringCache benchmark tags
         env:
-          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
         run: |
           set -euo pipefail
           boringcache delete --no-git "$BENCHMARK_WORKSPACE" "${{ steps.scope.outputs.purge_registry_tags_csv }}" || true
@@ -304,8 +325,8 @@ jobs:
       - name: Run cold + seed cache build
         id: cold_baseline_build
         env:
-          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
-          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
           BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
@@ -348,7 +369,13 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
-          submodules: recursive
+          submodules: false
+
+      - name: Checkout pinned upstream submodule shallowly
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
 
       - name: Prepare scenario source tree
         run: ./scripts/prepare-source.sh "${{ matrix.phase }}"
@@ -490,7 +517,7 @@ jobs:
               --tag "$IMAGE_TAG" \
               --progress=plain \
               "${cache_args[@]}" \
-              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
+              --secret id=boringcache_token,env=BORINGCACHE_RESTORE_TOKEN \
               --secret id=boringcache_save_token,env=BORINGCACHE_SAVE_TOKEN \
               --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
               --build-arg BORINGCACHE_TAG_PNPM="$BORINGCACHE_TAG_PNPM" \
@@ -569,7 +596,7 @@ jobs:
             network=host
           verbose: true
         env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
 
       - name: Prune builder cache for isolated scenario
         run: docker buildx prune -f --builder "${{ steps.docker_cache.outputs.buildx-name }}"
@@ -577,7 +604,7 @@ jobs:
         id: warm1_build
         if: matrix.phase == 'warm1'
         env:
-          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
@@ -602,7 +629,7 @@ jobs:
         id: warm2_build
         if: matrix.phase == 'warm2'
         env:
-          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
@@ -627,7 +654,7 @@ jobs:
         id: stale_low_build
         if: matrix.phase == 'stale-low'
         env:
-          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
@@ -652,7 +679,7 @@ jobs:
         id: stale_mid_build
         if: matrix.phase == 'stale-mid'
         env:
-          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
@@ -677,7 +704,7 @@ jobs:
         id: internal_only_build
         if: matrix.phase == 'layer_miss'
         env:
-          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
@@ -801,7 +828,7 @@ jobs:
       - name: Measure BoringCache storage usage
         id: cache_size
         env:
-          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
         run: |
           tags_csv="${{ needs.seed-cache.outputs.tags_csv }}"
           bytes="$(.benchmark-config/scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"

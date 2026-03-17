@@ -59,7 +59,9 @@ RUN --mount=type=secret,id=boringcache_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
     --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)" && \
+    export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}" && \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)" && \
+    export BORINGCACHE_SAVE_TOKEN="${save_token}" && \
     rm -rf /tmp/boringcache-pnpm-store && mkdir -p /tmp/boringcache-pnpm-store /tmp/pnpm-store-v24 && \
     if [ "$BORINGCACHE_INTERNAL_RESTORE_ENABLED" = "1" ] && [ "$BORINGCACHE_TURBO_PROXY_ENABLED" = "1" ]; then \
       if boringcache restore --no-git "$BORINGCACHE_WORKSPACE" "${BORINGCACHE_TAG_PNPM}:/tmp/boringcache-pnpm-store"; then \
@@ -95,7 +97,9 @@ RUN --mount=type=secret,id=boringcache_token \
     --mount=type=secret,id=boringcache_save_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)"; \
+    export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}"; \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)"; \
+    export BORINGCACHE_SAVE_TOKEN="${save_token}"; \
     turbo_cache_mode="local:,remote:"; \
     turbo_backend="${BORINGCACHE_TURBO_BACKEND:-proxy}"; \
     proxy_pid=""; \
@@ -193,7 +197,9 @@ RUN --mount=type=secret,id=boringcache_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
     --mount=type=cache,id=npm,target=/root/.npm \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)" && \
+    export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}" && \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)" && \
+    export BORINGCACHE_SAVE_TOKEN="${save_token}" && \
     if [ -f /code/nodejs/src/scripts/package-lock.json ]; then \
       lock_hash="$(sha256sum /code/nodejs/src/scripts/package-lock.json | awk '{print $1}')"; \
       npm_mode="ci"; \
@@ -232,7 +238,9 @@ RUN --mount=type=secret,id=boringcache_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
     --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)"; \
+    export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}"; \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)"; \
+    export BORINGCACHE_SAVE_TOKEN="${save_token}"; \
     rm -rf /tmp/boringcache-pnpm-store && mkdir -p /tmp/boringcache-pnpm-store /tmp/pnpm-store-v24; \
     turbo_cache_mode="local:,remote:"; \
     turbo_backend="${BORINGCACHE_TURBO_BACKEND:-proxy}"; \
@@ -364,7 +372,9 @@ RUN --mount=type=secret,id=boringcache_token \
     --mount=type=bind,source=upstream/uv.lock,target=uv.lock \
     --mount=type=bind,source=upstream/pyproject.toml,target=pyproject.toml \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)" && \
+    export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}" && \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)" && \
+    export BORINGCACHE_SAVE_TOKEN="${save_token}" && \
     if [ "$BORINGCACHE_INTERNAL_RESTORE_ENABLED" = "1" ]; then \
       lock_hash="$(sha256sum uv.lock | awk '{print $1}')" && \
       marker="/python-runtime/.boringcache-posthog-python-${lock_hash}" && \
@@ -407,7 +417,9 @@ RUN --mount=type=secret,id=boringcache_token \
     --mount=type=secret,id=boringcache_save_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)" && \
+    export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}" && \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)" && \
+    export BORINGCACHE_SAVE_TOKEN="${save_token}" && \
     if [ "$BORINGCACHE_INTERNAL_RESTORE_ENABLED" = "1" ]; then \
       rm -rf /tmp/boringcache-staticfiles && mkdir -p /tmp/boringcache-staticfiles /code/staticfiles && \
       boringcache restore --no-git "$BORINGCACHE_WORKSPACE" "${BORINGCACHE_TAG_STATICFILES}:/tmp/boringcache-staticfiles" || true && \
@@ -498,7 +510,9 @@ RUN --mount=type=secret,id=boringcache_token \
     --mount=type=secret,id=boringcache_save_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)" && \
+    export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}" && \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)" && \
+    export BORINGCACHE_SAVE_TOKEN="${save_token}" && \
     if [ "$BORINGCACHE_INTERNAL_RESTORE_ENABLED" = "1" ]; then \
       rm -rf /tmp/boringcache-playwright && mkdir -p /tmp/boringcache-playwright /ms-playwright && \
       boringcache restore --no-git "$BORINGCACHE_WORKSPACE" "${BORINGCACHE_TAG_PLAYWRIGHT}:/tmp/boringcache-playwright" || true && \

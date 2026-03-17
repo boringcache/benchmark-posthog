@@ -1,0 +1,613 @@
+name: "PostHog - Actions Cache"
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".dockerignore"
+      - ".gitmodules"
+      - "Dockerfile.benchmark"
+      - ".github/workflows/posthog-boringcache.yml"
+      - ".github/workflows/posthog-actions-cache.yml"
+      - "README.md"
+      - "scenarios/**"
+      - "scripts/**"
+      - "upstream"
+  schedule:
+    - cron: "0 2 * * *"
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  PROJECT_REPO: PostHog/posthog
+  PROJECT_REF: "5ddbe2c9f8cf4877fa1739605aae1f05325ab4bb"
+  BENCHMARK_ID: posthog
+  BENCHMARK_WORKSPACE: boringcache/benchmark-posthog
+
+jobs:
+  seed-cache:
+    name: Docker Seed (GHA cache, cold)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      cache_scope: ${{ steps.cold_baseline_build.outputs.cache_scope }}
+      cold_seconds: ${{ steps.cold_baseline_build.outputs.seconds }}
+      scope_started_at: ${{ steps.scope.outputs.scope_started_at }}
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Prepare base benchmark source tree
+        run: ./scripts/prepare-source.sh base
+
+      - name: Install BoringCache CLI with boringcache/one
+        uses: boringcache/one@v1
+        with:
+          setup: none
+          mode: archive
+          workspace: ${{ env.BENCHMARK_WORKSPACE }}
+          cli-platform: debian-bookworm-amd64
+          cache-runtime: false
+
+      - name: Prepare benchmark build inputs
+        run: |
+          cat > ./boringcache-bin <<'SH'
+          #!/usr/bin/env sh
+          exit 0
+          SH
+          chmod +x ./boringcache-bin
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Expose GitHub runtime for Buildx cache
+        uses: crazy-max/ghaction-github-runtime@v4
+
+      - name: Set benchmark cache scope
+        id: scope
+        run: |
+          cache_scope_primary="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}-s1"
+          cache_scope_fallback="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}-s2"
+          scope_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "cache_scope_primary=${cache_scope_primary}" >> "$GITHUB_OUTPUT"
+          echo "cache_scope_fallback=${cache_scope_fallback}" >> "$GITHUB_OUTPUT"
+          echo "scope_started_at=${scope_started_at}" >> "$GITHUB_OUTPUT"
+
+      - name: Purge benchmark GHA cache keys
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Purge this run's scoped seed keys only.
+          for key_prefix in "index-${{ steps.scope.outputs.cache_scope_primary }}" "index-${{ steps.scope.outputs.cache_scope_fallback }}"; do
+            page=1
+            while true; do
+              response="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100&page=${page}&key=${key_prefix}" 2>/dev/null || true)"
+              if [[ -z "$response" ]] || ! jq -e '.actions_caches | type == "array"' <<<"$response" >/dev/null 2>&1; then
+                break
+              fi
+
+              mapfile -t cache_ids < <(jq -r '.actions_caches[].id' <<<"$response")
+              for cache_id in "${cache_ids[@]}"; do
+                gh api -X DELETE "/repos/${GITHUB_REPOSITORY}/actions/caches/${cache_id}" >/dev/null 2>&1 || true
+              done
+
+              count="$(jq '.actions_caches | length' <<<"$response")"
+              if [[ "$count" -lt 100 ]]; then
+                break
+              fi
+              page=$((page + 1))
+            done
+          done
+
+      - name: Prepare AC write probe
+        run: |
+          set -euo pipefail
+          mkdir -p .bench-cache-probe
+          printf '%s\n' "probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(date +%s)" > .bench-cache-probe/probe.txt
+
+      - name: Verify Actions Cache write access
+        id: cache_write_probe
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .bench-cache-probe
+          key: ac-${{ env.BENCHMARK_ID }}-write-probe-r${{ github.run_id }}-a${{ github.run_attempt }}
+
+      - name: Fail early if Actions Cache is read-only
+        if: steps.cache_write_probe.outcome != 'success'
+        run: |
+          echo "Actions Cache write probe failed (likely read-only budget/spending cap)." >&2
+          echo "Cannot produce reliable AC benchmark results until cache writes are enabled." >&2
+          exit 1
+
+      - name: Run cold + seed cache build
+        id: cold_baseline_build
+        env:
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          CACHE_SCOPE_PRIMARY: ${{ steps.scope.outputs.cache_scope_primary }}
+          CACHE_SCOPE_FALLBACK: ${{ steps.scope.outputs.cache_scope_fallback }}
+          BORINGCACHE_API_TOKEN: benchmark-noop-token
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          selected_scope="$CACHE_SCOPE_PRIMARY"
+          start="$(date +%s)"
+          attempt=1
+          while true; do
+            set +e
+            DOCKER_BUILDKIT=1 docker buildx build \
+              --builder "$BUILDER" \
+              --file Dockerfile.benchmark \
+              --tag posthog-benchmark:latest \
+              --progress=plain \
+              --no-cache \
+              --cache-to "type=gha,mode=max,scope=${selected_scope}" \
+              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
+              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
+              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
+              .
+            status=$?
+            set -e
+
+            if [[ "$status" -eq 0 ]]; then
+              break
+            fi
+
+            if [[ "$attempt" -ge 2 ]]; then
+              echo "Cold + seed cache build failed after retry" >&2
+              exit "$status"
+            fi
+
+            attempt=$((attempt + 1))
+            if [[ "$attempt" -eq 2 ]]; then
+              selected_scope="$CACHE_SCOPE_FALLBACK"
+              echo "Retrying cold seed with fallback cache scope: ${selected_scope}"
+            fi
+            sleep 5
+          done
+
+          # Ensure GHA cache backend saw this seed export before continuing.
+          export_verified=0
+          for _ in $(seq 1 20); do
+            response="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100&key=index-${selected_scope}" 2>/dev/null || true)"
+            if [[ -n "$response" ]] && jq -e '.actions_caches | type == "array"' <<<"$response" >/dev/null 2>&1; then
+              matches="$(jq '.actions_caches | length' <<<"$response")"
+              if [[ "$matches" -gt 0 ]]; then
+                export_verified=1
+                break
+              fi
+            fi
+            sleep 3
+          done
+
+          if [[ "$export_verified" -ne 1 ]]; then
+            echo "Cold + seed cache export probe failed: no index cache entry was touched for index-${selected_scope}" >&2
+            exit 1
+          fi
+
+          end="$(date +%s)"
+          echo "cache_scope=${selected_scope}" >> "$GITHUB_OUTPUT"
+          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+
+
+  scenario-builds:
+    name: Scenario (${{ matrix.phase }}) (GHA cache)
+    needs: seed-cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [warm1, warm2, stale-low, stale-mid, layer_miss]
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Prepare scenario source tree
+        run: ./scripts/prepare-source.sh "${{ matrix.phase }}"
+
+      - name: Install BoringCache CLI with boringcache/one
+        uses: boringcache/one@v1
+        with:
+          setup: none
+          mode: archive
+          workspace: ${{ env.BENCHMARK_WORKSPACE }}
+          cli-platform: debian-bookworm-amd64
+          cache-runtime: false
+
+      - name: Prepare benchmark build inputs
+        run: |
+          cat > ./boringcache-bin <<'SH'
+          #!/usr/bin/env sh
+          exit 0
+          SH
+          chmod +x ./boringcache-bin
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Expose GitHub runtime for Buildx cache
+        uses: crazy-max/ghaction-github-runtime@v4
+
+      - name: Prune builder cache for isolated scenario
+        run: docker buildx prune -f --builder "${{ steps.buildx.outputs.name }}"
+      - name: Run warm build 1
+        id: warm1_build
+        if: matrix.phase == 'warm1'
+        env:
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
+          BORINGCACHE_API_TOKEN: benchmark-noop-token
+        run: |
+          set -euo pipefail
+
+          start="$(date +%s)"
+          attempt=1
+          while true; do
+            set +e
+            DOCKER_BUILDKIT=1 docker buildx build \
+              --builder "$BUILDER" \
+              --file Dockerfile.benchmark \
+              --tag posthog-benchmark:latest \
+              --progress=plain \
+              --cache-from "type=gha,scope=${CACHE_SCOPE}" \
+              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
+              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
+              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
+              .
+            status=$?
+            set -e
+
+            if [[ "$status" -eq 0 ]]; then
+              break
+            fi
+
+            if [[ "$attempt" -ge 2 ]]; then
+              echo "Warm build 1 failed after retry" >&2
+              exit "$status"
+            fi
+
+            attempt=$((attempt + 1))
+            sleep 5
+          done
+
+          end="$(date +%s)"
+          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+
+      - name: Run warm build 2
+        id: warm2_build
+        if: matrix.phase == 'warm2'
+        env:
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
+          BORINGCACHE_API_TOKEN: benchmark-noop-token
+        run: |
+          set -euo pipefail
+
+          start="$(date +%s)"
+          attempt=1
+          while true; do
+            set +e
+            DOCKER_BUILDKIT=1 docker buildx build \
+              --builder "$BUILDER" \
+              --file Dockerfile.benchmark \
+              --tag posthog-benchmark:latest \
+              --progress=plain \
+              --cache-from "type=gha,scope=${CACHE_SCOPE}" \
+              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
+              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
+              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
+              .
+            status=$?
+            set -e
+
+            if [[ "$status" -eq 0 ]]; then
+              break
+            fi
+
+            if [[ "$attempt" -ge 2 ]]; then
+              echo "Warm build 2 failed after retry" >&2
+              exit "$status"
+            fi
+
+            attempt=$((attempt + 1))
+            sleep 5
+          done
+
+          end="$(date +%s)"
+          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+
+      - name: Run stale-low build (committed source change)
+        id: stale_low_build
+        if: matrix.phase == 'stale-low'
+        env:
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
+          BORINGCACHE_API_TOKEN: benchmark-noop-token
+        run: |
+          set -euo pipefail
+          start="$(date +%s)"
+          attempt=1
+          while true; do
+            set +e
+            DOCKER_BUILDKIT=1 docker buildx build \
+              --builder "$BUILDER" \
+              --file Dockerfile.benchmark \
+              --tag posthog-benchmark:latest \
+              --progress=plain \
+              --cache-from "type=gha,scope=${CACHE_SCOPE}" \
+              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
+              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
+              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
+              .
+            status=$?
+            set -e
+
+            if [[ "$status" -eq 0 ]]; then
+              break
+            fi
+
+            if [[ "$attempt" -ge 2 ]]; then
+              echo "Stale-low build failed after retry" >&2
+              exit "$status"
+            fi
+
+            attempt=$((attempt + 1))
+            sleep 5
+          done
+
+          end="$(date +%s)"
+          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+
+      - name: Run stale-mid build (committed package descriptor change)
+        id: stale_mid_build
+        if: matrix.phase == 'stale-mid'
+        env:
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
+          BORINGCACHE_API_TOKEN: benchmark-noop-token
+        run: |
+          set -euo pipefail
+          start="$(date +%s)"
+          attempt=1
+          while true; do
+            set +e
+            DOCKER_BUILDKIT=1 docker buildx build \
+              --builder "$BUILDER" \
+              --file Dockerfile.benchmark \
+              --tag posthog-benchmark:latest \
+              --progress=plain \
+              --cache-from "type=gha,scope=${CACHE_SCOPE}" \
+              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
+              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
+              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
+              .
+            status=$?
+            set -e
+
+            if [[ "$status" -eq 0 ]]; then
+              break
+            fi
+
+            if [[ "$attempt" -ge 2 ]]; then
+              echo "Stale-mid build failed after retry" >&2
+              exit "$status"
+            fi
+
+            attempt=$((attempt + 1))
+            sleep 5
+          done
+
+          end="$(date +%s)"
+          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+
+      - name: Run layer-miss build (no Docker cache, full image)
+        id: internal_only_build
+        if: matrix.phase == 'layer_miss'
+        env:
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          BORINGCACHE_API_TOKEN: benchmark-noop-token
+        run: |
+          set -euo pipefail
+
+          start="$(date +%s)"
+          attempt=1
+          while true; do
+            set +e
+            DOCKER_BUILDKIT=1 docker buildx build \
+              --builder "$BUILDER" \
+              --file Dockerfile.benchmark \
+              --tag posthog-benchmark:latest \
+              --progress=plain \
+              --no-cache \
+              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
+              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
+              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
+              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
+              .
+            status=$?
+            set -e
+
+            if [[ "$status" -eq 0 ]]; then
+              break
+            fi
+
+            if [[ "$attempt" -ge 2 ]]; then
+              echo "Layer-miss build failed after retry" >&2
+              exit "$status"
+            fi
+
+            attempt=$((attempt + 1))
+            sleep 5
+          done
+
+          end="$(date +%s)"
+          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+
+      - name: Capture scenario timing
+        id: phase_timing
+        run: |
+          set -euo pipefail
+          seconds=""
+          case "${{ matrix.phase }}" in
+            warm1)
+              seconds="${{ steps.warm1_build.outputs.seconds }}"
+              ;;
+            warm2)
+              seconds="${{ steps.warm2_build.outputs.seconds }}"
+              ;;
+            stale-low)
+              seconds="${{ steps.stale_low_build.outputs.seconds }}"
+              ;;
+            stale-mid)
+              seconds="${{ steps.stale_mid_build.outputs.seconds }}"
+              ;;
+            layer_miss)
+              seconds="${{ steps.internal_only_build.outputs.seconds }}"
+              ;;
+            *)
+              echo "Unknown phase: ${{ matrix.phase }}" >&2
+              exit 1
+              ;;
+          esac
+          if [[ -z "${seconds}" ]]; then
+            echo "No timing captured for phase ${{ matrix.phase }}" >&2
+            exit 1
+          fi
+          echo "seconds=${seconds}" >> "$GITHUB_OUTPUT"
+      - name: Persist scenario timing artifact
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-phase
+          cat > "benchmark-phase/${{ matrix.phase }}.env" <<EOF
+          phase=${{ matrix.phase }}
+          seconds=${{ steps.phase_timing.outputs.seconds }}
+          EOF
+      - name: Upload scenario timing artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-phase-${{ env.BENCHMARK_ID }}-actions-cache-${{ matrix.phase }}
+          path: benchmark-phase/${{ matrix.phase }}.env
+          if-no-files-found: error
+
+  finalize-benchmark:
+    name: Finalize benchmark artifacts
+    needs: [seed-cache, scenario-builds]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout benchmark repo helpers
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          path: .benchmark-config
+
+      - name: Download scenario timing artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: benchmark-phase-${{ env.BENCHMARK_ID }}-actions-cache-*
+          path: benchmark-phase
+          merge-multiple: true
+      - name: Collect scenario timings
+        id: timings
+        run: |
+          set -euo pipefail
+          parse_phase() {
+            local phase="$1"
+            local file="benchmark-phase/${phase}.env"
+            if [[ ! -f "$file" ]]; then
+              echo "Missing timing artifact for phase ${phase}" >&2
+              ls -R benchmark-phase || true
+              exit 1
+            fi
+            local seconds
+            seconds="$(grep "^seconds=" "$file" | head -n1 | cut -d= -f2-)"
+            if [[ -z "${seconds}" ]]; then
+              echo "Timing artifact for phase ${phase} has empty seconds" >&2
+              cat "$file" >&2
+              exit 1
+            fi
+            local key="${phase//-/_}"
+            echo "${key}_seconds=${seconds}" >> "$GITHUB_OUTPUT"
+          }
+          parse_phase warm1
+          parse_phase warm2
+          parse_phase stale-low
+          parse_phase stale-mid
+          parse_phase layer_miss
+      - name: Measure GHA cache storage usage
+        id: cache_size
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bytes="$(.benchmark-config/scripts/sum-gha-cache-by-key.sh "$BENCHMARK_ID" "${{ needs.seed-cache.outputs.scope_started_at }}")"
+          echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"
+
+      - name: Write benchmark artifacts
+        id: artifact_files
+        run: |
+          .benchmark-config/scripts/write-benchmark-artifacts.sh \
+            --benchmark "$BENCHMARK_ID" \
+            --strategy "actions-cache" \
+            --project-repo "$PROJECT_REPO" \
+            --project-ref "$PROJECT_REF" \
+            --cold-seconds "${{ needs.seed-cache.outputs.cold_seconds }}" \
+            --warm1-seconds "${{ steps.timings.outputs.warm1_seconds }}" \
+            --warm2-seconds "${{ steps.timings.outputs.warm2_seconds }}" \
+            --stale-low-seconds "${{ steps.timings.outputs.stale_low_seconds }}" \
+            --stale-mid-seconds "${{ steps.timings.outputs.stale_mid_seconds }}" \
+            --layer-miss-seconds "${{ steps.timings.outputs.layer_miss_seconds }}" \
+            --cache-storage-bytes "${{ steps.cache_size.outputs.bytes }}" \
+            --cache-storage-source "github-actions-cache-api" \
+            --hit-behavior-note "Source tree comes from the pinned upstream submodule ${PROJECT_REPO}@${PROJECT_REF} in this benchmark repo. Cold+seed runs the base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1/Warm2 rebuild the same pinned base tree with cache-from only and no cache-to writes. Stale-low applies the committed scenarios/stale-low.patch source-only change to the pinned tree. Stale-mid applies the committed scenarios/stale-mid.patch package.json change to the pinned tree. Both stale phases rebuild with cache-from only to measure stage dedup under code and dependency-descriptor changes. Layer-miss rebuilds the pinned base tree with --no-cache and BC internals explicitly disabled. Warm1/Warm2/stale-low/stale-mid/layer-miss phases run as isolated matrix jobs and each phase prunes buildx before building to avoid cross-phase local layer reuse."
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-${{ env.BENCHMARK_ID }}-actions-cache
+          path: |
+            ${{ steps.artifact_files.outputs.json_path }}
+            ${{ steps.artifact_files.outputs.md_path }}
+          if-no-files-found: error
+
+      - name: Publish summary
+        run: cat "${{ steps.artifact_files.outputs.md_path }}" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,10 @@
+diff --git a/posthog/__init__.py b/posthog/__init__.py
+index d4309dad..9b0c97ad 100644
+--- a/posthog/__init__.py
++++ b/posthog/__init__.py
+@@ -9,3 +9,5 @@ __all__ = ("celery_app",)
+ import os  # noqa: E402
+ 
+ os.environ["SNOWFLAKE_HOME"] = "./.snowflake"
++
++# Benchmark stale-low marker for cache invalidation.

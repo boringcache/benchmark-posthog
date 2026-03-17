@@ -6,7 +6,7 @@ This repo exists separately from [`boringcache/benchmarks`](https://github.com/b
 
 - one pinned upstream source commit
 - isolated GitHub Actions cache usage
-- isolated BoringCache workspace usage
+- one shared BoringCache workspace name: `boringcache/benchmarks`
 - independent workflow history and nightly runs
 
 ## Source Model
@@ -36,6 +36,14 @@ The story this benchmark is meant to show is:
 - storage footprint in each backend
 - whether BoringCache internal archives help when Docker layers rerun
 - whether cache reuse stays understandable instead of turning into opaque blob growth
+
+## Token Model
+
+This repo uses split BoringCache tokens as the standard CI shape:
+
+- `BORINGCACHE_RESTORE_TOKEN` for read-only restore and proxy access
+- `BORINGCACHE_SAVE_TOKEN` for trusted write paths
+- `BORINGCACHE_API_TOKEN` only where a single bearer variable is still required for compatibility
 
 ## Repo Layout
 

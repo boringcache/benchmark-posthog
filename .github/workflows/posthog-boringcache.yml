@@ -110,27 +110,28 @@ jobs:
         run: |
           cp "$(which boringcache)" ./boringcache-bin
 
-          cache_scope="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
-          docker_registry_tag="${BENCHMARK_ID}-docker-layers"
-          pnpm_tag="posthog-pnpm"
+          run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
+          docker_registry_tag="${BENCHMARK_ID}-docker-layers-${run_suffix}"
+          pnpm_tag="posthog-pnpm-${run_suffix}"
           case "${TURBO_BACKEND}" in
             archive)
-              turbo_tag="posthog-turbo-archive"
-              turbo_plugin_tag="posthog-turbo-plugin-archive"
+              turbo_tag="posthog-turbo-archive-${run_suffix}"
+              turbo_plugin_tag="posthog-turbo-plugin-archive-${run_suffix}"
               ;;
             proxy|off)
-              turbo_tag="posthog-turbo"
-              turbo_plugin_tag="posthog-turbo-plugin"
+              turbo_tag="posthog-turbo-${run_suffix}"
+              turbo_plugin_tag="posthog-turbo-plugin-${run_suffix}"
               ;;
             *)
               echo "Unknown TURBO_BACKEND: ${TURBO_BACKEND}" >&2
               exit 1
               ;;
           esac
-          node_scripts_tag="posthog-node-scripts"
-          python_tag="posthog-python"
-          staticfiles_tag="posthog-staticfiles"
-          playwright_tag="posthog-playwright"
+          node_scripts_tag="posthog-node-scripts-${run_suffix}"
+          python_tag="posthog-python-${run_suffix}"
+          staticfiles_tag="posthog-staticfiles-${run_suffix}"
+          playwright_tag="posthog-playwright-${run_suffix}"
           internal_platform_suffix="debian-12-x86_64"
           purge_internal_tags_csv="${pnpm_tag}-${internal_platform_suffix},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag}-${internal_platform_suffix},${python_tag}-${internal_platform_suffix},${staticfiles_tag}-${internal_platform_suffix},${playwright_tag}-${internal_platform_suffix}"
           purge_registry_tags_csv="${docker_registry_tag}"
@@ -394,27 +395,28 @@ jobs:
         run: |
           cp "$(which boringcache)" ./boringcache-bin
 
-          cache_scope="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
-          docker_registry_tag="${BENCHMARK_ID}-docker-layers"
-          pnpm_tag="posthog-pnpm"
+          run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
+          docker_registry_tag="${BENCHMARK_ID}-docker-layers-${run_suffix}"
+          pnpm_tag="posthog-pnpm-${run_suffix}"
           case "${TURBO_BACKEND}" in
             archive)
-              turbo_tag="posthog-turbo-archive"
-              turbo_plugin_tag="posthog-turbo-plugin-archive"
+              turbo_tag="posthog-turbo-archive-${run_suffix}"
+              turbo_plugin_tag="posthog-turbo-plugin-archive-${run_suffix}"
               ;;
             proxy|off)
-              turbo_tag="posthog-turbo"
-              turbo_plugin_tag="posthog-turbo-plugin"
+              turbo_tag="posthog-turbo-${run_suffix}"
+              turbo_plugin_tag="posthog-turbo-plugin-${run_suffix}"
               ;;
             *)
               echo "Unknown TURBO_BACKEND: ${TURBO_BACKEND}" >&2
               exit 1
               ;;
           esac
-          node_scripts_tag="posthog-node-scripts"
-          python_tag="posthog-python"
-          staticfiles_tag="posthog-staticfiles"
-          playwright_tag="posthog-playwright"
+          node_scripts_tag="posthog-node-scripts-${run_suffix}"
+          python_tag="posthog-python-${run_suffix}"
+          staticfiles_tag="posthog-staticfiles-${run_suffix}"
+          playwright_tag="posthog-playwright-${run_suffix}"
           internal_platform_suffix="debian-12-x86_64"
           purge_internal_tags_csv="${pnpm_tag}-${internal_platform_suffix},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag}-${internal_platform_suffix},${python_tag}-${internal_platform_suffix},${staticfiles_tag}-${internal_platform_suffix},${playwright_tag}-${internal_platform_suffix}"
           purge_registry_tags_csv="${docker_registry_tag}"

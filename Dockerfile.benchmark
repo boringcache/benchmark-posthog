@@ -361,8 +361,8 @@ RUN --mount=type=secret,id=boringcache_token \
     --mount=type=secret,id=boringcache_save_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
     --mount=type=cache,id=uv-libxmlsec1.2.37-2,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=upstream/uv.lock,target=uv.lock \
+    --mount=type=bind,source=upstream/pyproject.toml,target=pyproject.toml \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)" && \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)" && \
     if [ "$BORINGCACHE_INTERNAL_RESTORE_ENABLED" = "1" ]; then \

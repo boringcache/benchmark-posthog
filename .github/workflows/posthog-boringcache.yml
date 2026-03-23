@@ -113,7 +113,8 @@ jobs:
           run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
           cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
           docker_registry_tag="${BENCHMARK_ID}-docker-layers-${run_suffix}"
-          pnpm_tag="posthog-pnpm-${run_suffix}"
+          frontend_pnpm_tag="posthog-pnpm-frontend-${run_suffix}"
+          plugin_pnpm_tag="posthog-pnpm-plugin-${run_suffix}"
           case "${TURBO_BACKEND}" in
             archive)
               turbo_tag="posthog-turbo-archive-${run_suffix}"
@@ -132,12 +133,13 @@ jobs:
           python_tag="posthog-python-${run_suffix}"
           staticfiles_tag="posthog-staticfiles-${run_suffix}"
           playwright_tag="posthog-playwright-${run_suffix}"
-          tags_csv="${pnpm_tag},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
+          tags_csv="${frontend_pnpm_tag},${plugin_pnpm_tag},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
           registry_proxy_tags="${cache_scope},${docker_registry_tag}"
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "docker_registry_tag=${docker_registry_tag}" >> "$GITHUB_OUTPUT"
           echo "registry_proxy_tags=${registry_proxy_tags}" >> "$GITHUB_OUTPUT"
-          echo "pnpm_tag=${pnpm_tag}" >> "$GITHUB_OUTPUT"
+          echo "frontend_pnpm_tag=${frontend_pnpm_tag}" >> "$GITHUB_OUTPUT"
+          echo "plugin_pnpm_tag=${plugin_pnpm_tag}" >> "$GITHUB_OUTPUT"
           echo "turbo_tag=${turbo_tag}" >> "$GITHUB_OUTPUT"
           echo "turbo_plugin_tag=${turbo_plugin_tag}" >> "$GITHUB_OUTPUT"
           echo "node_scripts_tag=${node_scripts_tag}" >> "$GITHUB_OUTPUT"
@@ -234,7 +236,8 @@ jobs:
               --secret id=boringcache_token,env=BORINGCACHE_RESTORE_TOKEN \
               --secret id=boringcache_save_token,env=BORINGCACHE_SAVE_TOKEN \
               --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
-              --build-arg BORINGCACHE_TAG_PNPM="$BORINGCACHE_TAG_PNPM" \
+              --build-arg BORINGCACHE_TAG_PNPM_FRONTEND="$BORINGCACHE_TAG_PNPM_FRONTEND" \
+              --build-arg BORINGCACHE_TAG_PNPM_PLUGIN="$BORINGCACHE_TAG_PNPM_PLUGIN" \
               --build-arg BORINGCACHE_TAG_TURBO="$BORINGCACHE_TAG_TURBO" \
               --build-arg BORINGCACHE_TAG_TURBO_PLUGIN="$BORINGCACHE_TAG_TURBO_PLUGIN" \
               --build-arg BORINGCACHE_TAG_NODE_SCRIPTS="$BORINGCACHE_TAG_NODE_SCRIPTS" \
@@ -322,7 +325,8 @@ jobs:
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
           CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
-          BORINGCACHE_TAG_PNPM: ${{ steps.scope.outputs.pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
           BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
@@ -387,7 +391,8 @@ jobs:
           run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
           cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
           docker_registry_tag="${BENCHMARK_ID}-docker-layers-${run_suffix}"
-          pnpm_tag="posthog-pnpm-${run_suffix}"
+          frontend_pnpm_tag="posthog-pnpm-frontend-${run_suffix}"
+          plugin_pnpm_tag="posthog-pnpm-plugin-${run_suffix}"
           case "${TURBO_BACKEND}" in
             archive)
               turbo_tag="posthog-turbo-archive-${run_suffix}"
@@ -406,12 +411,13 @@ jobs:
           python_tag="posthog-python-${run_suffix}"
           staticfiles_tag="posthog-staticfiles-${run_suffix}"
           playwright_tag="posthog-playwright-${run_suffix}"
-          tags_csv="${pnpm_tag},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
+          tags_csv="${frontend_pnpm_tag},${plugin_pnpm_tag},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
           registry_proxy_tags="${cache_scope},${docker_registry_tag}"
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "docker_registry_tag=${docker_registry_tag}" >> "$GITHUB_OUTPUT"
           echo "registry_proxy_tags=${registry_proxy_tags}" >> "$GITHUB_OUTPUT"
-          echo "pnpm_tag=${pnpm_tag}" >> "$GITHUB_OUTPUT"
+          echo "frontend_pnpm_tag=${frontend_pnpm_tag}" >> "$GITHUB_OUTPUT"
+          echo "plugin_pnpm_tag=${plugin_pnpm_tag}" >> "$GITHUB_OUTPUT"
           echo "turbo_tag=${turbo_tag}" >> "$GITHUB_OUTPUT"
           echo "turbo_plugin_tag=${turbo_plugin_tag}" >> "$GITHUB_OUTPUT"
           echo "node_scripts_tag=${node_scripts_tag}" >> "$GITHUB_OUTPUT"
@@ -508,7 +514,8 @@ jobs:
               --secret id=boringcache_token,env=BORINGCACHE_RESTORE_TOKEN \
               --secret id=boringcache_save_token,env=BORINGCACHE_SAVE_TOKEN \
               --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
-              --build-arg BORINGCACHE_TAG_PNPM="$BORINGCACHE_TAG_PNPM" \
+              --build-arg BORINGCACHE_TAG_PNPM_FRONTEND="$BORINGCACHE_TAG_PNPM_FRONTEND" \
+              --build-arg BORINGCACHE_TAG_PNPM_PLUGIN="$BORINGCACHE_TAG_PNPM_PLUGIN" \
               --build-arg BORINGCACHE_TAG_TURBO="$BORINGCACHE_TAG_TURBO" \
               --build-arg BORINGCACHE_TAG_TURBO_PLUGIN="$BORINGCACHE_TAG_TURBO_PLUGIN" \
               --build-arg BORINGCACHE_TAG_NODE_SCRIPTS="$BORINGCACHE_TAG_NODE_SCRIPTS" \
@@ -598,7 +605,8 @@ jobs:
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_TAG_PNPM: ${{ steps.scope.outputs.pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
           BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
@@ -623,7 +631,8 @@ jobs:
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_TAG_PNPM: ${{ steps.scope.outputs.pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
           BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
@@ -648,7 +657,8 @@ jobs:
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_TAG_PNPM: ${{ steps.scope.outputs.pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
           BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
@@ -663,7 +673,7 @@ jobs:
           end="$(date +%s)"
           echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
-      - name: Run stale-mid build (committed package descriptor change, partial warm)
+      - name: Run stale-mid build (committed frontend package descriptor change, partial warm)
         id: stale_mid_build
         if: matrix.phase == 'stale-mid'
         env:
@@ -673,7 +683,8 @@ jobs:
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_TAG_PNPM: ${{ steps.scope.outputs.pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
           BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
@@ -698,7 +709,8 @@ jobs:
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_TAG_PNPM: ${{ steps.scope.outputs.pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
+          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
           BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
@@ -839,7 +851,7 @@ jobs:
             --cache-storage-bytes "${{ steps.cache_size.outputs.bytes }}" \
             --cache-storage-source "boringcache-check" \
             --bytes-uploaded "${{ steps.cache_size.outputs.bytes }}" \
-            --hit-behavior-note "Source tree comes from the pinned upstream submodule ${PROJECT_REPO}@${PROJECT_REF} in this benchmark repo. Cold+seed runs the base tree from empty BC tags and empty Docker layer cache, using --no-cache + cache-to via the BC registry proxy (mode=max) while internal pnpm, Python, staticfiles, and Playwright caches restore/save through BoringCache. Turbo uses the ${TURBO_BACKEND} backend for this run: proxy uses BoringCache cache-registry, archive saves and restores Turbo local .turbo cache through CLI restore/save, and off disables BoringCache Turbo integration. Warm1/Warm2 reuse the same pinned base tree with cache-from only, internal restore enabled, internal save disabled, and read-only behavior where applicable. Stale-low applies the committed scenarios/stale-low.patch source-only change to the pinned tree. Stale-mid applies the committed scenarios/stale-mid.patch package.json change to the pinned tree. Both stale phases rebuild with cache-from only and internal restore enabled but no internal save. Layer-miss rebuilds the pinned base tree with --no-cache while internal restore stays enabled and internal save stays disabled. All scenario phases run as isolated matrix jobs on fresh runners with buildx pruned before building."
+            --hit-behavior-note "Source tree comes from the pinned upstream submodule ${PROJECT_REPO}@${PROJECT_REF} in this benchmark repo. Cold+seed runs the base tree from empty BC tags and empty Docker layer cache, using --no-cache + cache-to via the BC registry proxy (mode=max) while internal pnpm, Python, staticfiles, and Playwright caches restore/save through BoringCache. Turbo uses the ${TURBO_BACKEND} backend for this run: proxy uses BoringCache cache-registry, archive saves and restores Turbo local .turbo cache through CLI restore/save, and off disables BoringCache Turbo integration. Warm1/Warm2 reuse the same pinned base tree with cache-from only, internal restore enabled, internal save disabled, and read-only behavior where applicable. Stale-low applies the committed scenarios/stale-low.patch source-only code change to the pinned tree. Stale-mid applies the committed scenarios/stale-mid.patch scoped frontend/package.json change to the pinned tree. Both stale phases rebuild with cache-from only and internal restore enabled but no internal save. Layer-miss rebuilds the pinned base tree with --no-cache while internal restore stays enabled and internal save stays disabled. All scenario phases run as isolated matrix jobs on fresh runners with buildx pruned before building."
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v6

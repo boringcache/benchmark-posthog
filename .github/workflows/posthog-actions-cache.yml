@@ -379,7 +379,7 @@ jobs:
           end="$(date +%s)"
           echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
-      - name: Run stale-mid build (committed package descriptor change)
+      - name: Run stale-mid build (committed frontend package descriptor change)
         id: stale_mid_build
         if: matrix.phase == 'stale-mid'
         env:
@@ -582,7 +582,7 @@ jobs:
             --layer-miss-seconds "${{ steps.timings.outputs.layer_miss_seconds }}" \
             --cache-storage-bytes "${{ steps.cache_size.outputs.bytes }}" \
             --cache-storage-source "github-actions-cache-api" \
-            --hit-behavior-note "Source tree comes from the pinned upstream submodule ${PROJECT_REPO}@${PROJECT_REF} in this benchmark repo. Cold+seed runs the base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1/Warm2 rebuild the same pinned base tree with cache-from only and no cache-to writes. Stale-low applies the committed scenarios/stale-low.patch source-only change to the pinned tree. Stale-mid applies the committed scenarios/stale-mid.patch package.json change to the pinned tree. Both stale phases rebuild with cache-from only to measure stage dedup under code and dependency-descriptor changes. Layer-miss rebuilds the pinned base tree with --no-cache and BC internals explicitly disabled. Warm1/Warm2/stale-low/stale-mid/layer-miss phases run as isolated matrix jobs and each phase prunes buildx before building to avoid cross-phase local layer reuse."
+            --hit-behavior-note "Source tree comes from the pinned upstream submodule ${PROJECT_REPO}@${PROJECT_REF} in this benchmark repo. Cold+seed runs the base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1/Warm2 rebuild the same pinned base tree with cache-from only and no cache-to writes. Stale-low applies the committed scenarios/stale-low.patch source-only code change to the pinned tree. Stale-mid applies the committed scenarios/stale-mid.patch scoped frontend/package.json change to the pinned tree. Both stale phases rebuild with cache-from only to measure stage dedup under code and scoped package-descriptor changes. Layer-miss rebuilds the pinned base tree with --no-cache and BC internals explicitly disabled. Warm1/Warm2/stale-low/stale-mid/layer-miss phases run as isolated matrix jobs and each phase prunes buildx before building to avoid cross-phase local layer reuse."
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v6

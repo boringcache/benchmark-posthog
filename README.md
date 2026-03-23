@@ -26,8 +26,8 @@ Each backend runs the same scenario set:
 - `cold`: empty remote cache, empty local Docker cache
 - `warm1`
 - `warm2`
-- `stale-low`: one source-only change
-- `stale-mid`: one dependency-adjacent `package.json` change
+- `stale-low`: one real source-only Python code change
+- `stale-mid`: one scoped frontend `package.json` metadata change
 - `layer-miss`: `--no-cache` Docker rebuild with the same pinned source tree
 
 The story this benchmark is meant to show is:

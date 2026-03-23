@@ -1,10 +1,9 @@
-diff --git a/package.json b/package.json
-index 397752a5..cf0f8e13 100644
---- a/package.json
-+++ b/package.json
+diff --git a/frontend/package.json b/frontend/package.json
+--- a/frontend/package.json
++++ b/frontend/package.json
 @@ -1,6 +1,7 @@
  {
-     "name": "@posthog/root",
+     "name": "@posthog/frontend",
      "version": "0.0.0",
 +    "x-benchmark-stale-mid": "1",
      "description": "",

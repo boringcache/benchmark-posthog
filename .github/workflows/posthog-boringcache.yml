@@ -7,14 +7,6 @@ on:
         description: "Optional boringcache/cli ref to build and use instead of the released CLI"
         required: false
         type: string
-      internal_profile:
-        description: "Internal cache profile for diagnostics"
-        required: false
-        default: standard
-        type: choice
-        options:
-          - standard
-          - internal-off
       turbo_backend:
         description: "How BoringCache integrates with Turbo in benchmark builds"
         required: false
@@ -47,7 +39,6 @@ env:
   PROJECT_REF: "5ddbe2c9f8cf4877fa1739605aae1f05325ab4bb"
   BENCHMARK_ID: posthog
   BENCHMARK_WORKSPACE: boringcache/benchmarks
-  INTERNAL_PROFILE: ${{ github.event.inputs.internal_profile || 'standard' }}
   TURBO_BACKEND: ${{ github.event.inputs.turbo_backend || 'proxy' }}
 
 jobs:
@@ -170,19 +161,6 @@ jobs:
             internal_restore_enabled="1"
             internal_save_enabled="1"
             turbo_proxy_enabled="${BORINGCACHE_TURBO_PROXY_ENABLED:-1}"
-            case "${BORINGCACHE_INTERNAL_PROFILE:-standard}" in
-              standard)
-                ;;
-              internal-off)
-                internal_restore_enabled="0"
-                internal_save_enabled="0"
-                turbo_proxy_enabled="0"
-                ;;
-              *)
-                echo "Unknown internal cache profile: ${BORINGCACHE_INTERNAL_PROFILE:-}" >&2
-                exit 1
-                ;;
-            esac
             if [[ "$mode" == "full" ]]; then
               cache_args=(
                 --cache-from "type=registry,ref=127.0.0.1:${proxy_port}/${CACHE_SCOPE}:buildcache,registry.insecure=true"
@@ -320,7 +298,6 @@ jobs:
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
-          BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
@@ -448,19 +425,6 @@ jobs:
             internal_restore_enabled="1"
             internal_save_enabled="1"
             turbo_proxy_enabled="${BORINGCACHE_TURBO_PROXY_ENABLED:-1}"
-            case "${BORINGCACHE_INTERNAL_PROFILE:-standard}" in
-              standard)
-                ;;
-              internal-off)
-                internal_restore_enabled="0"
-                internal_save_enabled="0"
-                turbo_proxy_enabled="0"
-                ;;
-              *)
-                echo "Unknown internal cache profile: ${BORINGCACHE_INTERNAL_PROFILE:-}" >&2
-                exit 1
-                ;;
-            esac
             if [[ "$mode" == "full" ]]; then
               cache_args=(
                 --cache-from "type=registry,ref=127.0.0.1:${proxy_port}/${CACHE_SCOPE}:buildcache,registry.insecure=true"
@@ -600,7 +564,6 @@ jobs:
         if: matrix.phase == 'warm1'
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-          BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
@@ -626,7 +589,6 @@ jobs:
         if: matrix.phase == 'warm2'
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-          BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
@@ -652,7 +614,6 @@ jobs:
         if: matrix.phase == 'stale-low'
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-          BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
@@ -678,7 +639,6 @@ jobs:
         if: matrix.phase == 'stale-mid'
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-          BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
@@ -704,7 +664,6 @@ jobs:
         if: matrix.phase == 'layer_miss'
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-          BORINGCACHE_INTERNAL_PROFILE: ${{ env.INTERNAL_PROFILE }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}

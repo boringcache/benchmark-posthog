@@ -1,4 +1,6 @@
 name: "PostHog - BoringCache"
+run-name: >-
+  BC | ${{ github.event_name == 'push' && github.event.head_commit.message || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name) }}
 
 on:
   workflow_dispatch:

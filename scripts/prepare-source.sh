@@ -8,13 +8,7 @@ git -C "${repo_root}/upstream" reset --hard
 git -C "${repo_root}/upstream" clean -fdx
 
 case "${scenario}" in
-  base|warm1|warm2|layer_miss)
-    ;;
-  stale-low)
-    git -C "${repo_root}/upstream" apply "${repo_root}/scenarios/stale-low.patch"
-    ;;
-  stale-mid)
-    git -C "${repo_root}/upstream" apply "${repo_root}/scenarios/stale-mid.patch"
+  base|warm1)
     ;;
   *)
     echo "Unknown scenario: ${scenario}" >&2

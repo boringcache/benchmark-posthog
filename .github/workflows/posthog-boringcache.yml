@@ -204,8 +204,12 @@ jobs:
 
             mkdir -p "$(dirname "$output_path")"
             : > "$output_path"
-            [[ -n "$import_seconds" ]] && echo "docker_cache_import_seconds=$import_seconds" >> "$output_path"
-            [[ -n "$export_seconds" ]] && echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
+            if [[ -n "$import_seconds" ]]; then
+              echo "docker_cache_import_seconds=$import_seconds" >> "$output_path"
+            fi
+            if [[ -n "$export_seconds" ]]; then
+              echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
+            fi
           }
 
           attempt=1
@@ -509,8 +513,12 @@ jobs:
 
             mkdir -p "$(dirname "$output_path")"
             : > "$output_path"
-            [[ -n "$import_seconds" ]] && echo "docker_cache_import_seconds=$import_seconds" >> "$output_path"
-            [[ -n "$export_seconds" ]] && echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
+            if [[ -n "$import_seconds" ]]; then
+              echo "docker_cache_import_seconds=$import_seconds" >> "$output_path"
+            fi
+            if [[ -n "$export_seconds" ]]; then
+              echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
+            fi
           }
 
           attempt=1

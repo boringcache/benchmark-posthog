@@ -2,6 +2,12 @@ name: "PostHog - Actions Cache"
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".gitmodules"
+      - "upstream"
   pull_request:
     paths:
       - ".dockerignore"
@@ -22,7 +28,6 @@ permissions:
 
 env:
   PROJECT_REPO: PostHog/posthog
-  PROJECT_REF: "5ddbe2c9f8cf4877fa1739605aae1f05325ab4bb"
   BENCHMARK_ID: posthog
   BENCHMARK_WORKSPACE: boringcache/benchmarks
 
@@ -196,7 +201,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        phase: [warm1, warm2, stale-low, stale-mid, layer_miss]
+        phase: [warm1]
     steps:
       - name: Free disk space
         run: |
@@ -554,10 +559,6 @@ jobs:
             echo "${key}_seconds=${seconds}" >> "$GITHUB_OUTPUT"
           }
           parse_phase warm1
-          parse_phase warm2
-          parse_phase stale-low
-          parse_phase stale-mid
-          parse_phase layer_miss
       - name: Measure GHA cache storage usage
         id: cache_size
         env:
@@ -566,6 +567,10 @@ jobs:
           bytes="$(.benchmark-config/scripts/sum-gha-cache-by-key.sh "$BENCHMARK_ID" "${{ needs.seed-cache.outputs.scope_started_at }}")"
           echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"
 
+      - name: Capture committed upstream ref
+        id: upstream_ref
+        run: echo "sha=$(git rev-parse HEAD:upstream)" >> "$GITHUB_OUTPUT"
+
       - name: Write benchmark artifacts
         id: artifact_files
         run: |
@@ -573,16 +578,12 @@ jobs:
             --benchmark "$BENCHMARK_ID" \
             --strategy "actions-cache" \
             --project-repo "$PROJECT_REPO" \
-            --project-ref "$PROJECT_REF" \
+            --project-ref "${{ steps.upstream_ref.outputs.sha }}" \
             --cold-seconds "${{ needs.seed-cache.outputs.cold_seconds }}" \
             --warm1-seconds "${{ steps.timings.outputs.warm1_seconds }}" \
-            --warm2-seconds "${{ steps.timings.outputs.warm2_seconds }}" \
-            --stale-low-seconds "${{ steps.timings.outputs.stale_low_seconds }}" \
-            --stale-mid-seconds "${{ steps.timings.outputs.stale_mid_seconds }}" \
-            --layer-miss-seconds "${{ steps.timings.outputs.layer_miss_seconds }}" \
             --cache-storage-bytes "${{ steps.cache_size.outputs.bytes }}" \
             --cache-storage-source "github-actions-cache-api" \
-            --hit-behavior-note "Source tree comes from the pinned upstream submodule ${PROJECT_REPO}@${PROJECT_REF} in this benchmark repo. Cold+seed runs the base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1/Warm2 rebuild the same pinned base tree with cache-from only and no cache-to writes. Stale-low applies the committed scenarios/stale-low.patch source-only code change to the pinned tree. Stale-mid applies the committed scenarios/stale-mid.patch scoped frontend/package.json change to the pinned tree. Both stale phases rebuild with cache-from only to measure stage dedup under code and scoped package-descriptor changes. Layer-miss rebuilds the pinned base tree with --no-cache and BC internals explicitly disabled. Warm1/Warm2/stale-low/stale-mid/layer-miss phases run as isolated matrix jobs and each phase prunes buildx before building to avoid cross-phase local layer reuse."
+            --hit-behavior-note "Source tree comes from the benchmark repo's committed upstream submodule. Cold+seed runs the pinned base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only and no synthetic mutations."
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v6

@@ -1,0 +1,46 @@
+name: "Sync Upstream"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: benchmark-posthog-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Sync With Upstream
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: false
+          token: ${{ secrets.BOT_PUBLIC_GITHUB_TOKEN }}
+
+      - name: Sync upstream submodule
+        run: |
+          set -euo pipefail
+          git config --global user.name "boringcache-bot"
+          git config --global user.email "boringcache-bot@users.noreply.github.com"
+
+          git submodule sync --recursive
+          git submodule update --init --remote --merge upstream
+
+          upstream_url="$(cd upstream && git remote get-url origin)"
+          commit_sha="$(cd upstream && git rev-parse HEAD)"
+
+          if git diff --quiet --submodule=short; then
+            echo "No upstream changes"
+            exit 0
+          fi
+
+          git add upstream
+          git commit -m "Update upstream to ${upstream_url}/commit/${commit_sha}"
+          git push origin HEAD:main

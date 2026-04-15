@@ -33,8 +33,6 @@ on:
       - "scenarios/**"
       - "scripts/**"
       - "upstream"
-  schedule:
-    - cron: "0 2 * * *"
 
 permissions:
   contents: read
@@ -327,7 +325,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        phase: [warm1]
+        phase: [warm1, layer_miss]
     env:
       BORINGCACHE_SAVE_TOKEN: ''
     steps:
@@ -785,6 +783,7 @@ jobs:
             echo "${key}_seconds=${seconds}" >> "$GITHUB_OUTPUT"
           }
           parse_phase warm1
+          parse_phase layer_miss
       - name: Measure BoringCache storage usage
         id: cache_size
         env:
@@ -808,6 +807,7 @@ jobs:
             --project-ref "${{ steps.upstream_ref.outputs.sha }}" \
             --cold-seconds "${{ needs.seed-cache.outputs.cold_seconds }}" \
             --warm1-seconds "${{ steps.timings.outputs.warm1_seconds }}" \
+            --layer-miss-seconds "${{ steps.timings.outputs.layer_miss_seconds }}" \
             --cache-storage-bytes "${{ steps.cache_size.outputs.bytes }}" \
             --cache-storage-source "boringcache-check" \
             --bytes-uploaded "${{ steps.cache_size.outputs.bytes }}" \

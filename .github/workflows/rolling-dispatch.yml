@@ -1,0 +1,29 @@
+name: "Rolling Benchmark Dispatch"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".gitmodules"
+      - "upstream"
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    name: Dispatch rolling benchmark pair
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch AC rolling lane
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run "posthog-actions-cache.yml" --ref "${{ github.ref_name }}" -f cache_lane=rolling
+
+      - name: Dispatch BC rolling lane
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run "posthog-boringcache.yml" --ref "${{ github.ref_name }}" -f cache_lane=rolling

@@ -569,7 +569,7 @@ jobs:
 
       - name: Capture committed upstream ref
         id: upstream_ref
-        run: echo "sha=$(git rev-parse HEAD:upstream)" >> "$GITHUB_OUTPUT"
+        run: echo "sha=$(git -C .benchmark-config rev-parse HEAD:upstream)" >> "$GITHUB_OUTPUT"
 
       - name: Write benchmark artifacts
         id: artifact_files

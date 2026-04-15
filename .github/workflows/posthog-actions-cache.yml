@@ -42,7 +42,7 @@ env:
 
 jobs:
   seed-cache:
-    name: Docker Seed (GHA cache, cold)
+    name: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Docker Seed (actions/cache, rolling)' || 'Docker Seed (actions/cache, fresh)' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -139,7 +139,7 @@ jobs:
           echo "Cannot produce reliable AC benchmark results until cache writes are enabled." >&2
           exit 1
 
-      - name: Run cold + seed cache build
+      - name: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Run rolling seed build' || 'Run fresh seed build' }}
         id: cold_baseline_build
         env:
           BUILDER: ${{ steps.buildx.outputs.name }}

@@ -1,10 +1,18 @@
 name: "PostHog - BoringCache"
 run-name: >-
-  BC | ${{ github.event_name == 'push' && github.event.head_commit.message || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name) }}
+  ${{ format('{0} | {1}', github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'BC Rolling' || 'BC Fresh', github.event_name == 'push' && github.event.head_commit.message || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name)) }}
 
 on:
   workflow_dispatch:
     inputs:
+      cache_lane:
+        description: "Benchmark lane"
+        required: false
+        type: choice
+        default: fresh
+        options:
+          - fresh
+          - rolling
       cli_ref:
         description: "Optional boringcache/cli ref to build and use instead of the released CLI"
         required: false
@@ -54,6 +62,7 @@ jobs:
     outputs:
       cache_scope: ${{ steps.scope.outputs.cache_scope }}
       cold_seconds: ${{ steps.cold_baseline_build.outputs.seconds }}
+      docker_cache_export_seconds: ${{ steps.cold_baseline_build.outputs.docker_cache_export_seconds }}
       tags_csv: ${{ steps.scope.outputs.tags_csv }}
     steps:
       - name: Free disk space
@@ -106,7 +115,15 @@ jobs:
         run: |
           cp "$(which boringcache)" ./boringcache-bin
 
-          run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+          ref_slug="${ref_slug#-}"
+          ref_slug="${ref_slug%-}"
+          ref_slug="${ref_slug:-main}"
+          if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}" == "rolling" ]]; then
+            run_suffix="rolling-${ref_slug}"
+          else
+            run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          fi
           cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
           docker_registry_tag="${BENCHMARK_ID}-docker-layers-${run_suffix}"
           frontend_pnpm_tag="posthog-pnpm-frontend-${run_suffix}"
@@ -159,6 +176,37 @@ jobs:
           wait_proxy_ready() { return 0; }
           cleanup() { :; }
           trap cleanup EXIT
+
+          find_step_id() {
+            local pattern="$1"
+            sed -nE "s/^#([0-9]+) ${pattern}.*/\\1/p" "$build_log" | tail -n1
+          }
+
+          find_step_seconds() {
+            local step_id="$1"
+            [[ -n "$step_id" ]] || return 0
+            sed -nE "s/^#${step_id} DONE ([0-9]+(\\.[0-9]+)?)s$/\\1/p" "$build_log" | tail -n1
+          }
+
+          write_build_metrics() {
+            local output_path="${BENCHMARK_METRICS_OUTPUT:-}"
+            [[ -n "$output_path" ]] || return 0
+
+            local import_step=""
+            local export_step=""
+            local import_seconds=""
+            local export_seconds=""
+
+            import_step="$(find_step_id "importing cache manifest from")"
+            export_step="$(find_step_id "exporting cache to registry")"
+            import_seconds="$(find_step_seconds "$import_step")"
+            export_seconds="$(find_step_seconds "$export_step")"
+
+            mkdir -p "$(dirname "$output_path")"
+            : > "$output_path"
+            [[ -n "$import_seconds" ]] && echo "docker_cache_import_seconds=$import_seconds" >> "$output_path"
+            [[ -n "$export_seconds" ]] && echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
+          }
 
           attempt=1
           while true; do
@@ -249,6 +297,7 @@ jobs:
               echo "=== Proxy log (${mode}, last 200 lines) ==="
               tail -n 200 "$proxy_log" 2>/dev/null || true
               echo "=== End proxy log ==="
+              write_build_metrics
               break
             fi
 
@@ -314,10 +363,15 @@ jobs:
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
+          metrics_file="${RUNNER_TEMP}/cold-build-metrics.env"
+          rm -f "$metrics_file"
           start="$(date +%s)"
-          ./run-boringcache-build.sh seed-cache
+          BENCHMARK_METRICS_OUTPUT="$metrics_file" ./run-boringcache-build.sh ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'full' || 'seed-cache' }}
           end="$(date +%s)"
           echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          if [[ -s "$metrics_file" ]]; then
+            cat "$metrics_file" >> "$GITHUB_OUTPUT"
+          fi
 
   scenario-builds:
     name: Scenario (${{ matrix.phase }}) (BoringCache)
@@ -366,7 +420,15 @@ jobs:
         run: |
           cp "$(which boringcache)" ./boringcache-bin
 
-          run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+          ref_slug="${ref_slug#-}"
+          ref_slug="${ref_slug%-}"
+          ref_slug="${ref_slug:-main}"
+          if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}" == "rolling" ]]; then
+            run_suffix="rolling-${ref_slug}"
+          else
+            run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          fi
           cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
           docker_registry_tag="${BENCHMARK_ID}-docker-layers-${run_suffix}"
           frontend_pnpm_tag="posthog-pnpm-frontend-${run_suffix}"
@@ -419,6 +481,37 @@ jobs:
           wait_proxy_ready() { return 0; }
           cleanup() { :; }
           trap cleanup EXIT
+
+          find_step_id() {
+            local pattern="$1"
+            sed -nE "s/^#([0-9]+) ${pattern}.*/\\1/p" "$build_log" | tail -n1
+          }
+
+          find_step_seconds() {
+            local step_id="$1"
+            [[ -n "$step_id" ]] || return 0
+            sed -nE "s/^#${step_id} DONE ([0-9]+(\\.[0-9]+)?)s$/\\1/p" "$build_log" | tail -n1
+          }
+
+          write_build_metrics() {
+            local output_path="${BENCHMARK_METRICS_OUTPUT:-}"
+            [[ -n "$output_path" ]] || return 0
+
+            local import_step=""
+            local export_step=""
+            local import_seconds=""
+            local export_seconds=""
+
+            import_step="$(find_step_id "importing cache manifest from")"
+            export_step="$(find_step_id "exporting cache to registry")"
+            import_seconds="$(find_step_seconds "$import_step")"
+            export_seconds="$(find_step_seconds "$export_step")"
+
+            mkdir -p "$(dirname "$output_path")"
+            : > "$output_path"
+            [[ -n "$import_seconds" ]] && echo "docker_cache_import_seconds=$import_seconds" >> "$output_path"
+            [[ -n "$export_seconds" ]] && echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
+          }
 
           attempt=1
           while true; do
@@ -509,6 +602,7 @@ jobs:
               echo "=== Proxy log (${mode}, last 200 lines) ==="
               tail -n 200 "$proxy_log" 2>/dev/null || true
               echo "=== End proxy log ==="
+              write_build_metrics
               break
             fi
 
@@ -576,10 +670,15 @@ jobs:
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
+          metrics_file="${RUNNER_TEMP}/warm1-build-metrics.env"
+          rm -f "$metrics_file"
           start="$(date +%s)"
-          ./run-boringcache-build.sh partial-warm
+          BENCHMARK_METRICS_OUTPUT="$metrics_file" ./run-boringcache-build.sh partial-warm
           end="$(date +%s)"
           echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          if [[ -s "$metrics_file" ]]; then
+            cat "$metrics_file" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Run warm build 2
         id: warm2_build
@@ -694,9 +793,11 @@ jobs:
         run: |
           set -euo pipefail
           seconds=""
+          docker_cache_import_seconds=""
           case "${{ matrix.phase }}" in
             warm1)
               seconds="${{ steps.warm1_build.outputs.seconds }}"
+              docker_cache_import_seconds="${{ steps.warm1_build.outputs.docker_cache_import_seconds }}"
               ;;
             warm2)
               seconds="${{ steps.warm2_build.outputs.seconds }}"
@@ -720,6 +821,9 @@ jobs:
             exit 1
           fi
           echo "seconds=${seconds}" >> "$GITHUB_OUTPUT"
+          if [[ -n "${docker_cache_import_seconds}" ]]; then
+            echo "docker_cache_import_seconds=${docker_cache_import_seconds}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Persist scenario timing artifact
         run: |
           set -euo pipefail
@@ -727,6 +831,7 @@ jobs:
           cat > "benchmark-phase/${{ matrix.phase }}.env" <<EOF
           phase=${{ matrix.phase }}
           seconds=${{ steps.phase_timing.outputs.seconds }}
+          docker_cache_import_seconds=${{ steps.phase_timing.outputs.docker_cache_import_seconds }}
           EOF
       - name: Upload scenario timing artifact
         uses: actions/upload-artifact@v6
@@ -783,6 +888,11 @@ jobs:
             fi
             local key="${phase//-/_}"
             echo "${key}_seconds=${seconds}" >> "$GITHUB_OUTPUT"
+            local docker_cache_import_seconds
+            docker_cache_import_seconds="$(grep "^docker_cache_import_seconds=" "$file" | head -n1 | cut -d= -f2- || true)"
+            if [[ -n "${docker_cache_import_seconds}" ]]; then
+              echo "${key}_docker_cache_import_seconds=${docker_cache_import_seconds}" >> "$GITHUB_OUTPUT"
+            fi
           }
           parse_phase warm1
           parse_phase layer_miss
@@ -805,11 +915,14 @@ jobs:
           .benchmark-config/scripts/write-benchmark-artifacts.sh \
             --benchmark "$BENCHMARK_ID" \
             --strategy "boringcache" \
+            --lane "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}" \
             --project-repo "$PROJECT_REPO" \
             --project-ref "${{ steps.upstream_ref.outputs.sha }}" \
             --cold-seconds "${{ needs.seed-cache.outputs.cold_seconds }}" \
             --warm1-seconds "${{ steps.timings.outputs.warm1_seconds }}" \
             --layer-miss-seconds "${{ steps.timings.outputs.layer_miss_seconds }}" \
+            --docker-cache-import-seconds "${{ steps.timings.outputs.warm1_docker_cache_import_seconds }}" \
+            --docker-cache-export-seconds "${{ needs.seed-cache.outputs.docker_cache_export_seconds }}" \
             --cache-storage-bytes "${{ steps.cache_size.outputs.bytes }}" \
             --cache-storage-source "boringcache-check" \
             --bytes-uploaded "${{ steps.cache_size.outputs.bytes }}" \
@@ -818,7 +931,7 @@ jobs:
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-${{ env.BENCHMARK_ID }}-boringcache
+          name: benchmark-${{ env.BENCHMARK_ID }}-boringcache-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
           path: |
             ${{ steps.artifact_files.outputs.json_path }}
             ${{ steps.artifact_files.outputs.md_path }}

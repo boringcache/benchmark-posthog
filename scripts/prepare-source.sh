@@ -8,7 +8,7 @@ git -C "${repo_root}/upstream" reset --hard
 git -C "${repo_root}/upstream" clean -fdx
 
 case "${scenario}" in
-  base|warm1)
+  base|warm1|layer_miss)
     ;;
   *)
     echo "Unknown scenario: ${scenario}" >&2

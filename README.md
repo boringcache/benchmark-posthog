@@ -13,6 +13,7 @@ This repo exists separately from [`boringcache/benchmarks`](https://github.com/b
 
 - Upstream app source lives in the pinned `upstream/` submodule.
 - `Dockerfile.benchmark` is benchmark-owned and committed in this repo.
+- `scripts/prepare-source.sh` includes an upstream-layout preflight so sync-driven runs fail early when benchmark-owned Docker paths drift from upstream.
 
 Pinned upstream source:
 
@@ -47,6 +48,7 @@ This repo uses split BoringCache tokens as the standard CI shape:
 
 - [`Dockerfile.benchmark`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/Dockerfile.benchmark)
 - [`scripts/prepare-source.sh`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/scripts/prepare-source.sh)
+- [`scripts/verify-upstream-layout.sh`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/scripts/verify-upstream-layout.sh)
 - [`.github/workflows/posthog-boringcache.yml`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/.github/workflows/posthog-boringcache.yml)
 - [`.github/workflows/posthog-actions-cache.yml`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/.github/workflows/posthog-actions-cache.yml)
 

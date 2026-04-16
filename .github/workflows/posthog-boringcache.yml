@@ -143,11 +143,10 @@ jobs:
               exit 1
               ;;
           esac
-          node_scripts_tag="posthog-node-scripts-${run_suffix}"
           python_tag="posthog-python-${run_suffix}"
           staticfiles_tag="posthog-staticfiles-${run_suffix}"
           playwright_tag="posthog-playwright-${run_suffix}"
-          tags_csv="${frontend_pnpm_tag},${plugin_pnpm_tag},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
+          tags_csv="${frontend_pnpm_tag},${plugin_pnpm_tag},${turbo_tag},${turbo_plugin_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
           registry_proxy_tags="${cache_scope},${docker_registry_tag}"
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "docker_registry_tag=${docker_registry_tag}" >> "$GITHUB_OUTPUT"
@@ -156,7 +155,6 @@ jobs:
           echo "plugin_pnpm_tag=${plugin_pnpm_tag}" >> "$GITHUB_OUTPUT"
           echo "turbo_tag=${turbo_tag}" >> "$GITHUB_OUTPUT"
           echo "turbo_plugin_tag=${turbo_plugin_tag}" >> "$GITHUB_OUTPUT"
-          echo "node_scripts_tag=${node_scripts_tag}" >> "$GITHUB_OUTPUT"
           echo "python_tag=${python_tag}" >> "$GITHUB_OUTPUT"
           echo "staticfiles_tag=${staticfiles_tag}" >> "$GITHUB_OUTPUT"
           echo "playwright_tag=${playwright_tag}" >> "$GITHUB_OUTPUT"
@@ -270,7 +268,6 @@ jobs:
               --build-arg BORINGCACHE_TAG_PNPM_PLUGIN="$BORINGCACHE_TAG_PNPM_PLUGIN" \
               --build-arg BORINGCACHE_TAG_TURBO="$BORINGCACHE_TAG_TURBO" \
               --build-arg BORINGCACHE_TAG_TURBO_PLUGIN="$BORINGCACHE_TAG_TURBO_PLUGIN" \
-              --build-arg BORINGCACHE_TAG_NODE_SCRIPTS="$BORINGCACHE_TAG_NODE_SCRIPTS" \
               --build-arg BORINGCACHE_TAG_PYTHON="$BORINGCACHE_TAG_PYTHON" \
               --build-arg BORINGCACHE_TAG_STATICFILES="$BORINGCACHE_TAG_STATICFILES" \
               --build-arg BORINGCACHE_TAG_PLAYWRIGHT="$BORINGCACHE_TAG_PLAYWRIGHT" \
@@ -362,7 +359,6 @@ jobs:
           BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
           BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
           BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
           BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
@@ -455,11 +451,10 @@ jobs:
               exit 1
               ;;
           esac
-          node_scripts_tag="posthog-node-scripts-${run_suffix}"
           python_tag="posthog-python-${run_suffix}"
           staticfiles_tag="posthog-staticfiles-${run_suffix}"
           playwright_tag="posthog-playwright-${run_suffix}"
-          tags_csv="${frontend_pnpm_tag},${plugin_pnpm_tag},${turbo_tag},${turbo_plugin_tag},${node_scripts_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
+          tags_csv="${frontend_pnpm_tag},${plugin_pnpm_tag},${turbo_tag},${turbo_plugin_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
           registry_proxy_tags="${cache_scope},${docker_registry_tag}"
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "docker_registry_tag=${docker_registry_tag}" >> "$GITHUB_OUTPUT"
@@ -468,7 +463,6 @@ jobs:
           echo "plugin_pnpm_tag=${plugin_pnpm_tag}" >> "$GITHUB_OUTPUT"
           echo "turbo_tag=${turbo_tag}" >> "$GITHUB_OUTPUT"
           echo "turbo_plugin_tag=${turbo_plugin_tag}" >> "$GITHUB_OUTPUT"
-          echo "node_scripts_tag=${node_scripts_tag}" >> "$GITHUB_OUTPUT"
           echo "python_tag=${python_tag}" >> "$GITHUB_OUTPUT"
           echo "staticfiles_tag=${staticfiles_tag}" >> "$GITHUB_OUTPUT"
           echo "playwright_tag=${playwright_tag}" >> "$GITHUB_OUTPUT"
@@ -582,7 +576,6 @@ jobs:
               --build-arg BORINGCACHE_TAG_PNPM_PLUGIN="$BORINGCACHE_TAG_PNPM_PLUGIN" \
               --build-arg BORINGCACHE_TAG_TURBO="$BORINGCACHE_TAG_TURBO" \
               --build-arg BORINGCACHE_TAG_TURBO_PLUGIN="$BORINGCACHE_TAG_TURBO_PLUGIN" \
-              --build-arg BORINGCACHE_TAG_NODE_SCRIPTS="$BORINGCACHE_TAG_NODE_SCRIPTS" \
               --build-arg BORINGCACHE_TAG_PYTHON="$BORINGCACHE_TAG_PYTHON" \
               --build-arg BORINGCACHE_TAG_STATICFILES="$BORINGCACHE_TAG_STATICFILES" \
               --build-arg BORINGCACHE_TAG_PLAYWRIGHT="$BORINGCACHE_TAG_PLAYWRIGHT" \
@@ -675,7 +668,6 @@ jobs:
           BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
           BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
           BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
           BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
@@ -707,7 +699,6 @@ jobs:
           BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
           BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
           BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
           BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
@@ -734,7 +725,6 @@ jobs:
           BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
           BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
           BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
           BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
@@ -761,7 +751,6 @@ jobs:
           BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
           BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
           BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
           BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
@@ -788,7 +777,6 @@ jobs:
           BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
           BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
           BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_NODE_SCRIPTS: ${{ steps.scope.outputs.node_scripts_tag }}
           BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
           BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
           BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}

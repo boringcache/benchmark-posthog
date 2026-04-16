@@ -17,3 +17,5 @@ case "${scenario}" in
 esac
 
 git -C "${repo_root}/upstream" status --short
+
+"${repo_root}/scripts/verify-upstream-layout.sh"

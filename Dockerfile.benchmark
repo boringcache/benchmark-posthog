@@ -24,6 +24,7 @@ ARG BORINGCACHE_TAG_STATICFILES="posthog-staticfiles"
 ARG BORINGCACHE_TAG_PLAYWRIGHT="posthog-playwright"
 ARG BORINGCACHE_INTERNAL_RESTORE_ENABLED="1"
 ARG BORINGCACHE_INTERNAL_SAVE_ENABLED="1"
+ARG BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS="0"
 ARG BORINGCACHE_TURBO_PROXY_ENABLED="1"
 
 FROM node:24.13.0-bookworm-slim AS frontend-build
@@ -35,6 +36,7 @@ ARG BORINGCACHE_TAG_PNPM_FRONTEND
 ARG BORINGCACHE_TAG_TURBO
 ARG BORINGCACHE_INTERNAL_RESTORE_ENABLED
 ARG BORINGCACHE_INTERNAL_SAVE_ENABLED
+ARG BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS
 ARG BORINGCACHE_TURBO_PROXY_ENABLED
 ARG BORINGCACHE_TURBO_BACKEND=proxy
 ARG TARGETPLATFORM
@@ -63,9 +65,11 @@ RUN --mount=type=secret,id=boringcache_token \
     export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}" && \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)" && \
     export BORINGCACHE_SAVE_TOKEN="${save_token}" && \
+    restore_args=(--no-git) && \
+    if [ "$BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS" = "1" ]; then restore_args+=(--allow-external-symlinks); fi && \
     rm -rf /tmp/boringcache-pnpm-store && mkdir -p /tmp/boringcache-pnpm-store /tmp/pnpm-store-v24 && \
     if [ "$BORINGCACHE_INTERNAL_RESTORE_ENABLED" = "1" ] && [ "$BORINGCACHE_TURBO_PROXY_ENABLED" = "1" ]; then \
-      if boringcache restore --no-git "$BORINGCACHE_WORKSPACE" "${BORINGCACHE_TAG_PNPM_FRONTEND}:/tmp/boringcache-pnpm-store"; then \
+      if boringcache restore "${restore_args[@]}" "$BORINGCACHE_WORKSPACE" "${BORINGCACHE_TAG_PNPM_FRONTEND}:/tmp/boringcache-pnpm-store"; then \
         cp -a /tmp/boringcache-pnpm-store/. /tmp/pnpm-store-v24/ 2>/dev/null || true; \
       fi; \
     fi && \
@@ -89,7 +93,7 @@ RUN --mount=type=secret,id=boringcache_token \
     pnpm config set fetch-retry-maxtimeout 120000 && \
     retry_cmd env CI=1 pnpm --filter=@posthog/frontend... install --frozen-lockfile --prefer-offline --store-dir /tmp/pnpm-store-v24 && \
     if [ "$BORINGCACHE_INTERNAL_SAVE_ENABLED" = "1" ] && [ -n "$save_token" ]; then \
-      boringcache save --no-git --exclude 'v10/projects/**' "$BORINGCACHE_WORKSPACE" "${BORINGCACHE_TAG_PNPM_FRONTEND}:/tmp/pnpm-store-v24"; \
+      boringcache save --no-git "$BORINGCACHE_WORKSPACE" "${BORINGCACHE_TAG_PNPM_FRONTEND}:/tmp/pnpm-store-v24"; \
     fi
 
 COPY upstream/frontend/ frontend/
@@ -184,6 +188,7 @@ ARG BORINGCACHE_TAG_TURBO_PLUGIN
 ARG BORINGCACHE_TAG_NODE_SCRIPTS
 ARG BORINGCACHE_INTERNAL_RESTORE_ENABLED
 ARG BORINGCACHE_INTERNAL_SAVE_ENABLED
+ARG BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS
 ARG BORINGCACHE_TURBO_PROXY_ENABLED
 ARG BORINGCACHE_TURBO_BACKEND=proxy
 ARG TARGETPLATFORM
@@ -242,13 +247,15 @@ RUN --mount=type=secret,id=boringcache_token \
     export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}"; \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)"; \
     export BORINGCACHE_SAVE_TOKEN="${save_token}"; \
+    restore_args=(--no-git); \
+    if [ "$BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS" = "1" ]; then restore_args+=(--allow-external-symlinks); fi; \
     rm -rf /tmp/boringcache-pnpm-store && mkdir -p /tmp/boringcache-pnpm-store /tmp/pnpm-store-v24; \
     turbo_cache_mode="local:,remote:"; \
     turbo_backend="${BORINGCACHE_TURBO_BACKEND:-proxy}"; \
     proxy_pid=""; \
     proxy_log=""; \
     if [ "$BORINGCACHE_INTERNAL_RESTORE_ENABLED" = "1" ]; then \
-      if boringcache restore --no-git "$BORINGCACHE_WORKSPACE" "${BORINGCACHE_TAG_PNPM_PLUGIN}:/tmp/boringcache-pnpm-store"; then \
+      if boringcache restore "${restore_args[@]}" "$BORINGCACHE_WORKSPACE" "${BORINGCACHE_TAG_PNPM_PLUGIN}:/tmp/boringcache-pnpm-store"; then \
         cp -a /tmp/boringcache-pnpm-store/. /tmp/pnpm-store-v24/ 2>/dev/null || true; \
       fi; \
       case "$turbo_backend" in \
@@ -320,7 +327,7 @@ RUN --mount=type=secret,id=boringcache_token \
     pnpm config set fetch-retry-maxtimeout 120000; \
     retry_cmd env NODE_OPTIONS="--max-old-space-size=4096" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --prefer-offline --store-dir /tmp/pnpm-store-v24; \
     if [ "$BORINGCACHE_INTERNAL_SAVE_ENABLED" = "1" ] && [ -n "$save_token" ]; then \
-      boringcache save --no-git --exclude 'v10/projects/**' "$BORINGCACHE_WORKSPACE" "${BORINGCACHE_TAG_PNPM_PLUGIN}:/tmp/pnpm-store-v24"; \
+      boringcache save --no-git "$BORINGCACHE_WORKSPACE" "${BORINGCACHE_TAG_PNPM_PLUGIN}:/tmp/pnpm-store-v24"; \
     fi; \
     NODE_OPTIONS="--max-old-space-size=4096" bin/turbo run build --filter=@posthog/plugin-transpiler --cache="${turbo_cache_mode}"; \
     if [ "$BORINGCACHE_INTERNAL_RESTORE_ENABLED" = "1" ] && [ "$turbo_backend" = "archive" ] && [ "$BORINGCACHE_INTERNAL_SAVE_ENABLED" = "1" ] && [ -n "$save_token" ] && [ -d /code/.turbo/cache ] && find /code/.turbo/cache -type f -print -quit | grep -q .; then \

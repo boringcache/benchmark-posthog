@@ -20,11 +20,13 @@ Pinned upstream source:
 
 ## What It Measures
 
-Each backend runs the same scenario set:
+Fresh runs use the scenario set:
 
 - `cold`: empty remote cache, empty local Docker cache
 - `warm1`
 - `layer_miss`: empty local Docker cache on a fresh runner, with BoringCache internal restores still enabled on the BoringCache side
+
+Rolling runs record only the first build after upstream sync against the stable rolling cache tags. They do not run separate `warm1` or `layer_miss` follow-ups.
 
 The story this benchmark is meant to show is:
 

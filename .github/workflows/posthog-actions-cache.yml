@@ -188,6 +188,7 @@ jobs:
               "${build_cache_args[@]}" \
               --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
               --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
+              --build-arg BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS="1" \
               --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
               --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
               --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
@@ -244,6 +245,7 @@ jobs:
   scenario-builds:
     name: Scenario (${{ matrix.phase }}) (GHA cache)
     needs: seed-cache
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.cache_lane != 'rolling' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -333,6 +335,7 @@ jobs:
               --cache-from "type=gha,scope=${CACHE_SCOPE}" \
               --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
               --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
+              --build-arg BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS="1" \
               --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
               --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
               --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
@@ -383,6 +386,7 @@ jobs:
               --cache-from "type=gha,scope=${CACHE_SCOPE}" \
               --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
               --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
+              --build-arg BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS="1" \
               --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
               --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
               --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
@@ -593,6 +597,7 @@ jobs:
   finalize-benchmark:
     name: Finalize benchmark artifacts
     needs: [seed-cache, scenario-builds]
+    if: ${{ always() && needs.seed-cache.result == 'success' && (needs.scenario-builds.result == 'success' || needs.scenario-builds.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -603,6 +608,7 @@ jobs:
           path: .benchmark-config
 
       - name: Download scenario timing artifacts
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.cache_lane != 'rolling' }}
         uses: actions/download-artifact@v8
         with:
           pattern: benchmark-phase-${{ env.BENCHMARK_ID }}-actions-cache-*
@@ -610,6 +616,7 @@ jobs:
           merge-multiple: true
       - name: Collect scenario timings
         id: timings
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.cache_lane != 'rolling' }}
         run: |
           set -euo pipefail
           parse_phase() {
@@ -659,13 +666,13 @@ jobs:
             --project-repo "$PROJECT_REPO" \
             --project-ref "${{ steps.upstream_ref.outputs.sha }}" \
             --cold-seconds "${{ needs.seed-cache.outputs.cold_seconds }}" \
-            --warm1-seconds "${{ steps.timings.outputs.warm1_seconds }}" \
-            --layer-miss-seconds "${{ steps.timings.outputs.layer_miss_seconds }}" \
-            --docker-cache-import-seconds "${{ steps.timings.outputs.warm1_docker_cache_import_seconds }}" \
+            --warm1-seconds "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.warm1_seconds }}" \
+            --layer-miss-seconds "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.layer_miss_seconds }}" \
+            --docker-cache-import-seconds "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.warm1_docker_cache_import_seconds }}" \
             --docker-cache-export-seconds "${{ needs.seed-cache.outputs.docker_cache_export_seconds }}" \
             --cache-storage-bytes "${{ steps.cache_size.outputs.bytes }}" \
             --cache-storage-source "github-actions-cache-api" \
-            --hit-behavior-note "Source tree comes from the benchmark repo's committed upstream submodule. Cold+seed runs the pinned base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only and no synthetic mutations."
+            --hit-behavior-note "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Rolling lane: this workflow records only the first build after upstream sync. It restores the stable PostHog actions/cache scope, rebuilds the new pinned source tree once, and skips separate warm1 and layer-miss follow-up runs.' || 'Fresh lane: cold+seed runs the pinned base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only and no synthetic mutations.' }}"
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v6

@@ -129,9 +129,12 @@ jobs:
         run: |
           set -euo pipefail
           rustup toolchain install stable --profile minimal
-          cargo build --release --locked --manifest-path .boringcache-cli/Cargo.toml --bin boringcache
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          cargo build --release --locked --target x86_64-unknown-linux-musl --manifest-path .boringcache-cli/Cargo.toml --bin boringcache
           mkdir -p "$HOME/.local/bin"
-          cp .boringcache-cli/target/release/boringcache "$HOME/.local/bin/boringcache"
+          cp .boringcache-cli/target/x86_64-unknown-linux-musl/release/boringcache "$HOME/.local/bin/boringcache"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/boringcache" --version
 

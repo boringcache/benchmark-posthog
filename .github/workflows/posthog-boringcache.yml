@@ -102,6 +102,10 @@ jobs:
       - name: Prepare base benchmark source tree
         run: ./scripts/prepare-source.sh base
 
+      - name: Start seed timing
+        id: seed_timing_start
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Install BoringCache CLI with boringcache/one
         uses: boringcache/one@v1
         with:
@@ -367,10 +371,12 @@ jobs:
           set -euo pipefail
           metrics_file="${RUNNER_TEMP}/cold-build-metrics.env"
           rm -f "$metrics_file"
+          phase_start="${{ steps.seed_timing_start.outputs.started_at }}"
           start="$(date +%s)"
           BENCHMARK_METRICS_OUTPUT="$metrics_file" ./run-boringcache-build.sh ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'full' || 'seed-cache' }}
           end="$(date +%s)"
-          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
           if [[ -s "$metrics_file" ]]; then
             cat "$metrics_file" >> "$GITHUB_OUTPUT"
           fi
@@ -409,6 +415,10 @@ jobs:
 
       - name: Prepare scenario source tree
         run: ./scripts/prepare-source.sh "${{ matrix.phase }}"
+
+      - name: Start scenario timing
+        id: scenario_timing_start
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Install BoringCache CLI with boringcache/one
         uses: boringcache/one@v1
@@ -677,10 +687,12 @@ jobs:
           set -euo pipefail
           metrics_file="${RUNNER_TEMP}/warm1-build-metrics.env"
           rm -f "$metrics_file"
+          phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
           start="$(date +%s)"
           BENCHMARK_METRICS_OUTPUT="$metrics_file" ./run-boringcache-build.sh partial-warm
           end="$(date +%s)"
-          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
           if [[ -s "$metrics_file" ]]; then
             cat "$metrics_file" >> "$GITHUB_OUTPUT"
           fi
@@ -706,10 +718,12 @@ jobs:
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
+          phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
           start="$(date +%s)"
           ./run-boringcache-build.sh partial-warm
           end="$(date +%s)"
-          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
       - name: Run stale-low build (committed source change, partial warm)
         id: stale_low_build
@@ -732,10 +746,12 @@ jobs:
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
+          phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
           start="$(date +%s)"
           ./run-boringcache-build.sh partial-warm
           end="$(date +%s)"
-          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
       - name: Run stale-mid build (committed frontend package descriptor change, partial warm)
         id: stale_mid_build
@@ -758,10 +774,12 @@ jobs:
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
+          phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
           start="$(date +%s)"
           ./run-boringcache-build.sh partial-warm
           end="$(date +%s)"
-          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
       - name: Run layer-miss build (no Docker cache, full image)
         id: internal_only_build
@@ -784,33 +802,41 @@ jobs:
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
+          phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
           start="$(date +%s)"
           ./run-boringcache-build.sh internal-only
           end="$(date +%s)"
-          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
       - name: Capture scenario timing
         id: phase_timing
         run: |
           set -euo pipefail
           seconds=""
+          build_seconds=""
           docker_cache_import_seconds=""
           case "${{ matrix.phase }}" in
             warm1)
               seconds="${{ steps.warm1_build.outputs.seconds }}"
+              build_seconds="${{ steps.warm1_build.outputs.build_seconds }}"
               docker_cache_import_seconds="${{ steps.warm1_build.outputs.docker_cache_import_seconds }}"
               ;;
             warm2)
               seconds="${{ steps.warm2_build.outputs.seconds }}"
+              build_seconds="${{ steps.warm2_build.outputs.build_seconds }}"
               ;;
             stale-low)
               seconds="${{ steps.stale_low_build.outputs.seconds }}"
+              build_seconds="${{ steps.stale_low_build.outputs.build_seconds }}"
               ;;
             stale-mid)
               seconds="${{ steps.stale_mid_build.outputs.seconds }}"
+              build_seconds="${{ steps.stale_mid_build.outputs.build_seconds }}"
               ;;
             layer_miss)
               seconds="${{ steps.internal_only_build.outputs.seconds }}"
+              build_seconds="${{ steps.internal_only_build.outputs.build_seconds }}"
               ;;
             *)
               echo "Unknown phase: ${{ matrix.phase }}" >&2
@@ -822,6 +848,7 @@ jobs:
             exit 1
           fi
           echo "seconds=${seconds}" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=${build_seconds}" >> "$GITHUB_OUTPUT"
           if [[ -n "${docker_cache_import_seconds}" ]]; then
             echo "docker_cache_import_seconds=${docker_cache_import_seconds}" >> "$GITHUB_OUTPUT"
           fi
@@ -832,6 +859,7 @@ jobs:
           cat > "benchmark-phase/${{ matrix.phase }}.env" <<EOF
           phase=${{ matrix.phase }}
           seconds=${{ steps.phase_timing.outputs.seconds }}
+          build_seconds=${{ steps.phase_timing.outputs.build_seconds }}
           docker_cache_import_seconds=${{ steps.phase_timing.outputs.docker_cache_import_seconds }}
           EOF
       - name: Upload scenario timing artifact

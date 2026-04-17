@@ -115,6 +115,26 @@ jobs:
           cli-platform: linux-amd64
           cache-runtime: false
 
+      - name: Checkout BoringCache CLI ref
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' }}
+        uses: actions/checkout@v6
+        with:
+          repository: boringcache/cli
+          ref: ${{ inputs.cli_ref }}
+          path: .boringcache-cli
+          fetch-depth: 1
+
+      - name: Build BoringCache CLI ref
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          cargo build --release --locked --manifest-path .boringcache-cli/Cargo.toml --bin boringcache
+          mkdir -p "$HOME/.local/bin"
+          cp .boringcache-cli/target/release/boringcache "$HOME/.local/bin/boringcache"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/boringcache" --version
+
       - name: Prepare benchmark build inputs
         id: scope
         run: |

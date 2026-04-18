@@ -141,7 +141,13 @@ jobs:
       - name: Prepare benchmark build inputs
         id: scope
         run: |
-          cp "$(which boringcache)" ./boringcache-bin
+          # Keep this bind-mounted file stable; BuildKit keys RUN cache on its content.
+          # The real CLI for cli_ref debugging is passed as the boringcache_cli secret below.
+          cat > ./boringcache-bin <<'SH'
+          #!/usr/bin/env sh
+          exec /usr/local/bin/boringcache-real "$@"
+          SH
+          chmod +x ./boringcache-bin
 
           ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
           ref_slug="${ref_slug#-}"
@@ -345,6 +351,7 @@ jobs:
               --tag "$IMAGE_TAG" \
               --progress=plain \
               "${cache_args[@]}" \
+              --secret id=boringcache_cli,src="$(command -v boringcache)" \
               --secret id=boringcache_token,env=BORINGCACHE_RESTORE_TOKEN \
               --secret id=boringcache_save_token,env=BORINGCACHE_SAVE_TOKEN \
               --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
@@ -550,7 +557,13 @@ jobs:
       - name: Prepare benchmark build inputs
         id: scope
         run: |
-          cp "$(which boringcache)" ./boringcache-bin
+          # Keep this bind-mounted file stable; BuildKit keys RUN cache on its content.
+          # The real CLI for cli_ref debugging is passed as the boringcache_cli secret below.
+          cat > ./boringcache-bin <<'SH'
+          #!/usr/bin/env sh
+          exec /usr/local/bin/boringcache-real "$@"
+          SH
+          chmod +x ./boringcache-bin
 
           ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
           ref_slug="${ref_slug#-}"
@@ -697,6 +710,7 @@ jobs:
               --tag "$IMAGE_TAG" \
               --progress=plain \
               "${cache_args[@]}" \
+              --secret id=boringcache_cli,src="$(command -v boringcache)" \
               --secret id=boringcache_token,env=BORINGCACHE_RESTORE_TOKEN \
               --secret id=boringcache_save_token,env=BORINGCACHE_SAVE_TOKEN \
               --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \

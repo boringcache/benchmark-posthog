@@ -59,7 +59,6 @@ COPY upstream/docs/onboarding/ docs/onboarding/
 RUN --mount=type=secret,id=boringcache_token \
     --mount=type=secret,id=boringcache_save_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
-    --mount=type=secret,id=boringcache_cli,target=/usr/local/bin/boringcache-real,mode=0555 \
     --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)" && \
     export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}" && \
@@ -101,7 +100,6 @@ COPY upstream/frontend/ frontend/
 RUN --mount=type=secret,id=boringcache_token \
     --mount=type=secret,id=boringcache_save_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
-    --mount=type=secret,id=boringcache_cli,target=/usr/local/bin/boringcache-real,mode=0555 \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)"; \
     export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}"; \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)"; \
@@ -207,7 +205,6 @@ COPY upstream/common/plugin_transpiler/ common/plugin_transpiler/
 RUN --mount=type=secret,id=boringcache_token \
     --mount=type=secret,id=boringcache_save_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
-    --mount=type=secret,id=boringcache_cli,target=/usr/local/bin/boringcache-real,mode=0555 \
     --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)"; \
     export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}"; \
@@ -342,7 +339,6 @@ RUN --mount=type=cache,id=apt-cache-${TARGETPLATFORM},target=/var/cache/apt,shar
 RUN --mount=type=secret,id=boringcache_token \
     --mount=type=secret,id=boringcache_save_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
-    --mount=type=secret,id=boringcache_cli,target=/usr/local/bin/boringcache-real,mode=0555 \
     --mount=type=cache,id=uv-libxmlsec1.2.37-2,target=/root/.cache/uv \
     --mount=type=bind,source=upstream/uv.lock,target=uv.lock \
     --mount=type=bind,source=upstream/pyproject.toml,target=pyproject.toml \
@@ -391,7 +387,6 @@ COPY --from=frontend-build /code/frontend/src/products.json /code/frontend/src/p
 RUN --mount=type=secret,id=boringcache_token \
     --mount=type=secret,id=boringcache_save_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
-    --mount=type=secret,id=boringcache_cli,target=/usr/local/bin/boringcache-real,mode=0555 \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)" && \
     export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}" && \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)" && \
@@ -485,7 +480,6 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN --mount=type=secret,id=boringcache_token \
     --mount=type=secret,id=boringcache_save_token \
     --mount=type=bind,source=boringcache-bin,target=/usr/local/bin/boringcache \
-    --mount=type=secret,id=boringcache_cli,target=/usr/local/bin/boringcache-real,mode=0555 \
     export BORINGCACHE_API_TOKEN="$(cat /run/secrets/boringcache_token)" && \
     export BORINGCACHE_RESTORE_TOKEN="${BORINGCACHE_API_TOKEN}" && \
     save_token="$(cat /run/secrets/boringcache_save_token 2>/dev/null || true)" && \

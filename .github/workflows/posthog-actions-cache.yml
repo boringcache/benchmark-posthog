@@ -166,6 +166,48 @@ jobs:
             [[ -n "$step_id" ]] || return 0
             sed -nE "s/^#${step_id} DONE ([0-9]+(\\.[0-9]+)?)s$/\\1/p" "$build_log" | tail -n1
           }
+          write_seed_diagnostics() {
+            local output_path="benchmark-diagnostics/${BENCHMARK_ID}-actions-cache-${CACHE_LANE}-seed.txt"
+            local diagnostic_end="${end:-$(date +%s)}"
+            local cached_steps=""
+            local import_status="none"
+
+            if grep -Eq 'failed to configure .*cache importer' "$build_log"; then
+              import_status="not_found"
+            elif grep -Eq 'importing cache manifest|inferred cache manifest type' "$build_log"; then
+              import_status="ok"
+            fi
+            cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
+
+            mkdir -p "$(dirname "$output_path")"
+            {
+              echo "strategy=actions-cache"
+              echo "lane=${CACHE_LANE}"
+              echo "builder=${BUILDER}"
+              echo "cache_scope_primary=${CACHE_SCOPE_PRIMARY}"
+              echo "cache_scope_fallback=${CACHE_SCOPE_FALLBACK}"
+              echo "selected_scope=${selected_scope}"
+              echo "seed_phase_started_at=${phase_start}"
+              echo "seed_build_started_at=${start}"
+              echo "seed_build_finished_at=${diagnostic_end}"
+              echo "seed_phase_wall_seconds=$((diagnostic_end - phase_start))"
+              echo "seed_build_wall_seconds=$((diagnostic_end - start))"
+              printf 'cache_args='
+              printf '%q ' "${build_cache_args[@]}"
+              printf '\n'
+              echo "import_status=${import_status}"
+              echo "cached_steps=${cached_steps}"
+              echo "import_lines<<EOF"
+              grep -E 'importing cache manifest|failed to configure .*cache importer|inferred cache manifest type' "$build_log" || true
+              echo "EOF"
+              echo "export_lines<<EOF"
+              grep -E 'exporting to GitHub Actions Cache|preparing build cache|sending cache export|DONE [0-9.]+s$' "$build_log" | tail -n 80 || true
+              echo "EOF"
+              echo "slow_done_lines<<EOF"
+              grep -E '^#[0-9]+ DONE [0-9]+(\.[0-9]+)?s$' "$build_log" | tail -n 80 || true
+              echo "EOF"
+            } > "$output_path"
+          }
 
           selected_scope="$CACHE_SCOPE_PRIMARY"
           phase_start="${{ steps.seed_timing_start.outputs.started_at }}"
@@ -206,6 +248,8 @@ jobs:
             fi
 
             if [[ "$attempt" -ge 2 ]]; then
+              end="$(date +%s)"
+              write_seed_diagnostics
               echo "Cold + seed cache build failed after retry" >&2
               exit "$status"
             fi
@@ -233,11 +277,14 @@ jobs:
           done
 
           if [[ "$export_verified" -ne 1 ]]; then
+            end="$(date +%s)"
+            write_seed_diagnostics
             echo "Cold + seed cache export probe failed: no index cache entry was touched for index-${selected_scope}" >&2
             exit 1
           fi
 
           end="$(date +%s)"
+          write_seed_diagnostics
           echo "cache_scope=${selected_scope}" >> "$GITHUB_OUTPUT"
           echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
           echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
@@ -246,6 +293,14 @@ jobs:
           if [[ -n "$export_seconds" ]]; then
             echo "docker_cache_export_seconds=${export_seconds}" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Upload seed diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-diagnostics-${{ env.BENCHMARK_ID }}-actions-cache-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
+          path: benchmark-diagnostics/*.txt
+          if-no-files-found: ignore
 
 
   scenario-builds:

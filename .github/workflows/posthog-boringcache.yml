@@ -253,6 +253,7 @@ jobs:
 
             local cached_steps=""
             cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
+            local observability_path="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}"
 
             mkdir -p "$(dirname "$output_path")"
             {
@@ -281,6 +282,15 @@ jobs:
               echo "slow_done_lines<<EOF"
               grep -E '^#[0-9]+ DONE [0-9]+(\.[0-9]+)?s$' "$build_log" | tail -n 80 || true
               echo "EOF"
+              echo "observability_jsonl=${observability_path}"
+              if [[ -n "$observability_path" && -s "$observability_path" ]]; then
+                printf 'observability_events='
+                wc -l < "$observability_path" | tr -d ' '
+                printf '\n'
+                echo "observability_summary<<EOF"
+                grep -E 'oci_blob_upload|upload_session_commit|cache_finalize_publish|receipt|429|rate' "$observability_path" | tail -n 160 || true
+                echo "EOF"
+              fi
             } > "$output_path"
           }
 
@@ -419,6 +429,7 @@ jobs:
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/posthog-boringcache-seed-observability.jsonl
 
       - name: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Run rolling seed-only build' || 'Run fresh seed build' }}
         id: cold_baseline_build
@@ -441,13 +452,16 @@ jobs:
           BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
           BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
           BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
+          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/posthog-boringcache-seed-observability.jsonl
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
           metrics_file="${RUNNER_TEMP}/cold-build-metrics.env"
           diagnostics_file="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-${CACHE_LANE}-seed.txt"
+          observability_artifact="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-${CACHE_LANE}-seed-observability.jsonl"
           rm -f "$metrics_file"
           rm -f "$diagnostics_file"
+          rm -f "$observability_artifact"
           mkdir -p "$(dirname "$diagnostics_file")"
           phase_start="${{ steps.seed_timing_start.outputs.started_at }}"
           start="$(date +%s)"
@@ -465,6 +479,9 @@ jobs:
               echo "seed_build_wall_seconds=$((end - start))"
             } >> "$diagnostics_file"
           fi
+          if [[ -s "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" ]]; then
+            cp "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" "$observability_artifact"
+          fi
           if [[ "$status" -ne 0 ]]; then
             exit "$status"
           fi
@@ -479,7 +496,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: benchmark-diagnostics-${{ env.BENCHMARK_ID }}-boringcache-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
-          path: benchmark-diagnostics/*.txt
+          path: benchmark-diagnostics/*
           if-no-files-found: ignore
 
   scenario-builds:

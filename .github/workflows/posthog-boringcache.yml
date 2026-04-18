@@ -141,12 +141,16 @@ jobs:
       - name: Prepare benchmark build inputs
         id: scope
         run: |
-          # Keep this bind-mounted file stable; BuildKit keys RUN cache on its content.
-          # The real CLI for cli_ref debugging is passed as the boringcache_cli secret below.
-          cat > ./boringcache-bin <<'SH'
+          if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && '1' || '0' }}" == "1" ]]; then
+            # Keep cli_ref debug runs out of Docker RUN cache keys. The built CLI
+            # still drives the outer registry proxy; Dockerfile-internal calls are disabled.
+            cat > ./boringcache-bin <<'SH'
           #!/usr/bin/env sh
-          exec /usr/local/bin/boringcache-real "$@"
+          exit 0
           SH
+          else
+            cp "$(command -v boringcache)" ./boringcache-bin
+          fi
           chmod +x ./boringcache-bin
 
           ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
@@ -306,6 +310,11 @@ jobs:
             internal_restore_enabled="1"
             internal_save_enabled="1"
             turbo_proxy_enabled="${BORINGCACHE_TURBO_PROXY_ENABLED:-1}"
+            if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && '1' || '0' }}" == "1" ]]; then
+              internal_restore_enabled="0"
+              internal_save_enabled="0"
+              turbo_proxy_enabled="0"
+            fi
             if [[ "$mode" == "full" ]]; then
               [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
@@ -351,7 +360,6 @@ jobs:
               --tag "$IMAGE_TAG" \
               --progress=plain \
               "${cache_args[@]}" \
-              --secret id=boringcache_cli,src="$(command -v boringcache)" \
               --secret id=boringcache_token,env=BORINGCACHE_RESTORE_TOKEN \
               --secret id=boringcache_save_token,env=BORINGCACHE_SAVE_TOKEN \
               --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
@@ -557,12 +565,16 @@ jobs:
       - name: Prepare benchmark build inputs
         id: scope
         run: |
-          # Keep this bind-mounted file stable; BuildKit keys RUN cache on its content.
-          # The real CLI for cli_ref debugging is passed as the boringcache_cli secret below.
-          cat > ./boringcache-bin <<'SH'
+          if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && '1' || '0' }}" == "1" ]]; then
+            # Keep cli_ref debug runs out of Docker RUN cache keys. The built CLI
+            # still drives the outer registry proxy; Dockerfile-internal calls are disabled.
+            cat > ./boringcache-bin <<'SH'
           #!/usr/bin/env sh
-          exec /usr/local/bin/boringcache-real "$@"
+          exit 0
           SH
+          else
+            cp "$(command -v boringcache)" ./boringcache-bin
+          fi
           chmod +x ./boringcache-bin
 
           ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
@@ -666,6 +678,11 @@ jobs:
             internal_restore_enabled="1"
             internal_save_enabled="1"
             turbo_proxy_enabled="${BORINGCACHE_TURBO_PROXY_ENABLED:-1}"
+            if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && '1' || '0' }}" == "1" ]]; then
+              internal_restore_enabled="0"
+              internal_save_enabled="0"
+              turbo_proxy_enabled="0"
+            fi
             if [[ "$mode" == "full" ]]; then
               [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
@@ -710,7 +727,6 @@ jobs:
               --tag "$IMAGE_TAG" \
               --progress=plain \
               "${cache_args[@]}" \
-              --secret id=boringcache_cli,src="$(command -v boringcache)" \
               --secret id=boringcache_token,env=BORINGCACHE_RESTORE_TOKEN \
               --secret id=boringcache_save_token,env=BORINGCACHE_SAVE_TOKEN \
               --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \

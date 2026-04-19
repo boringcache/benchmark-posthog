@@ -320,13 +320,10 @@ jobs:
               fi
 
               local batch_duration_ms=""
-              local batch_request_bytes=""
               batch_duration_ms="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .duration_ms // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
-              batch_request_bytes="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .request_bytes // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
               if [[ -n "$batch_duration_ms" ]]; then
                 awk -v ms="$batch_duration_ms" 'BEGIN { printf "oci_upload_batch_seconds=%.3f\n", ms / 1000 }' >> "$output_path"
               fi
-              append_metric oci_new_blob_bytes "$batch_request_bytes"
             fi
           }
 
@@ -819,13 +816,10 @@ jobs:
               fi
 
               local batch_duration_ms=""
-              local batch_request_bytes=""
               batch_duration_ms="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .duration_ms // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
-              batch_request_bytes="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .request_bytes // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
               if [[ -n "$batch_duration_ms" ]]; then
                 awk -v ms="$batch_duration_ms" 'BEGIN { printf "oci_upload_batch_seconds=%.3f\n", ms / 1000 }' >> "$output_path"
               fi
-              append_metric oci_new_blob_bytes "$batch_request_bytes"
             fi
           }
 

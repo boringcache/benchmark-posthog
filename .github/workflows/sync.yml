@@ -16,6 +16,7 @@ jobs:
   sync:
     name: Sync With Upstream
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout benchmark repo
         uses: actions/checkout@v6
@@ -27,11 +28,25 @@ jobs:
       - name: Sync upstream submodule
         run: |
           set -euo pipefail
+
+          retry() {
+            local attempt=1
+            local max_attempts=3
+            until "$@"; do
+              if [[ "$attempt" -ge "$max_attempts" ]]; then
+                return 1
+              fi
+              echo "Command failed; retrying ($attempt/$max_attempts): $*" >&2
+              attempt=$((attempt + 1))
+              sleep 5
+            done
+          }
+
           git config --global user.name "boringcache-bot"
           git config --global user.email "boringcache-bot@users.noreply.github.com"
 
-          git submodule sync --recursive
-          git submodule update --init --remote --merge upstream
+          retry git submodule sync --recursive
+          retry git submodule update --init --remote --merge upstream
 
           upstream_url="$(cd upstream && git remote get-url origin)"
           commit_sha="$(cd upstream && git rev-parse HEAD)"
@@ -43,4 +58,19 @@ jobs:
 
           git add upstream
           git commit -m "Update upstream to ${upstream_url}/commit/${commit_sha}"
-          git push origin HEAD:main
+
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+
+            if [[ "$attempt" -ge 3 ]]; then
+              echo "Failed to push upstream sync after ${attempt} attempts" >&2
+              exit 1
+            fi
+
+            echo "Push failed; rebasing onto current origin/main before retry (${attempt}/3)" >&2
+            git fetch origin main
+            git rebase origin/main
+            sleep 5
+          done

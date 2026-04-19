@@ -317,6 +317,9 @@ jobs:
                 append_metric oci_new_blob_count "$(detail_value "$plan_details" upload_urls)"
                 append_metric oci_upload_already_present "$(detail_value "$plan_details" already_present)"
                 append_metric oci_new_blob_bytes "$(detail_value "$plan_details" requested_bytes)"
+              else
+                append_metric oci_new_blob_count "0"
+                append_metric oci_new_blob_bytes "0"
               fi
 
               local batch_duration_ms=""
@@ -813,6 +816,9 @@ jobs:
                 append_metric oci_new_blob_count "$(detail_value "$plan_details" upload_urls)"
                 append_metric oci_upload_already_present "$(detail_value "$plan_details" already_present)"
                 append_metric oci_new_blob_bytes "$(detail_value "$plan_details" requested_bytes)"
+              else
+                append_metric oci_new_blob_count "0"
+                append_metric oci_new_blob_bytes "0"
               fi
 
               local batch_duration_ms=""

@@ -17,6 +17,23 @@ hit_behavior_note=""
 layer_miss_seconds=""
 docker_cache_import_seconds=""
 docker_cache_export_seconds=""
+oci_hydration_policy=""
+oci_body_local_hits=""
+oci_body_remote_fetches=""
+oci_body_local_bytes=""
+oci_body_remote_bytes=""
+oci_body_local_duration_ms=""
+oci_body_remote_duration_ms=""
+startup_oci_body_inserted=""
+startup_oci_body_failures=""
+startup_oci_body_cold_blobs=""
+startup_oci_body_duration_ms=""
+oci_new_blob_count=""
+oci_new_blob_bytes=""
+oci_upload_requested_blobs=""
+oci_upload_already_present=""
+oci_upload_batch_seconds=""
+reseed_new_blob_threshold="${BENCHMARK_RESEED_NEW_BLOB_THRESHOLD:-0}"
 stale_seconds=""
 stale_seconds_explicit="0"
 stale_low_seconds=""
@@ -90,6 +107,74 @@ while [[ $# -gt 0 ]]; do
       docker_cache_export_seconds="$2"
       shift 2
       ;;
+    --oci-hydration-policy)
+      oci_hydration_policy="$2"
+      shift 2
+      ;;
+    --oci-body-local-hits)
+      oci_body_local_hits="$2"
+      shift 2
+      ;;
+    --oci-body-remote-fetches)
+      oci_body_remote_fetches="$2"
+      shift 2
+      ;;
+    --oci-body-local-bytes)
+      oci_body_local_bytes="$2"
+      shift 2
+      ;;
+    --oci-body-remote-bytes)
+      oci_body_remote_bytes="$2"
+      shift 2
+      ;;
+    --oci-body-local-duration-ms)
+      oci_body_local_duration_ms="$2"
+      shift 2
+      ;;
+    --oci-body-remote-duration-ms)
+      oci_body_remote_duration_ms="$2"
+      shift 2
+      ;;
+    --startup-oci-body-inserted)
+      startup_oci_body_inserted="$2"
+      shift 2
+      ;;
+    --startup-oci-body-failures)
+      startup_oci_body_failures="$2"
+      shift 2
+      ;;
+    --startup-oci-body-cold-blobs)
+      startup_oci_body_cold_blobs="$2"
+      shift 2
+      ;;
+    --startup-oci-body-duration-ms)
+      startup_oci_body_duration_ms="$2"
+      shift 2
+      ;;
+    --oci-new-blob-count)
+      oci_new_blob_count="$2"
+      shift 2
+      ;;
+    --oci-new-blob-bytes)
+      oci_new_blob_bytes="$2"
+      shift 2
+      ;;
+    --oci-upload-requested-blobs)
+      oci_upload_requested_blobs="$2"
+      shift 2
+      ;;
+    --oci-upload-already-present)
+      oci_upload_already_present="$2"
+      shift 2
+      ;;
+    --oci-upload-batch-seconds)
+      oci_upload_batch_seconds="$2"
+      shift 2
+      ;;
+    --reseed-new-blob-threshold)
+      reseed_new_blob_threshold="$2"
+      shift 2
+      ;;
     --stale-seconds|--stale-docker-seconds)
       stale_seconds="$2"
       stale_seconds_explicit="1"
@@ -149,6 +234,33 @@ json_num_or_null() {
   fi
 }
 
+json_string_or_null() {
+  local v="$1"
+  if [[ -z "$v" ]]; then
+    echo "null"
+  else
+    jq -Rn --arg value "$v" '$value'
+  fi
+}
+
+sanitize_uint() {
+  local v="$1"
+  if [[ -n "$v" && "$v" =~ ^[0-9]+$ ]]; then
+    echo "$v"
+  else
+    echo ""
+  fi
+}
+
+sanitize_number() {
+  local v="$1"
+  if [[ -n "$v" && "$v" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "$v"
+  else
+    echo ""
+  fi
+}
+
 if [[ -n "$bytes_uploaded" ]] && ! [[ "$bytes_uploaded" =~ ^[0-9]+$ ]]; then
   bytes_uploaded=""
 fi
@@ -164,6 +276,23 @@ fi
 if [[ -n "$docker_cache_export_seconds" ]] && ! [[ "$docker_cache_export_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   docker_cache_export_seconds=""
 fi
+oci_body_local_hits="$(sanitize_uint "$oci_body_local_hits")"
+oci_body_remote_fetches="$(sanitize_uint "$oci_body_remote_fetches")"
+oci_body_local_bytes="$(sanitize_uint "$oci_body_local_bytes")"
+oci_body_remote_bytes="$(sanitize_uint "$oci_body_remote_bytes")"
+oci_body_local_duration_ms="$(sanitize_uint "$oci_body_local_duration_ms")"
+oci_body_remote_duration_ms="$(sanitize_uint "$oci_body_remote_duration_ms")"
+startup_oci_body_inserted="$(sanitize_uint "$startup_oci_body_inserted")"
+startup_oci_body_failures="$(sanitize_uint "$startup_oci_body_failures")"
+startup_oci_body_cold_blobs="$(sanitize_uint "$startup_oci_body_cold_blobs")"
+startup_oci_body_duration_ms="$(sanitize_uint "$startup_oci_body_duration_ms")"
+oci_new_blob_count="$(sanitize_uint "$oci_new_blob_count")"
+oci_new_blob_bytes="$(sanitize_uint "$oci_new_blob_bytes")"
+oci_upload_requested_blobs="$(sanitize_uint "$oci_upload_requested_blobs")"
+oci_upload_already_present="$(sanitize_uint "$oci_upload_already_present")"
+oci_upload_batch_seconds="$(sanitize_number "$oci_upload_batch_seconds")"
+reseed_new_blob_threshold="$(sanitize_uint "$reseed_new_blob_threshold")"
+reseed_new_blob_threshold="${reseed_new_blob_threshold:-0}"
 if [[ -n "$stale_seconds" ]] && ! [[ "$stale_seconds" =~ ^[0-9]+$ ]]; then
   stale_seconds=""
 fi
@@ -240,6 +369,28 @@ else
 fi
 
 cache_storage_mib=$(awk -v bytes="$cache_storage_bytes" 'BEGIN { printf "%.2f", bytes / 1048576 }')
+
+rolling_reseed="null"
+steady_state_candidate="null"
+reseed_reason=""
+if [[ "$lane" == "rolling" && "$strategy" == "boringcache" ]]; then
+  if [[ -n "$oci_new_blob_count" ]]; then
+    if (( oci_new_blob_count > reseed_new_blob_threshold )); then
+      rolling_reseed="true"
+      steady_state_candidate="false"
+      reseed_reason="${oci_new_blob_count} new OCI blobs exceeded threshold ${reseed_new_blob_threshold}"
+      if [[ -n "$oci_new_blob_bytes" ]]; then
+        reseed_reason+=" (${oci_new_blob_bytes} bytes)"
+      fi
+    else
+      rolling_reseed="false"
+      steady_state_candidate="true"
+      reseed_reason="new OCI blob count did not exceed threshold ${reseed_new_blob_threshold}"
+    fi
+  else
+    reseed_reason="OCI upload diagnostics unavailable"
+  fi
+fi
 
 lane_label() {
   case "$1" in
@@ -319,13 +470,37 @@ cat > "$json_path" <<JSON
     "import_seconds": $(json_num_or_null "$docker_cache_import_seconds"),
     "export_seconds": $(json_num_or_null "$docker_cache_export_seconds")
   },
+  "oci": {
+    "hydration_policy": $(json_string_or_null "$oci_hydration_policy"),
+    "body_local_hits": $(json_num_or_null "$oci_body_local_hits"),
+    "body_remote_fetches": $(json_num_or_null "$oci_body_remote_fetches"),
+    "body_local_bytes": $(json_num_or_null "$oci_body_local_bytes"),
+    "body_remote_bytes": $(json_num_or_null "$oci_body_remote_bytes"),
+    "body_local_duration_ms": $(json_num_or_null "$oci_body_local_duration_ms"),
+    "body_remote_duration_ms": $(json_num_or_null "$oci_body_remote_duration_ms"),
+    "startup_body_inserted": $(json_num_or_null "$startup_oci_body_inserted"),
+    "startup_body_failures": $(json_num_or_null "$startup_oci_body_failures"),
+    "startup_body_cold_blobs": $(json_num_or_null "$startup_oci_body_cold_blobs"),
+    "startup_body_duration_ms": $(json_num_or_null "$startup_oci_body_duration_ms"),
+    "new_blob_count": $(json_num_or_null "$oci_new_blob_count"),
+    "new_blob_bytes": $(json_num_or_null "$oci_new_blob_bytes"),
+    "upload_requested_blobs": $(json_num_or_null "$oci_upload_requested_blobs"),
+    "upload_already_present": $(json_num_or_null "$oci_upload_already_present"),
+    "upload_batch_seconds": $(json_num_or_null "$oci_upload_batch_seconds")
+  },
+  "classification": {
+    "rolling_reseed": $rolling_reseed,
+    "steady_state_candidate": $steady_state_candidate,
+    "reseed_new_blob_threshold": $reseed_new_blob_threshold,
+    "reseed_reason": $(json_string_or_null "$reseed_reason")
+  },
   "transfer": {
     "bytes_uploaded": $(json_num_or_null "$bytes_uploaded"),
     "bytes_downloaded": $(json_num_or_null "$bytes_downloaded")
   },
   "hit_behavior": {
     "two_consecutive_warm_runs_succeeded": $([[ -n "$warm1_seconds" && -n "$warm2_seconds" ]] && echo true || echo false),
-    "note": "$hit_behavior_note"
+    "note": $(json_string_or_null "$hit_behavior_note")
   }
 }
 JSON
@@ -379,6 +554,31 @@ JSON
   fi
   if [[ -n "$docker_cache_export_seconds" ]]; then
     echo "| Docker cache export | ${docker_cache_export_seconds}s |"
+  fi
+  if [[ -n "$oci_hydration_policy" ]]; then
+    echo "| OCI hydration | ${oci_hydration_policy} |"
+  fi
+  if [[ -n "$oci_body_remote_fetches" ]]; then
+    echo "| OCI remote body fetches | ${oci_body_remote_fetches} |"
+  fi
+  if [[ -n "$oci_body_remote_bytes" ]]; then
+    echo "| OCI remote body bytes | ${oci_body_remote_bytes} |"
+  fi
+  if [[ -n "$startup_oci_body_inserted" ]]; then
+    echo "| Startup OCI bodies inserted | ${startup_oci_body_inserted} |"
+  fi
+  if [[ -n "$startup_oci_body_cold_blobs" ]]; then
+    echo "| Startup OCI cold bodies | ${startup_oci_body_cold_blobs} |"
+  fi
+  if [[ -n "$oci_new_blob_count" ]]; then
+    echo "| New OCI blobs uploaded | ${oci_new_blob_count} |"
+  fi
+  if [[ -n "$oci_new_blob_bytes" ]]; then
+    echo "| New OCI blob bytes | ${oci_new_blob_bytes} |"
+  fi
+  if [[ "$rolling_reseed" != "null" ]]; then
+    echo "| Rolling classification | $([[ "$rolling_reseed" == "true" ]] && echo "reseed" || echo "steady-state candidate") |"
+    echo "| Rolling classification reason | ${reseed_reason} |"
   fi
 
   if [[ -n "$bytes_uploaded" ]]; then

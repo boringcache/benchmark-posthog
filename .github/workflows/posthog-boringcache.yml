@@ -63,6 +63,22 @@ jobs:
       cache_scope: ${{ steps.scope.outputs.cache_scope }}
       cold_seconds: ${{ steps.cold_baseline_build.outputs.seconds }}
       docker_cache_export_seconds: ${{ steps.cold_baseline_build.outputs.docker_cache_export_seconds }}
+      oci_hydration_policy: ${{ steps.cold_baseline_build.outputs.oci_hydration_policy }}
+      oci_body_local_hits: ${{ steps.cold_baseline_build.outputs.oci_body_local_hits }}
+      oci_body_remote_fetches: ${{ steps.cold_baseline_build.outputs.oci_body_remote_fetches }}
+      oci_body_local_bytes: ${{ steps.cold_baseline_build.outputs.oci_body_local_bytes }}
+      oci_body_remote_bytes: ${{ steps.cold_baseline_build.outputs.oci_body_remote_bytes }}
+      oci_body_local_duration_ms: ${{ steps.cold_baseline_build.outputs.oci_body_local_duration_ms }}
+      oci_body_remote_duration_ms: ${{ steps.cold_baseline_build.outputs.oci_body_remote_duration_ms }}
+      startup_oci_body_inserted: ${{ steps.cold_baseline_build.outputs.startup_oci_body_inserted }}
+      startup_oci_body_failures: ${{ steps.cold_baseline_build.outputs.startup_oci_body_failures }}
+      startup_oci_body_cold_blobs: ${{ steps.cold_baseline_build.outputs.startup_oci_body_cold_blobs }}
+      startup_oci_body_duration_ms: ${{ steps.cold_baseline_build.outputs.startup_oci_body_duration_ms }}
+      oci_new_blob_count: ${{ steps.cold_baseline_build.outputs.oci_new_blob_count }}
+      oci_new_blob_bytes: ${{ steps.cold_baseline_build.outputs.oci_new_blob_bytes }}
+      oci_upload_requested_blobs: ${{ steps.cold_baseline_build.outputs.oci_upload_requested_blobs }}
+      oci_upload_already_present: ${{ steps.cold_baseline_build.outputs.oci_upload_already_present }}
+      oci_upload_batch_seconds: ${{ steps.cold_baseline_build.outputs.oci_upload_batch_seconds }}
       tags_csv: ${{ steps.scope.outputs.tags_csv }}
     steps:
       - name: Free disk space
@@ -209,9 +225,10 @@ jobs:
           proxy_port="${BORINGCACHE_PROXY_PORT:-5000}"
           proxy_log="${BORINGCACHE_PROXY_LOG_PATH:-/tmp/boringcache-proxy-${proxy_port}.log}"
           build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
+          status_snapshot_path="$(mktemp /tmp/boringcache-status.XXXXXX.json)"
           max_attempts=3
           cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
-          cache_import_blob_pattern='failed to copy: httpReadSeeker: failed open: could not fetch content descriptor .* from remote: not found'
+          cache_import_blob_pattern='failed to copy: httpReadSeeker: failed open: could not fetch content descriptor .* from remote: (not found|500 Internal Server Error)|Blob storage returned error|OCI blob body download failed'
 
           mode="${1:-full}"
           start_proxy() { :; }
@@ -253,7 +270,72 @@ jobs:
             if [[ -n "$export_seconds" ]]; then
               echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
             fi
+
+            if [[ -s "$status_snapshot_path" ]] && command -v jq >/dev/null 2>&1; then
+              append_status_metric() {
+                local key="$1"
+                local jq_expr="$2"
+                local value=""
+                value="$(jq -r "$jq_expr // empty" "$status_snapshot_path" 2>/dev/null || true)"
+                if [[ -n "$value" && "$value" != "null" ]]; then
+                  echo "$key=$value" >> "$output_path"
+                fi
+              }
+
+              append_status_metric oci_hydration_policy '.startup_prefetch.startup_prefetch_oci_hydration'
+              append_status_metric startup_oci_body_inserted '.startup_prefetch.startup_prefetch_oci_body_inserted'
+              append_status_metric startup_oci_body_failures '.startup_prefetch.startup_prefetch_oci_body_failures'
+              append_status_metric startup_oci_body_cold_blobs '.startup_prefetch.startup_prefetch_oci_body_cold_blobs'
+              append_status_metric startup_oci_body_duration_ms '.startup_prefetch.startup_prefetch_oci_body_duration_ms'
+              append_status_metric oci_body_local_hits '.oci_body.oci_body_local_hits'
+              append_status_metric oci_body_remote_fetches '.oci_body.oci_body_remote_fetches'
+              append_status_metric oci_body_local_bytes '.oci_body.oci_body_local_bytes'
+              append_status_metric oci_body_remote_bytes '.oci_body.oci_body_remote_bytes'
+              append_status_metric oci_body_local_duration_ms '.oci_body.oci_body_local_duration_ms'
+              append_status_metric oci_body_remote_duration_ms '.oci_body.oci_body_remote_duration_ms'
+            fi
+
+            local observability_path="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}"
+            if [[ -n "$observability_path" && -s "$observability_path" ]] && command -v jq >/dev/null 2>&1; then
+              detail_value() {
+                local details="$1"
+                local name="$2"
+                printf '%s\n' "$details" | tr ' ' '\n' | awk -F= -v key="$name" '$1 == key { print $2; exit }'
+              }
+              append_metric() {
+                local key="$1"
+                local value="$2"
+                if [[ -n "$value" && "$value" != "null" ]]; then
+                  echo "$key=$value" >> "$output_path"
+                fi
+              }
+
+              local plan_details=""
+              plan_details="$(jq -r 'select(.operation == "oci_blob_upload_plan") | .details // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
+              if [[ -n "$plan_details" ]]; then
+                append_metric oci_upload_requested_blobs "$(detail_value "$plan_details" requested_blobs)"
+                append_metric oci_new_blob_count "$(detail_value "$plan_details" upload_urls)"
+                append_metric oci_upload_already_present "$(detail_value "$plan_details" already_present)"
+                append_metric oci_new_blob_bytes "$(detail_value "$plan_details" requested_bytes)"
+              fi
+
+              local batch_duration_ms=""
+              local batch_request_bytes=""
+              batch_duration_ms="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .duration_ms // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
+              batch_request_bytes="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .request_bytes // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
+              if [[ -n "$batch_duration_ms" ]]; then
+                awk -v ms="$batch_duration_ms" 'BEGIN { printf "oci_upload_batch_seconds=%.3f\n", ms / 1000 }' >> "$output_path"
+              fi
+              append_metric oci_new_blob_bytes "$batch_request_bytes"
+            fi
           }
+
+
+          capture_proxy_status() {
+            local output_path="${1:-$status_snapshot_path}"
+            curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$output_path" 2>/dev/null || true
+          }
+
           build_import_status() {
             if grep -Eq 'failed to configure .*cache importer' "$build_log"; then
               echo "not_found"
@@ -295,7 +377,12 @@ jobs:
               grep -E 'exporting cache to registry|DONE [0-9.]+s$' "$build_log" | tail -n 80 || true
               echo "EOF"
               echo "proxy_summary<<EOF"
-              grep -E 'Mode:|OCI Human Tags|Internal Registry Root Tag|Startup mode|Full-tag hydration|OCI HEAD|SESSION tool=oci|KV flush|root publish|error|warn' "$proxy_log" | tail -n 160 || true
+              grep -E 'Mode:|OCI Human Tags|Internal Registry Root Tag|Startup mode|Full-tag hydration|OCI body hydration|OCI HEAD|SESSION tool=oci|KV flush|root publish|error|warn' "$proxy_log" | tail -n 160 || true
+              echo "EOF"
+              echo "proxy_status<<EOF"
+              if [[ -s "$status_snapshot_path" ]]; then
+                cat "$status_snapshot_path"
+              fi
               echo "EOF"
               echo "slow_done_lines<<EOF"
               grep -E '^#[0-9]+ DONE [0-9]+(\.[0-9]+)?s$' "$build_log" | tail -n 80 || true
@@ -398,6 +485,7 @@ jobs:
                 fi
                 echo "Build succeeded but cache export still degraded after ${max_attempts} attempts; continuing run with best-effort cache state." >&2
               fi
+              capture_proxy_status
               # Stop proxy gracefully so it can flush pending uploads
               if [[ "$mode" =~ ^(seed-cache|full)$ ]]; then
                 echo "Flushing proxy cache to backend..."
@@ -415,7 +503,7 @@ jobs:
             stop_proxy
 
             if [[ "$cache_from_disabled" != "1" && "$mode" =~ ^(full|partial-warm)$ ]] && grep -Eq "$cache_import_blob_pattern" "$build_log"; then
-              echo "Detected registry cache manifest with a missing blob (attempt ${attempt}/${max_attempts}); retrying without --cache-from to reseed." >&2
+              echo "Detected registry cache manifest with an unreadable blob body (attempt ${attempt}/${max_attempts}); retrying without --cache-from to reseed." >&2
               cache_from_disabled=1
             fi
 
@@ -449,6 +537,7 @@ jobs:
           docker-command: setup
           docker-internal-cache: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && 'off' || 'on' }}
           docker-helper-path: boringcache-bin
+          oci-hydration: bodies-before-ready
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ steps.scope.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
@@ -635,9 +724,10 @@ jobs:
           proxy_port="${BORINGCACHE_PROXY_PORT:-5000}"
           proxy_log="${BORINGCACHE_PROXY_LOG_PATH:-/tmp/boringcache-proxy-${proxy_port}.log}"
           build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
+          status_snapshot_path="$(mktemp /tmp/boringcache-status.XXXXXX.json)"
           max_attempts=3
           cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
-          cache_import_blob_pattern='failed to copy: httpReadSeeker: failed open: could not fetch content descriptor .* from remote: not found'
+          cache_import_blob_pattern='failed to copy: httpReadSeeker: failed open: could not fetch content descriptor .* from remote: (not found|500 Internal Server Error)|Blob storage returned error|OCI blob body download failed'
 
           mode="${1:-full}"
           start_proxy() { :; }
@@ -679,6 +769,70 @@ jobs:
             if [[ -n "$export_seconds" ]]; then
               echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
             fi
+
+            if [[ -s "$status_snapshot_path" ]] && command -v jq >/dev/null 2>&1; then
+              append_status_metric() {
+                local key="$1"
+                local jq_expr="$2"
+                local value=""
+                value="$(jq -r "$jq_expr // empty" "$status_snapshot_path" 2>/dev/null || true)"
+                if [[ -n "$value" && "$value" != "null" ]]; then
+                  echo "$key=$value" >> "$output_path"
+                fi
+              }
+
+              append_status_metric oci_hydration_policy '.startup_prefetch.startup_prefetch_oci_hydration'
+              append_status_metric startup_oci_body_inserted '.startup_prefetch.startup_prefetch_oci_body_inserted'
+              append_status_metric startup_oci_body_failures '.startup_prefetch.startup_prefetch_oci_body_failures'
+              append_status_metric startup_oci_body_cold_blobs '.startup_prefetch.startup_prefetch_oci_body_cold_blobs'
+              append_status_metric startup_oci_body_duration_ms '.startup_prefetch.startup_prefetch_oci_body_duration_ms'
+              append_status_metric oci_body_local_hits '.oci_body.oci_body_local_hits'
+              append_status_metric oci_body_remote_fetches '.oci_body.oci_body_remote_fetches'
+              append_status_metric oci_body_local_bytes '.oci_body.oci_body_local_bytes'
+              append_status_metric oci_body_remote_bytes '.oci_body.oci_body_remote_bytes'
+              append_status_metric oci_body_local_duration_ms '.oci_body.oci_body_local_duration_ms'
+              append_status_metric oci_body_remote_duration_ms '.oci_body.oci_body_remote_duration_ms'
+            fi
+
+            local observability_path="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}"
+            if [[ -n "$observability_path" && -s "$observability_path" ]] && command -v jq >/dev/null 2>&1; then
+              detail_value() {
+                local details="$1"
+                local name="$2"
+                printf '%s\n' "$details" | tr ' ' '\n' | awk -F= -v key="$name" '$1 == key { print $2; exit }'
+              }
+              append_metric() {
+                local key="$1"
+                local value="$2"
+                if [[ -n "$value" && "$value" != "null" ]]; then
+                  echo "$key=$value" >> "$output_path"
+                fi
+              }
+
+              local plan_details=""
+              plan_details="$(jq -r 'select(.operation == "oci_blob_upload_plan") | .details // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
+              if [[ -n "$plan_details" ]]; then
+                append_metric oci_upload_requested_blobs "$(detail_value "$plan_details" requested_blobs)"
+                append_metric oci_new_blob_count "$(detail_value "$plan_details" upload_urls)"
+                append_metric oci_upload_already_present "$(detail_value "$plan_details" already_present)"
+                append_metric oci_new_blob_bytes "$(detail_value "$plan_details" requested_bytes)"
+              fi
+
+              local batch_duration_ms=""
+              local batch_request_bytes=""
+              batch_duration_ms="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .duration_ms // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
+              batch_request_bytes="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .request_bytes // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
+              if [[ -n "$batch_duration_ms" ]]; then
+                awk -v ms="$batch_duration_ms" 'BEGIN { printf "oci_upload_batch_seconds=%.3f\n", ms / 1000 }' >> "$output_path"
+              fi
+              append_metric oci_new_blob_bytes "$batch_request_bytes"
+            fi
+          }
+
+
+          capture_proxy_status() {
+            local output_path="${1:-$status_snapshot_path}"
+            curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$output_path" 2>/dev/null || true
           }
 
           cache_from_disabled=0
@@ -766,6 +920,7 @@ jobs:
                 fi
                 echo "Build succeeded but cache export still degraded after ${max_attempts} attempts; continuing run with best-effort cache state." >&2
               fi
+              capture_proxy_status
               # Stop proxy gracefully so it can flush pending uploads
               if [[ "$mode" =~ ^(seed-cache|full)$ ]]; then
                 echo "Flushing proxy cache to backend..."
@@ -782,7 +937,7 @@ jobs:
             stop_proxy
 
             if [[ "$cache_from_disabled" != "1" && "$mode" =~ ^(full|partial-warm)$ ]] && grep -Eq "$cache_import_blob_pattern" "$build_log"; then
-              echo "Detected registry cache manifest with a missing blob (attempt ${attempt}/${max_attempts}); retrying without --cache-from to reseed." >&2
+              echo "Detected registry cache manifest with an unreadable blob body (attempt ${attempt}/${max_attempts}); retrying without --cache-from to reseed." >&2
               cache_from_disabled=1
             fi
 
@@ -815,6 +970,7 @@ jobs:
           docker-command: setup
           docker-internal-cache: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && 'off' || 'on' }}
           docker-helper-path: boringcache-bin
+          oci-hydration: bodies-before-ready
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ needs.seed-cache.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
@@ -985,11 +1141,26 @@ jobs:
           seconds=""
           build_seconds=""
           docker_cache_import_seconds=""
+          metric_names=(oci_hydration_policy oci_body_local_hits oci_body_remote_fetches oci_body_local_bytes oci_body_remote_bytes oci_body_local_duration_ms oci_body_remote_duration_ms startup_oci_body_inserted startup_oci_body_failures startup_oci_body_cold_blobs startup_oci_body_duration_ms)
+          for metric_name in "${metric_names[@]}"; do
+            printf -v "$metric_name" '%s' ''
+          done
           case "${{ matrix.phase }}" in
             warm1)
               seconds="${{ steps.warm1_build.outputs.seconds }}"
               build_seconds="${{ steps.warm1_build.outputs.build_seconds }}"
               docker_cache_import_seconds="${{ steps.warm1_build.outputs.docker_cache_import_seconds }}"
+              oci_hydration_policy="${{ steps.warm1_build.outputs.oci_hydration_policy }}"
+              oci_body_local_hits="${{ steps.warm1_build.outputs.oci_body_local_hits }}"
+              oci_body_remote_fetches="${{ steps.warm1_build.outputs.oci_body_remote_fetches }}"
+              oci_body_local_bytes="${{ steps.warm1_build.outputs.oci_body_local_bytes }}"
+              oci_body_remote_bytes="${{ steps.warm1_build.outputs.oci_body_remote_bytes }}"
+              oci_body_local_duration_ms="${{ steps.warm1_build.outputs.oci_body_local_duration_ms }}"
+              oci_body_remote_duration_ms="${{ steps.warm1_build.outputs.oci_body_remote_duration_ms }}"
+              startup_oci_body_inserted="${{ steps.warm1_build.outputs.startup_oci_body_inserted }}"
+              startup_oci_body_failures="${{ steps.warm1_build.outputs.startup_oci_body_failures }}"
+              startup_oci_body_cold_blobs="${{ steps.warm1_build.outputs.startup_oci_body_cold_blobs }}"
+              startup_oci_body_duration_ms="${{ steps.warm1_build.outputs.startup_oci_body_duration_ms }}"
               ;;
             warm2)
               seconds="${{ steps.warm2_build.outputs.seconds }}"
@@ -1021,6 +1192,12 @@ jobs:
           if [[ -n "${docker_cache_import_seconds}" ]]; then
             echo "docker_cache_import_seconds=${docker_cache_import_seconds}" >> "$GITHUB_OUTPUT"
           fi
+          for metric_name in "${metric_names[@]}"; do
+            metric_value="${!metric_name}"
+            if [[ -n "$metric_value" ]]; then
+              echo "${metric_name}=${metric_value}" >> "$GITHUB_OUTPUT"
+            fi
+          done
       - name: Persist scenario timing artifact
         run: |
           set -euo pipefail
@@ -1030,6 +1207,17 @@ jobs:
           seconds=${{ steps.phase_timing.outputs.seconds }}
           build_seconds=${{ steps.phase_timing.outputs.build_seconds }}
           docker_cache_import_seconds=${{ steps.phase_timing.outputs.docker_cache_import_seconds }}
+          oci_hydration_policy=${{ steps.phase_timing.outputs.oci_hydration_policy }}
+          oci_body_local_hits=${{ steps.phase_timing.outputs.oci_body_local_hits }}
+          oci_body_remote_fetches=${{ steps.phase_timing.outputs.oci_body_remote_fetches }}
+          oci_body_local_bytes=${{ steps.phase_timing.outputs.oci_body_local_bytes }}
+          oci_body_remote_bytes=${{ steps.phase_timing.outputs.oci_body_remote_bytes }}
+          oci_body_local_duration_ms=${{ steps.phase_timing.outputs.oci_body_local_duration_ms }}
+          oci_body_remote_duration_ms=${{ steps.phase_timing.outputs.oci_body_remote_duration_ms }}
+          startup_oci_body_inserted=${{ steps.phase_timing.outputs.startup_oci_body_inserted }}
+          startup_oci_body_failures=${{ steps.phase_timing.outputs.startup_oci_body_failures }}
+          startup_oci_body_cold_blobs=${{ steps.phase_timing.outputs.startup_oci_body_cold_blobs }}
+          startup_oci_body_duration_ms=${{ steps.phase_timing.outputs.startup_oci_body_duration_ms }}
           EOF
       - name: Upload scenario timing artifact
         uses: actions/upload-artifact@v6
@@ -1094,6 +1282,13 @@ jobs:
             if [[ -n "${docker_cache_import_seconds}" ]]; then
               echo "${key}_docker_cache_import_seconds=${docker_cache_import_seconds}" >> "$GITHUB_OUTPUT"
             fi
+            metric_names=(oci_hydration_policy oci_body_local_hits oci_body_remote_fetches oci_body_local_bytes oci_body_remote_bytes oci_body_local_duration_ms oci_body_remote_duration_ms startup_oci_body_inserted startup_oci_body_failures startup_oci_body_cold_blobs startup_oci_body_duration_ms)
+            for metric_name in "${metric_names[@]}"; do
+              metric_value="$(grep "^${metric_name}=" "$file" | head -n1 | cut -d= -f2- || true)"
+              if [[ -n "${metric_value}" ]]; then
+                echo "${key}_${metric_name}=${metric_value}" >> "$GITHUB_OUTPUT"
+              fi
+            done
           }
           parse_phase warm1
           parse_phase layer_miss
@@ -1127,6 +1322,23 @@ jobs:
             --cache-storage-bytes "${{ steps.cache_size.outputs.bytes }}" \
             --cache-storage-source "boringcache-check" \
             --bytes-uploaded "${{ steps.cache_size.outputs.bytes }}" \
+            --oci-hydration-policy "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.oci_hydration_policy || steps.timings.outputs.warm1_oci_hydration_policy }}" \
+            --oci-body-local-hits "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.oci_body_local_hits || steps.timings.outputs.warm1_oci_body_local_hits }}" \
+            --oci-body-remote-fetches "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.oci_body_remote_fetches || steps.timings.outputs.warm1_oci_body_remote_fetches }}" \
+            --oci-body-local-bytes "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.oci_body_local_bytes || steps.timings.outputs.warm1_oci_body_local_bytes }}" \
+            --oci-body-remote-bytes "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.oci_body_remote_bytes || steps.timings.outputs.warm1_oci_body_remote_bytes }}" \
+            --oci-body-local-duration-ms "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.oci_body_local_duration_ms || steps.timings.outputs.warm1_oci_body_local_duration_ms }}" \
+            --oci-body-remote-duration-ms "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.oci_body_remote_duration_ms || steps.timings.outputs.warm1_oci_body_remote_duration_ms }}" \
+            --startup-oci-body-inserted "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.startup_oci_body_inserted || steps.timings.outputs.warm1_startup_oci_body_inserted }}" \
+            --startup-oci-body-failures "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.startup_oci_body_failures || steps.timings.outputs.warm1_startup_oci_body_failures }}" \
+            --startup-oci-body-cold-blobs "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.startup_oci_body_cold_blobs || steps.timings.outputs.warm1_startup_oci_body_cold_blobs }}" \
+            --startup-oci-body-duration-ms "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.startup_oci_body_duration_ms || steps.timings.outputs.warm1_startup_oci_body_duration_ms }}" \
+            --oci-new-blob-count "${{ needs.seed-cache.outputs.oci_new_blob_count }}" \
+            --oci-new-blob-bytes "${{ needs.seed-cache.outputs.oci_new_blob_bytes }}" \
+            --oci-upload-requested-blobs "${{ needs.seed-cache.outputs.oci_upload_requested_blobs }}" \
+            --oci-upload-already-present "${{ needs.seed-cache.outputs.oci_upload_already_present }}" \
+            --oci-upload-batch-seconds "${{ needs.seed-cache.outputs.oci_upload_batch_seconds }}" \
+            --reseed-new-blob-threshold "0" \
             --hit-behavior-note "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Rolling lane: this run executes only the upstream-sync seed build; warm1 and layer-miss follow-up runs are intentionally skipped.' || 'Fresh lane: cold+seed starts from empty BC tags and empty Docker layer cache, uses --no-cache + cache-to via the BC registry proxy (mode=max), and records cold timing while priming the shared cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only, internal restore enabled, and no synthetic mutations.' }}"
 
       - name: Upload benchmark artifacts

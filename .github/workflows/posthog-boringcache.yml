@@ -141,18 +141,6 @@ jobs:
       - name: Prepare benchmark build inputs
         id: scope
         run: |
-          if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && '1' || '0' }}" == "1" ]]; then
-            # Keep cli_ref debug runs out of Docker RUN cache keys. The built CLI
-            # still drives the outer registry proxy; Dockerfile-internal calls are disabled.
-            cat > ./boringcache-bin <<'SH'
-          #!/usr/bin/env sh
-          exit 0
-          SH
-          else
-            cp "$(command -v boringcache)" ./boringcache-bin
-          fi
-          chmod +x ./boringcache-bin
-
           ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
           ref_slug="${ref_slug#-}"
           ref_slug="${ref_slug%-}"
@@ -307,14 +295,9 @@ jobs:
           attempt=1
           while true; do
             cache_args=()
-            internal_restore_enabled="1"
-            internal_save_enabled="1"
+            internal_restore_enabled="${BORINGCACHE_INTERNAL_RESTORE_ENABLED:-1}"
+            internal_save_enabled="${BORINGCACHE_INTERNAL_SAVE_ENABLED:-1}"
             turbo_proxy_enabled="${BORINGCACHE_TURBO_PROXY_ENABLED:-1}"
-            if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && '1' || '0' }}" == "1" ]]; then
-              internal_restore_enabled="0"
-              internal_save_enabled="0"
-              turbo_proxy_enabled="0"
-            fi
             if [[ "$mode" == "full" ]]; then
               [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
@@ -434,6 +417,8 @@ jobs:
           setup: none
           mode: docker
           docker-command: setup
+          docker-internal-cache: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && 'off' || 'on' }}
+          docker-helper-path: boringcache-bin
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ steps.scope.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
@@ -445,6 +430,11 @@ jobs:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
           BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/posthog-boringcache-seed-observability.jsonl
+
+      - name: Export Docker internal cache controls
+        run: |
+          echo "BORINGCACHE_INTERNAL_RESTORE_ENABLED=${{ steps.docker_cache.outputs.docker-internal-restore-enabled }}" >> "$GITHUB_ENV"
+          echo "BORINGCACHE_INTERNAL_SAVE_ENABLED=${{ steps.docker_cache.outputs.docker-internal-save-enabled }}" >> "$GITHUB_ENV"
 
       - name: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Run rolling seed-only build' || 'Run fresh seed build' }}
         id: cold_baseline_build
@@ -565,18 +555,6 @@ jobs:
       - name: Prepare benchmark build inputs
         id: scope
         run: |
-          if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && '1' || '0' }}" == "1" ]]; then
-            # Keep cli_ref debug runs out of Docker RUN cache keys. The built CLI
-            # still drives the outer registry proxy; Dockerfile-internal calls are disabled.
-            cat > ./boringcache-bin <<'SH'
-          #!/usr/bin/env sh
-          exit 0
-          SH
-          else
-            cp "$(command -v boringcache)" ./boringcache-bin
-          fi
-          chmod +x ./boringcache-bin
-
           ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
           ref_slug="${ref_slug#-}"
           ref_slug="${ref_slug%-}"
@@ -675,14 +653,9 @@ jobs:
           attempt=1
           while true; do
             cache_args=()
-            internal_restore_enabled="1"
-            internal_save_enabled="1"
+            internal_restore_enabled="${BORINGCACHE_INTERNAL_RESTORE_ENABLED:-1}"
+            internal_save_enabled="${BORINGCACHE_INTERNAL_SAVE_ENABLED:-1}"
             turbo_proxy_enabled="${BORINGCACHE_TURBO_PROXY_ENABLED:-1}"
-            if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && '1' || '0' }}" == "1" ]]; then
-              internal_restore_enabled="0"
-              internal_save_enabled="0"
-              turbo_proxy_enabled="0"
-            fi
             if [[ "$mode" == "full" ]]; then
               [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
@@ -799,6 +772,8 @@ jobs:
           setup: none
           mode: docker
           docker-command: setup
+          docker-internal-cache: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && 'off' || 'on' }}
+          docker-helper-path: boringcache-bin
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ needs.seed-cache.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
@@ -809,6 +784,11 @@ jobs:
           verbose: true
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+
+      - name: Export Docker internal cache controls
+        run: |
+          echo "BORINGCACHE_INTERNAL_RESTORE_ENABLED=${{ steps.docker_cache.outputs.docker-internal-restore-enabled }}" >> "$GITHUB_ENV"
+          echo "BORINGCACHE_INTERNAL_SAVE_ENABLED=${{ steps.docker_cache.outputs.docker-internal-save-enabled }}" >> "$GITHUB_ENV"
 
       - name: Prune builder cache for isolated scenario
         run: docker buildx prune -f --builder "${{ steps.docker_cache.outputs.buildx-name }}"

@@ -17,13 +17,29 @@ jobs:
   dispatch:
     name: Dispatch rolling benchmark pair
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Dispatch AC rolling lane
+      - name: Dispatch rolling benchmark pair
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run "posthog-actions-cache.yml" --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}" -f cache_lane=rolling
+        run: |
+          set -euo pipefail
 
-      - name: Dispatch BC rolling lane
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run "posthog-boringcache.yml" --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}" -f cache_lane=rolling
+          dispatch_workflow() {
+            local workflow="$1"
+            local attempt=1
+            local max_attempts=3
+
+            until gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}" -f cache_lane=rolling; do
+              if [[ "$attempt" -ge "$max_attempts" ]]; then
+                echo "Failed to dispatch ${workflow} after ${attempt} attempts" >&2
+                return 1
+              fi
+              echo "Dispatch failed for ${workflow}; retrying (${attempt}/${max_attempts})" >&2
+              attempt=$((attempt + 1))
+              sleep 5
+            done
+          }
+
+          dispatch_workflow "posthog-actions-cache.yml"
+          dispatch_workflow "posthog-boringcache.yml"

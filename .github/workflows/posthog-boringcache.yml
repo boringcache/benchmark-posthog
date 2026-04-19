@@ -211,6 +211,7 @@ jobs:
           build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
           max_attempts=3
           cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
+          cache_import_blob_pattern='failed to copy: httpReadSeeker: failed open: could not fetch content descriptor .* from remote: not found'
 
           mode="${1:-full}"
           start_proxy() { :; }
@@ -278,6 +279,7 @@ jobs:
               echo "builder=${BUILDER:-}"
               echo "cache_scope=${CACHE_SCOPE:-}"
               echo "cache_from=${CACHE_FROM:-}"
+              echo "cache_from_disabled=${cache_from_disabled:-0}"
               echo "cache_to=${CACHE_TO:-}"
               echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
               echo "docker_registry_tag=${BORINGCACHE_DOCKER_REGISTRY_TAG:-}"
@@ -310,6 +312,11 @@ jobs:
             } > "$output_path"
           }
 
+          cache_from_disabled=0
+          cache_from_is_enabled() {
+            [[ "$cache_from_disabled" != "1" && -n "${CACHE_FROM:-}" ]]
+          }
+
           attempt=1
           while true; do
             cache_args=()
@@ -317,7 +324,7 @@ jobs:
             internal_save_enabled="${BORINGCACHE_INTERNAL_SAVE_ENABLED:-1}"
             turbo_proxy_enabled="${BORINGCACHE_TURBO_PROXY_ENABLED:-1}"
             if [[ "$mode" == "full" ]]; then
-              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
+              cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
             elif [[ "$mode" == "seed-cache" ]]; then
               # --no-cache is required for type=registry export: without it, buildx
@@ -328,7 +335,7 @@ jobs:
             elif [[ "$mode" == "partial-warm" ]]; then
               # Read-only: no --cache-to. Internal saves are gated by an empty
               # save-token secret so the Dockerfile instruction keys stay stable.
-              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
+              cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
             elif [[ "$mode" == "internal-only" ]]; then
               # Disable Docker layer cache for a full stale rebuild.
               cache_args=(--no-cache)
@@ -406,6 +413,11 @@ jobs:
             fi
 
             stop_proxy
+
+            if [[ "$cache_from_disabled" != "1" && "$mode" =~ ^(full|partial-warm)$ ]] && grep -Eq "$cache_import_blob_pattern" "$build_log"; then
+              echo "Detected registry cache manifest with a missing blob (attempt ${attempt}/${max_attempts}); retrying without --cache-from to reseed." >&2
+              cache_from_disabled=1
+            fi
 
             if [[ "$attempt" -ge "$max_attempts" ]]; then
               echo "Build (${mode}) failed after ${max_attempts} attempts" >&2
@@ -625,6 +637,7 @@ jobs:
           build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
           max_attempts=3
           cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
+          cache_import_blob_pattern='failed to copy: httpReadSeeker: failed open: could not fetch content descriptor .* from remote: not found'
 
           mode="${1:-full}"
           start_proxy() { :; }
@@ -668,6 +681,11 @@ jobs:
             fi
           }
 
+          cache_from_disabled=0
+          cache_from_is_enabled() {
+            [[ "$cache_from_disabled" != "1" && -n "${CACHE_FROM:-}" ]]
+          }
+
           attempt=1
           while true; do
             cache_args=()
@@ -675,7 +693,7 @@ jobs:
             internal_save_enabled="${BORINGCACHE_INTERNAL_SAVE_ENABLED:-1}"
             turbo_proxy_enabled="${BORINGCACHE_TURBO_PROXY_ENABLED:-1}"
             if [[ "$mode" == "full" ]]; then
-              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
+              cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
             elif [[ "$mode" == "seed-cache" ]]; then
               # --no-cache is required for type=registry export: without it, buildx
@@ -686,7 +704,7 @@ jobs:
             elif [[ "$mode" == "partial-warm" ]]; then
               # Read-only: no --cache-to. Internal saves are gated by an empty
               # save-token secret so the Dockerfile instruction keys stay stable.
-              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
+              cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
             elif [[ "$mode" == "internal-only" ]]; then
               # Disable Docker layer cache for a full stale rebuild.
               cache_args=(--no-cache)
@@ -762,6 +780,11 @@ jobs:
             fi
 
             stop_proxy
+
+            if [[ "$cache_from_disabled" != "1" && "$mode" =~ ^(full|partial-warm)$ ]] && grep -Eq "$cache_import_blob_pattern" "$build_log"; then
+              echo "Detected registry cache manifest with a missing blob (attempt ${attempt}/${max_attempts}); retrying without --cache-from to reseed." >&2
+              cache_from_disabled=1
+            fi
 
             if [[ "$attempt" -ge "$max_attempts" ]]; then
               echo "Build (${mode}) failed after ${max_attempts} attempts" >&2

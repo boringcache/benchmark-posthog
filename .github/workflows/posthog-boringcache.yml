@@ -14,7 +14,7 @@ on:
           - fresh
           - rolling
       cli_ref:
-        description: "Optional boringcache/cli ref to build and use instead of the released CLI"
+        description: "Internal BoringCache diagnostic: CLI ref for registry-proxy debugging"
         required: false
         type: string
       turbo_backend:
@@ -114,6 +114,24 @@ jobs:
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cli-platform: linux-amd64
           cache-runtime: false
+
+      - name: Validate internal CLI ref diagnostic
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' }}
+        env:
+          CLI_REF: ${{ inputs.cli_ref }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          if [[ "${REPOSITORY_OWNER}" != "boringcache" ]]; then
+            echo "cli_ref is an internal BoringCache benchmark diagnostic and is disabled outside boringcache-owned benchmark repos." >&2
+            exit 1
+          fi
+          {
+            echo "### Internal CLI ref diagnostic"
+            echo
+            echo "Using boringcache/cli ref \`${CLI_REF}\` for the outer registry proxy only."
+            echo "Dockerfile-internal BoringCache calls stay disabled and boringcache/one writes the stable no-op helper."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout BoringCache CLI ref
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' }}

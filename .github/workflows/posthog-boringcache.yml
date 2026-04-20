@@ -25,7 +25,6 @@ on:
       - "upstream"
   pull_request:
     paths:
-      - ".dockerignore"
       - ".gitmodules"
       - ".github/workflows/posthog-boringcache.yml"
       - ".github/workflows/posthog-actions-cache.yml"
@@ -1178,7 +1177,7 @@ jobs:
             --oci-upload-already-present "${{ needs.seed-cache.outputs.oci_upload_already_present }}" \
             --oci-upload-batch-seconds "${{ needs.seed-cache.outputs.oci_upload_batch_seconds }}" \
             --reseed-new-blob-threshold "0" \
-            --hit-behavior-note "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Rolling lane: this run executes only the upstream-sync seed build; warm1 and layer-miss follow-up runs are intentionally skipped.' || 'Fresh lane: cold+seed starts from empty BC tags and empty Docker layer cache, uses --no-cache + cache-to via the BC registry proxy (mode=max), and records cold timing while priming the shared cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only, internal restore enabled, and no synthetic mutations.' }}"
+            --hit-behavior-note "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Rolling lane: this run executes only the upstream-sync seed build; warm1 and layer-miss follow-up runs are intentionally skipped.' || 'Fresh lane: cold+seed starts from empty BC tags and empty Docker layer cache, uses --no-cache + cache-to via the BC registry proxy (mode=max), and records cold timing while priming the shared cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only, no helper mounted inside Docker RUN steps, and no synthetic mutations.' }}"
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v6

@@ -21,7 +21,6 @@ on:
       - "upstream"
   pull_request:
     paths:
-      - ".dockerignore"
       - ".gitmodules"
       - ".github/workflows/posthog-boringcache.yml"
       - ".github/workflows/posthog-actions-cache.yml"

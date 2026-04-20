@@ -17,15 +17,6 @@ on:
         description: "Internal BoringCache diagnostic: CLI ref for registry-proxy debugging"
         required: false
         type: string
-      turbo_backend:
-        description: "How BoringCache integrates with Turbo in benchmark builds"
-        required: false
-        default: proxy
-        type: choice
-        options:
-          - proxy
-          - archive
-          - off
   push:
     branches:
       - main
@@ -36,7 +27,6 @@ on:
     paths:
       - ".dockerignore"
       - ".gitmodules"
-      - "Dockerfile.benchmark"
       - ".github/workflows/posthog-boringcache.yml"
       - ".github/workflows/posthog-actions-cache.yml"
       - "README.md"
@@ -52,7 +42,6 @@ env:
   PROJECT_REPO: PostHog/posthog
   BENCHMARK_ID: posthog
   BENCHMARK_WORKSPACE: boringcache/benchmarks
-  TURBO_BACKEND: ${{ github.event.inputs.turbo_backend || 'proxy' }}
 
 jobs:
   seed-cache:
@@ -146,7 +135,7 @@ jobs:
             echo "### Internal CLI ref diagnostic"
             echo
             echo "Using boringcache/cli ref \`${CLI_REF}\` for the outer registry proxy only."
-            echo "Dockerfile-internal BoringCache calls stay disabled and boringcache/one writes the stable no-op helper."
+            echo "The unmodified upstream Dockerfile is built through the outer registry proxy."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout BoringCache CLI ref
@@ -186,37 +175,11 @@ jobs:
           fi
           cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
           docker_registry_tag="${BENCHMARK_ID}-docker-layers-${run_suffix}"
-          frontend_pnpm_tag="posthog-pnpm-frontend-${run_suffix}"
-          plugin_pnpm_tag="posthog-pnpm-plugin-${run_suffix}"
-          case "${TURBO_BACKEND}" in
-            archive)
-              turbo_tag="posthog-turbo-archive-${run_suffix}"
-              turbo_plugin_tag="posthog-turbo-plugin-archive-${run_suffix}"
-              ;;
-            proxy|off)
-              turbo_tag="posthog-turbo-${run_suffix}"
-              turbo_plugin_tag="posthog-turbo-plugin-${run_suffix}"
-              ;;
-            *)
-              echo "Unknown TURBO_BACKEND: ${TURBO_BACKEND}" >&2
-              exit 1
-              ;;
-          esac
-          python_tag="posthog-python-${run_suffix}"
-          staticfiles_tag="posthog-staticfiles-${run_suffix}"
-          playwright_tag="posthog-playwright-${run_suffix}"
-          tags_csv="${frontend_pnpm_tag},${plugin_pnpm_tag},${turbo_tag},${turbo_plugin_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
+          tags_csv="${cache_scope},${docker_registry_tag}"
           registry_proxy_tags="${cache_scope},${docker_registry_tag}"
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "docker_registry_tag=${docker_registry_tag}" >> "$GITHUB_OUTPUT"
           echo "registry_proxy_tags=${registry_proxy_tags}" >> "$GITHUB_OUTPUT"
-          echo "frontend_pnpm_tag=${frontend_pnpm_tag}" >> "$GITHUB_OUTPUT"
-          echo "plugin_pnpm_tag=${plugin_pnpm_tag}" >> "$GITHUB_OUTPUT"
-          echo "turbo_tag=${turbo_tag}" >> "$GITHUB_OUTPUT"
-          echo "turbo_plugin_tag=${turbo_plugin_tag}" >> "$GITHUB_OUTPUT"
-          echo "python_tag=${python_tag}" >> "$GITHUB_OUTPUT"
-          echo "staticfiles_tag=${staticfiles_tag}" >> "$GITHUB_OUTPUT"
-          echo "playwright_tag=${playwright_tag}" >> "$GITHUB_OUTPUT"
           echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
           cat > ./run-boringcache-build.sh <<'SH'
           #!/usr/bin/env bash
@@ -407,9 +370,6 @@ jobs:
           attempt=1
           while true; do
             cache_args=()
-            internal_restore_enabled="${BORINGCACHE_INTERNAL_RESTORE_ENABLED:-1}"
-            internal_save_enabled="${BORINGCACHE_INTERNAL_SAVE_ENABLED:-1}"
-            turbo_proxy_enabled="${BORINGCACHE_TURBO_PROXY_ENABLED:-1}"
             if [[ "$mode" == "full" ]]; then
               cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
@@ -420,15 +380,11 @@ jobs:
               cache_args=(--no-cache)
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
             elif [[ "$mode" == "partial-warm" ]]; then
-              # Read-only: no --cache-to. Internal saves are gated by an empty
-              # save-token secret so the Dockerfile instruction keys stay stable.
+              # Read-only: no --cache-to.
               cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
-            elif [[ "$mode" == "internal-only" ]]; then
+            elif [[ "$mode" == "layer-miss" ]]; then
               # Disable Docker layer cache for a full stale rebuild.
               cache_args=(--no-cache)
-            elif [[ "$mode" == "internal-target" ]]; then
-              # Isolate internal dependency/output cache impact without final-image OS package work.
-              cache_args=(--no-cache --target posthog-build)
             else
               echo "Unknown build mode: $mode" >&2
               exit 1
@@ -451,26 +407,11 @@ jobs:
             set +e
             DOCKER_BUILDKIT=1 docker buildx build \
               --builder "$BUILDER" \
-              --file Dockerfile.benchmark \
+              --file upstream/Dockerfile \
               --tag "$IMAGE_TAG" \
               --progress=plain \
               "${cache_args[@]}" \
-              --secret id=boringcache_token,env=BORINGCACHE_RESTORE_TOKEN \
-              --secret id=boringcache_save_token,env=BORINGCACHE_SAVE_TOKEN \
-              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
-              --build-arg BORINGCACHE_TAG_PNPM_FRONTEND="$BORINGCACHE_TAG_PNPM_FRONTEND" \
-              --build-arg BORINGCACHE_TAG_PNPM_PLUGIN="$BORINGCACHE_TAG_PNPM_PLUGIN" \
-              --build-arg BORINGCACHE_TAG_TURBO="$BORINGCACHE_TAG_TURBO" \
-              --build-arg BORINGCACHE_TAG_TURBO_PLUGIN="$BORINGCACHE_TAG_TURBO_PLUGIN" \
-              --build-arg BORINGCACHE_TAG_PYTHON="$BORINGCACHE_TAG_PYTHON" \
-              --build-arg BORINGCACHE_TAG_STATICFILES="$BORINGCACHE_TAG_STATICFILES" \
-              --build-arg BORINGCACHE_TAG_PLAYWRIGHT="$BORINGCACHE_TAG_PLAYWRIGHT" \
-              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="$internal_restore_enabled" \
-              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="$internal_save_enabled" \
-              --build-arg BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS="1" \
-              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="$turbo_proxy_enabled" \
-              --build-arg BORINGCACHE_TURBO_BACKEND="${TURBO_BACKEND}" \
-              . 2>&1 | tee "$build_log"
+              upstream 2>&1 | tee "$build_log"
             status=${PIPESTATUS[0]}
             set -e
 
@@ -535,8 +476,7 @@ jobs:
           setup: none
           mode: docker
           docker-command: setup
-          docker-internal-cache: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && 'off' || 'on' }}
-          docker-helper-path: boringcache-bin
+          docker-internal-cache: off
           oci-hydration: bodies-before-ready
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ steps.scope.outputs.cache_scope }}
@@ -549,11 +489,6 @@ jobs:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
           BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/posthog-boringcache-seed-observability.jsonl
-
-      - name: Export Docker internal cache controls
-        run: |
-          echo "BORINGCACHE_INTERNAL_RESTORE_ENABLED=${{ steps.docker_cache.outputs.docker-internal-restore-enabled }}" >> "$GITHUB_ENV"
-          echo "BORINGCACHE_INTERNAL_SAVE_ENABLED=${{ steps.docker_cache.outputs.docker-internal-save-enabled }}" >> "$GITHUB_ENV"
 
       - name: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Run rolling seed-only build' || 'Run fresh seed build' }}
         id: cold_baseline_build
@@ -569,13 +504,6 @@ jobs:
           CACHE_LANE: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
           BORINGCACHE_REGISTRY_PROXY_TAGS: ${{ steps.scope.outputs.registry_proxy_tags }}
           BORINGCACHE_DOCKER_REGISTRY_TAG: ${{ steps.scope.outputs.docker_registry_tag }}
-          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
-          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
-          BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
-          BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
-          BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
-          BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
           BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/posthog-boringcache-seed-observability.jsonl
           IMAGE_TAG: posthog-benchmark:latest
         run: |
@@ -685,37 +613,11 @@ jobs:
           fi
           cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
           docker_registry_tag="${BENCHMARK_ID}-docker-layers-${run_suffix}"
-          frontend_pnpm_tag="posthog-pnpm-frontend-${run_suffix}"
-          plugin_pnpm_tag="posthog-pnpm-plugin-${run_suffix}"
-          case "${TURBO_BACKEND}" in
-            archive)
-              turbo_tag="posthog-turbo-archive-${run_suffix}"
-              turbo_plugin_tag="posthog-turbo-plugin-archive-${run_suffix}"
-              ;;
-            proxy|off)
-              turbo_tag="posthog-turbo-${run_suffix}"
-              turbo_plugin_tag="posthog-turbo-plugin-${run_suffix}"
-              ;;
-            *)
-              echo "Unknown TURBO_BACKEND: ${TURBO_BACKEND}" >&2
-              exit 1
-              ;;
-          esac
-          python_tag="posthog-python-${run_suffix}"
-          staticfiles_tag="posthog-staticfiles-${run_suffix}"
-          playwright_tag="posthog-playwright-${run_suffix}"
-          tags_csv="${frontend_pnpm_tag},${plugin_pnpm_tag},${turbo_tag},${turbo_plugin_tag},${python_tag},${staticfiles_tag},${playwright_tag},${cache_scope},${docker_registry_tag}"
+          tags_csv="${cache_scope},${docker_registry_tag}"
           registry_proxy_tags="${cache_scope},${docker_registry_tag}"
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "docker_registry_tag=${docker_registry_tag}" >> "$GITHUB_OUTPUT"
           echo "registry_proxy_tags=${registry_proxy_tags}" >> "$GITHUB_OUTPUT"
-          echo "frontend_pnpm_tag=${frontend_pnpm_tag}" >> "$GITHUB_OUTPUT"
-          echo "plugin_pnpm_tag=${plugin_pnpm_tag}" >> "$GITHUB_OUTPUT"
-          echo "turbo_tag=${turbo_tag}" >> "$GITHUB_OUTPUT"
-          echo "turbo_plugin_tag=${turbo_plugin_tag}" >> "$GITHUB_OUTPUT"
-          echo "python_tag=${python_tag}" >> "$GITHUB_OUTPUT"
-          echo "staticfiles_tag=${staticfiles_tag}" >> "$GITHUB_OUTPUT"
-          echo "playwright_tag=${playwright_tag}" >> "$GITHUB_OUTPUT"
           echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
           cat > ./run-boringcache-build.sh <<'SH'
           #!/usr/bin/env bash
@@ -843,9 +745,6 @@ jobs:
           attempt=1
           while true; do
             cache_args=()
-            internal_restore_enabled="${BORINGCACHE_INTERNAL_RESTORE_ENABLED:-1}"
-            internal_save_enabled="${BORINGCACHE_INTERNAL_SAVE_ENABLED:-1}"
-            turbo_proxy_enabled="${BORINGCACHE_TURBO_PROXY_ENABLED:-1}"
             if [[ "$mode" == "full" ]]; then
               cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
@@ -856,15 +755,11 @@ jobs:
               cache_args=(--no-cache)
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
             elif [[ "$mode" == "partial-warm" ]]; then
-              # Read-only: no --cache-to. Internal saves are gated by an empty
-              # save-token secret so the Dockerfile instruction keys stay stable.
+              # Read-only: no --cache-to.
               cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
-            elif [[ "$mode" == "internal-only" ]]; then
+            elif [[ "$mode" == "layer-miss" ]]; then
               # Disable Docker layer cache for a full stale rebuild.
               cache_args=(--no-cache)
-            elif [[ "$mode" == "internal-target" ]]; then
-              # Isolate internal dependency/output cache impact without final-image OS package work.
-              cache_args=(--no-cache --target posthog-build)
             else
               echo "Unknown build mode: $mode" >&2
               exit 1
@@ -886,26 +781,11 @@ jobs:
             set +e
             DOCKER_BUILDKIT=1 docker buildx build \
               --builder "$BUILDER" \
-              --file Dockerfile.benchmark \
+              --file upstream/Dockerfile \
               --tag "$IMAGE_TAG" \
               --progress=plain \
               "${cache_args[@]}" \
-              --secret id=boringcache_token,env=BORINGCACHE_RESTORE_TOKEN \
-              --secret id=boringcache_save_token,env=BORINGCACHE_SAVE_TOKEN \
-              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
-              --build-arg BORINGCACHE_TAG_PNPM_FRONTEND="$BORINGCACHE_TAG_PNPM_FRONTEND" \
-              --build-arg BORINGCACHE_TAG_PNPM_PLUGIN="$BORINGCACHE_TAG_PNPM_PLUGIN" \
-              --build-arg BORINGCACHE_TAG_TURBO="$BORINGCACHE_TAG_TURBO" \
-              --build-arg BORINGCACHE_TAG_TURBO_PLUGIN="$BORINGCACHE_TAG_TURBO_PLUGIN" \
-              --build-arg BORINGCACHE_TAG_PYTHON="$BORINGCACHE_TAG_PYTHON" \
-              --build-arg BORINGCACHE_TAG_STATICFILES="$BORINGCACHE_TAG_STATICFILES" \
-              --build-arg BORINGCACHE_TAG_PLAYWRIGHT="$BORINGCACHE_TAG_PLAYWRIGHT" \
-              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="$internal_restore_enabled" \
-              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="$internal_save_enabled" \
-              --build-arg BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS="1" \
-              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="$turbo_proxy_enabled" \
-              --build-arg BORINGCACHE_TURBO_BACKEND="${TURBO_BACKEND}" \
-              . 2>&1 | tee "$build_log"
+              upstream 2>&1 | tee "$build_log"
             status=${PIPESTATUS[0]}
             set -e
 
@@ -968,8 +848,7 @@ jobs:
           setup: none
           mode: docker
           docker-command: setup
-          docker-internal-cache: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref != '' && 'off' || 'on' }}
-          docker-helper-path: boringcache-bin
+          docker-internal-cache: off
           oci-hydration: bodies-before-ready
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ needs.seed-cache.outputs.cache_scope }}
@@ -981,11 +860,6 @@ jobs:
           verbose: true
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-
-      - name: Export Docker internal cache controls
-        run: |
-          echo "BORINGCACHE_INTERNAL_RESTORE_ENABLED=${{ steps.docker_cache.outputs.docker-internal-restore-enabled }}" >> "$GITHUB_ENV"
-          echo "BORINGCACHE_INTERNAL_SAVE_ENABLED=${{ steps.docker_cache.outputs.docker-internal-save-enabled }}" >> "$GITHUB_ENV"
 
       - name: Prune builder cache for isolated scenario
         run: docker buildx prune -f --builder "${{ steps.docker_cache.outputs.buildx-name }}"
@@ -1000,13 +874,6 @@ jobs:
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
-          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
-          BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
-          BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
-          BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
-          BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
@@ -1033,13 +900,6 @@ jobs:
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
-          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
-          BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
-          BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
-          BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
-          BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
@@ -1061,13 +921,6 @@ jobs:
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
-          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
-          BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
-          BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
-          BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
-          BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
@@ -1089,13 +942,6 @@ jobs:
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
-          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
-          BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
-          BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
-          BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
-          BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
@@ -1107,7 +953,7 @@ jobs:
           echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
       - name: Run layer-miss build (no Docker cache, full image)
-        id: internal_only_build
+        id: layer_miss_build
         if: matrix.phase == 'layer_miss'
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
@@ -1117,19 +963,12 @@ jobs:
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_TAG_PNPM_FRONTEND: ${{ steps.scope.outputs.frontend_pnpm_tag }}
-          BORINGCACHE_TAG_PNPM_PLUGIN: ${{ steps.scope.outputs.plugin_pnpm_tag }}
-          BORINGCACHE_TAG_TURBO: ${{ steps.scope.outputs.turbo_tag }}
-          BORINGCACHE_TAG_TURBO_PLUGIN: ${{ steps.scope.outputs.turbo_plugin_tag }}
-          BORINGCACHE_TAG_PYTHON: ${{ steps.scope.outputs.python_tag }}
-          BORINGCACHE_TAG_STATICFILES: ${{ steps.scope.outputs.staticfiles_tag }}
-          BORINGCACHE_TAG_PLAYWRIGHT: ${{ steps.scope.outputs.playwright_tag }}
           IMAGE_TAG: posthog-benchmark:latest
         run: |
           set -euo pipefail
           phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
           start="$(date +%s)"
-          ./run-boringcache-build.sh internal-only
+          ./run-boringcache-build.sh layer-miss
           end="$(date +%s)"
           echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
           echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
@@ -1175,8 +1014,8 @@ jobs:
               build_seconds="${{ steps.stale_mid_build.outputs.build_seconds }}"
               ;;
             layer_miss)
-              seconds="${{ steps.internal_only_build.outputs.seconds }}"
-              build_seconds="${{ steps.internal_only_build.outputs.build_seconds }}"
+              seconds="${{ steps.layer_miss_build.outputs.seconds }}"
+              build_seconds="${{ steps.layer_miss_build.outputs.build_seconds }}"
               ;;
             *)
               echo "Unknown phase: ${{ matrix.phase }}" >&2

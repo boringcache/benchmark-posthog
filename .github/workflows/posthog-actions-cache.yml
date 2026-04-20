@@ -23,7 +23,6 @@ on:
     paths:
       - ".dockerignore"
       - ".gitmodules"
-      - "Dockerfile.benchmark"
       - ".github/workflows/posthog-boringcache.yml"
       - ".github/workflows/posthog-actions-cache.yml"
       - "README.md"
@@ -38,7 +37,6 @@ permissions:
 env:
   PROJECT_REPO: PostHog/posthog
   BENCHMARK_ID: posthog
-  BENCHMARK_WORKSPACE: boringcache/benchmarks
 
 jobs:
   seed-cache:
@@ -78,23 +76,6 @@ jobs:
       - name: Start seed timing
         id: seed_timing_start
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
-
-      - name: Install BoringCache CLI with boringcache/one
-        uses: boringcache/one@v1
-        with:
-          setup: none
-          mode: archive
-          workspace: ${{ env.BENCHMARK_WORKSPACE }}
-          cli-platform: linux-amd64
-          cache-runtime: false
-
-      - name: Prepare benchmark build inputs
-        run: |
-          cat > ./boringcache-bin <<'SH'
-          #!/usr/bin/env sh
-          exit 0
-          SH
-          chmod +x ./boringcache-bin
 
       - name: Set up Docker Buildx
         id: buildx
@@ -151,7 +132,6 @@ jobs:
           CACHE_SCOPE_PRIMARY: ${{ steps.scope.outputs.cache_scope_primary }}
           CACHE_SCOPE_FALLBACK: ${{ steps.scope.outputs.cache_scope_fallback }}
           CACHE_LANE: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
-          BORINGCACHE_API_TOKEN: benchmark-noop-token
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -229,17 +209,11 @@ jobs:
             set +e
             DOCKER_BUILDKIT=1 docker buildx build \
               --builder "$BUILDER" \
-              --file Dockerfile.benchmark \
+              --file upstream/Dockerfile \
               --tag posthog-benchmark:latest \
               --progress=plain \
               "${build_cache_args[@]}" \
-              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
-              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
-              --build-arg BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS="1" \
-              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
-              . 2>&1 | tee "$build_log"
+              upstream 2>&1 | tee "$build_log"
             status=${PIPESTATUS[0]}
             set -e
 
@@ -340,23 +314,6 @@ jobs:
         id: scenario_timing_start
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
-      - name: Install BoringCache CLI with boringcache/one
-        uses: boringcache/one@v1
-        with:
-          setup: none
-          mode: archive
-          workspace: ${{ env.BENCHMARK_WORKSPACE }}
-          cli-platform: linux-amd64
-          cache-runtime: false
-
-      - name: Prepare benchmark build inputs
-        run: |
-          cat > ./boringcache-bin <<'SH'
-          #!/usr/bin/env sh
-          exit 0
-          SH
-          chmod +x ./boringcache-bin
-
       - name: Set up Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@v4
@@ -372,7 +329,6 @@ jobs:
         env:
           BUILDER: ${{ steps.buildx.outputs.name }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_API_TOKEN: benchmark-noop-token
         run: |
           set -euo pipefail
 
@@ -395,17 +351,11 @@ jobs:
             set +e
             DOCKER_BUILDKIT=1 docker buildx build \
               --builder "$BUILDER" \
-              --file Dockerfile.benchmark \
+              --file upstream/Dockerfile \
               --tag posthog-benchmark:latest \
               --progress=plain \
               --cache-from "type=gha,scope=${CACHE_SCOPE}" \
-              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
-              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
-              --build-arg BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS="1" \
-              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
-              . 2>&1 | tee "$build_log"
+              upstream 2>&1 | tee "$build_log"
             status=${PIPESTATUS[0]}
             set -e
 
@@ -437,7 +387,6 @@ jobs:
         env:
           BUILDER: ${{ steps.buildx.outputs.name }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_API_TOKEN: benchmark-noop-token
         run: |
           set -euo pipefail
 
@@ -448,17 +397,11 @@ jobs:
             set +e
             DOCKER_BUILDKIT=1 docker buildx build \
               --builder "$BUILDER" \
-              --file Dockerfile.benchmark \
+              --file upstream/Dockerfile \
               --tag posthog-benchmark:latest \
               --progress=plain \
               --cache-from "type=gha,scope=${CACHE_SCOPE}" \
-              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
-              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
-              --build-arg BORINGCACHE_ALLOW_EXTERNAL_SYMLINKS="1" \
-              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
-              .
+              upstream
             status=$?
             set -e
 
@@ -485,7 +428,6 @@ jobs:
         env:
           BUILDER: ${{ steps.buildx.outputs.name }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_API_TOKEN: benchmark-noop-token
         run: |
           set -euo pipefail
           phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
@@ -495,16 +437,11 @@ jobs:
             set +e
             DOCKER_BUILDKIT=1 docker buildx build \
               --builder "$BUILDER" \
-              --file Dockerfile.benchmark \
+              --file upstream/Dockerfile \
               --tag posthog-benchmark:latest \
               --progress=plain \
               --cache-from "type=gha,scope=${CACHE_SCOPE}" \
-              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
-              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
-              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
-              .
+              upstream
             status=$?
             set -e
 
@@ -531,7 +468,6 @@ jobs:
         env:
           BUILDER: ${{ steps.buildx.outputs.name }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-          BORINGCACHE_API_TOKEN: benchmark-noop-token
         run: |
           set -euo pipefail
           phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
@@ -541,16 +477,11 @@ jobs:
             set +e
             DOCKER_BUILDKIT=1 docker buildx build \
               --builder "$BUILDER" \
-              --file Dockerfile.benchmark \
+              --file upstream/Dockerfile \
               --tag posthog-benchmark:latest \
               --progress=plain \
               --cache-from "type=gha,scope=${CACHE_SCOPE}" \
-              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
-              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
-              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
-              .
+              upstream
             status=$?
             set -e
 
@@ -572,11 +503,10 @@ jobs:
           echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
       - name: Run layer-miss build (no Docker cache, full image)
-        id: internal_only_build
+        id: layer_miss_build
         if: matrix.phase == 'layer_miss'
         env:
           BUILDER: ${{ steps.buildx.outputs.name }}
-          BORINGCACHE_API_TOKEN: benchmark-noop-token
         run: |
           set -euo pipefail
 
@@ -587,16 +517,11 @@ jobs:
             set +e
             DOCKER_BUILDKIT=1 docker buildx build \
               --builder "$BUILDER" \
-              --file Dockerfile.benchmark \
+              --file upstream/Dockerfile \
               --tag posthog-benchmark:latest \
               --progress=plain \
               --no-cache \
-              --secret id=boringcache_token,env=BORINGCACHE_API_TOKEN \
-              --build-arg BORINGCACHE_WORKSPACE="$BENCHMARK_WORKSPACE" \
-              --build-arg BORINGCACHE_TURBO_PROXY_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_RESTORE_ENABLED="0" \
-              --build-arg BORINGCACHE_INTERNAL_SAVE_ENABLED="0" \
-              .
+              upstream
             status=$?
             set -e
 
@@ -643,8 +568,8 @@ jobs:
               build_seconds="${{ steps.stale_mid_build.outputs.build_seconds }}"
               ;;
             layer_miss)
-              seconds="${{ steps.internal_only_build.outputs.seconds }}"
-              build_seconds="${{ steps.internal_only_build.outputs.build_seconds }}"
+              seconds="${{ steps.layer_miss_build.outputs.seconds }}"
+              build_seconds="${{ steps.layer_miss_build.outputs.build_seconds }}"
               ;;
             *)
               echo "Unknown phase: ${{ matrix.phase }}" >&2

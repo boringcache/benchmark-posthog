@@ -278,11 +278,20 @@ jobs:
                 append_metric oci_upload_requested_blobs "$(detail_value "$plan_details" requested_blobs)"
                 append_metric oci_new_blob_count "$(detail_value "$plan_details" upload_urls)"
                 append_metric oci_upload_already_present "$(detail_value "$plan_details" already_present)"
-                append_metric oci_new_blob_bytes "$(detail_value "$plan_details" requested_bytes)"
               else
                 append_metric oci_new_blob_count "0"
-                append_metric oci_new_blob_bytes "0"
               fi
+
+              local uploaded_blob_bytes=""
+              uploaded_blob_bytes="$(jq -s -r '
+                ([range(0; length) as $i | select(.[$i].operation == "oci_blob_upload_plan") | $i] | last) as $plan
+                | if $plan == null then
+                    0
+                  else
+                    ([range(($plan + 1); length) as $i | .[$i] | select(.operation == "oci_blob_upload") | (.request_bytes // 0)] | add // 0)
+                  end
+              ' "$observability_path" 2>/dev/null || true)"
+              append_metric oci_new_blob_bytes "${uploaded_blob_bytes:-0}"
 
               local batch_duration_ms=""
               batch_duration_ms="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .duration_ms // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
@@ -475,7 +484,7 @@ jobs:
           setup: none
           mode: docker
           docker-command: setup
-          docker-internal-cache: off
+          docker-internal-cache: manual
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ steps.scope.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
@@ -715,11 +724,20 @@ jobs:
                 append_metric oci_upload_requested_blobs "$(detail_value "$plan_details" requested_blobs)"
                 append_metric oci_new_blob_count "$(detail_value "$plan_details" upload_urls)"
                 append_metric oci_upload_already_present "$(detail_value "$plan_details" already_present)"
-                append_metric oci_new_blob_bytes "$(detail_value "$plan_details" requested_bytes)"
               else
                 append_metric oci_new_blob_count "0"
-                append_metric oci_new_blob_bytes "0"
               fi
+
+              local uploaded_blob_bytes=""
+              uploaded_blob_bytes="$(jq -s -r '
+                ([range(0; length) as $i | select(.[$i].operation == "oci_blob_upload_plan") | $i] | last) as $plan
+                | if $plan == null then
+                    0
+                  else
+                    ([range(($plan + 1); length) as $i | .[$i] | select(.operation == "oci_blob_upload") | (.request_bytes // 0)] | add // 0)
+                  end
+              ' "$observability_path" 2>/dev/null || true)"
+              append_metric oci_new_blob_bytes "${uploaded_blob_bytes:-0}"
 
               local batch_duration_ms=""
               batch_duration_ms="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .duration_ms // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
@@ -846,7 +864,7 @@ jobs:
           setup: none
           mode: docker
           docker-command: setup
-          docker-internal-cache: off
+          docker-internal-cache: manual
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ needs.seed-cache.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}

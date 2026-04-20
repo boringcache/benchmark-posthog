@@ -95,7 +95,7 @@ while [[ $# -gt 0 ]]; do
       hit_behavior_note="$2"
       shift 2
       ;;
-    --layer-miss-seconds|--internal-only-warm-seconds)
+    --layer-miss-seconds)
       layer_miss_seconds="$2"
       shift 2
       ;;

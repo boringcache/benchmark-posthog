@@ -27,6 +27,8 @@ Fresh runs use the scenario set:
 - `warm1`
 - `layer_miss`: empty local Docker cache on a fresh runner, with the upstream Dockerfile unchanged
 
+BoringCache uses the outer BuildKit registry/OCI cache path only. It does not call BoringCache inside Dockerfile `RUN` steps, and upstream Dockerfile cache mounts stay native to BuildKit.
+
 Rolling runs record only the first build after upstream sync against the stable rolling cache tags. They do not run separate `warm1` or `layer_miss` follow-ups.
 
 The story this benchmark is meant to show is:

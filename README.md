@@ -12,8 +12,8 @@ This repo exists separately from [`boringcache/benchmarks`](https://github.com/b
 ## Source Model
 
 - Upstream app source lives in the pinned `upstream/` submodule.
-- `Dockerfile.benchmark` is benchmark-owned and committed in this repo.
-- `scripts/prepare-source.sh` includes an upstream-layout preflight so sync-driven runs fail early when benchmark-owned Docker paths drift from upstream.
+- Docker builds use the unmodified upstream `upstream/Dockerfile` with `upstream/` as the build context.
+- `scripts/prepare-source.sh` only resets the upstream checkout and applies named benchmark scenarios.
 
 Pinned upstream source:
 
@@ -25,7 +25,7 @@ Fresh runs use the scenario set:
 
 - `cold`: empty remote cache, empty local Docker cache
 - `warm1`
-- `layer_miss`: empty local Docker cache on a fresh runner, with BoringCache internal restores still enabled on the BoringCache side
+- `layer_miss`: empty local Docker cache on a fresh runner, with the upstream Dockerfile unchanged
 
 Rolling runs record only the first build after upstream sync against the stable rolling cache tags. They do not run separate `warm1` or `layer_miss` follow-ups.
 
@@ -33,7 +33,7 @@ The story this benchmark is meant to show is:
 
 - speed on cold and warm paths
 - storage footprint in each backend
-- whether BoringCache internal archives help when Docker layers rerun
+- whether the OCI registry cache behaves as a simple outer Docker cache backend
 - whether cache reuse stays understandable instead of turning into opaque blob growth
 
 ## Token Model
@@ -46,9 +46,7 @@ This repo uses split BoringCache tokens as the standard CI shape:
 
 ## Repo Layout
 
-- [`Dockerfile.benchmark`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/Dockerfile.benchmark)
 - [`scripts/prepare-source.sh`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/scripts/prepare-source.sh)
-- [`scripts/verify-upstream-layout.sh`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/scripts/verify-upstream-layout.sh)
 - [`.github/workflows/posthog-boringcache.yml`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/.github/workflows/posthog-boringcache.yml)
 - [`.github/workflows/posthog-actions-cache.yml`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/.github/workflows/posthog-actions-cache.yml)
 

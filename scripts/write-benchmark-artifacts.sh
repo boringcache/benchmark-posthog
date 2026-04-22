@@ -13,6 +13,11 @@ cache_storage_source=""
 bytes_uploaded=""
 bytes_downloaded=""
 hit_behavior_note=""
+cli_version="${BENCHMARK_CLI_VERSION:-}"
+action_ref="${BENCHMARK_ACTION_REF:-}"
+action_sha="${BENCHMARK_ACTION_SHA:-}"
+web_revision="${BENCHMARK_WEB_REVISION:-}"
+api_url="${BENCHMARK_API_URL:-${BORINGCACHE_API_URL:-https://api.boringcache.com}}"
 docker_cache_import_seconds=""
 docker_cache_export_seconds=""
 oci_hydration_policy=""
@@ -82,6 +87,26 @@ while [[ $# -gt 0 ]]; do
       ;;
     --hit-behavior-note)
       hit_behavior_note="$2"
+      shift 2
+      ;;
+    --cli-version)
+      cli_version="$2"
+      shift 2
+      ;;
+    --action-ref)
+      action_ref="$2"
+      shift 2
+      ;;
+    --action-sha)
+      action_sha="$2"
+      shift 2
+      ;;
+    --web-revision)
+      web_revision="$2"
+      shift 2
+      ;;
+    --api-url)
+      api_url="$2"
       shift 2
       ;;
     --docker-cache-import-seconds)
@@ -211,6 +236,61 @@ json_string_or_null() {
   fi
 }
 
+health_url_for_api_base() {
+  local base="${1%/}"
+  case "$base" in
+    */v1|*/v2)
+      printf '%s/v2/health\n' "${base%/*}"
+      ;;
+    *)
+      printf '%s/v2/health\n' "$base"
+      ;;
+  esac
+}
+
+collect_default_product_refs() {
+  if [[ -z "$cli_version" && "$strategy" == "boringcache" ]] && command -v boringcache >/dev/null 2>&1; then
+    local version_output
+    version_output="$(boringcache --version 2>/dev/null | head -n 1 || true)"
+    if [[ "$version_output" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+      cli_version="v${BASH_REMATCH[1]}"
+    else
+      cli_version="$version_output"
+    fi
+  fi
+
+  if [[ -z "$action_ref" && "$strategy" == "boringcache" ]]; then
+    action_ref="boringcache/one@v1"
+  fi
+
+  if [[ -z "$action_sha" && "$action_ref" =~ ^([^@]+)@(.+)$ ]]; then
+    local action_repo="${BASH_REMATCH[1]}"
+    local action_ref_name="${BASH_REMATCH[2]}"
+    if [[ "$action_ref_name" =~ ^[0-9a-f]{40}$ ]]; then
+      action_sha="$action_ref_name"
+    elif command -v git >/dev/null 2>&1; then
+      local remote_url="https://github.com/${action_repo}.git"
+      local resolved refspec
+      for refspec in "refs/tags/${action_ref_name}^{}" "refs/tags/${action_ref_name}" "refs/heads/${action_ref_name}"; do
+        resolved="$(git ls-remote "$remote_url" "$refspec" 2>/dev/null | awk 'NR == 1 { print $1 }' || true)"
+        if [[ "$resolved" =~ ^[0-9a-f]{40}$ ]]; then
+          action_sha="$resolved"
+          break
+        fi
+      done
+    fi
+  fi
+
+  if [[ -z "$web_revision" && -n "$api_url" ]] && command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+    local health_url health_json
+    health_url="$(health_url_for_api_base "$api_url")"
+    health_json="$(curl -fsS --max-time 5 "$health_url" 2>/dev/null || true)"
+    if [[ -n "$health_json" ]]; then
+      web_revision="$(printf '%s' "$health_json" | jq -r '.revision // empty' 2>/dev/null || true)"
+    fi
+  fi
+}
+
 sanitize_uint() {
   local v="$1"
   if [[ -n "$v" && "$v" =~ ^[0-9]+$ ]]; then
@@ -258,6 +338,7 @@ oci_upload_already_present="$(sanitize_uint "$oci_upload_already_present")"
 oci_upload_batch_seconds="$(sanitize_number "$oci_upload_batch_seconds")"
 reseed_new_blob_threshold="$(sanitize_uint "$reseed_new_blob_threshold")"
 reseed_new_blob_threshold="${reseed_new_blob_threshold:-0}"
+collect_default_product_refs
 
 warm_count=0
 warm_total=0
@@ -343,6 +424,13 @@ cat > "$json_path" <<JSON
     "repo": "$project_repo",
     "ref": "$project_ref"
   },
+  "product_refs": {
+    "cli_version": $(json_string_or_null "$cli_version"),
+    "action_ref": $(json_string_or_null "$action_ref"),
+    "action_sha": $(json_string_or_null "$action_sha"),
+    "web_revision": $(json_string_or_null "$web_revision"),
+    "api_url": $(json_string_or_null "$api_url")
+  },
   "generated_at": "$generated_at",
   "runs": {
     "cold_seconds": $(json_num_or_null "$cold_seconds"),
@@ -413,6 +501,18 @@ JSON
   echo "| Lane | ${lane_label_value} |"
   echo "| Project | \`${project_repo}\` |"
   echo "| Commit | \`${project_ref}\` |"
+  if [[ -n "$cli_version" ]]; then
+    echo "| CLI version | \`${cli_version}\` |"
+  fi
+  if [[ -n "$action_ref" ]]; then
+    echo "| Action ref | \`${action_ref}\` |"
+  fi
+  if [[ -n "$action_sha" ]]; then
+    echo "| Action SHA | \`${action_sha}\` |"
+  fi
+  if [[ -n "$web_revision" ]]; then
+    echo "| Web revision | \`${web_revision}\` |"
+  fi
 
   if [[ "$warm_avg" != "null" ]]; then
     echo "| Warm avg | ${warm_avg}s (${warm_improvement_pct}% faster) |"

@@ -284,7 +284,7 @@ collect_default_product_refs() {
   if [[ -z "$web_revision" && -n "$api_url" ]] && command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     local health_url health_json
     health_url="$(health_url_for_api_base "$api_url")"
-    health_json="$(curl -fsS --max-time 5 "$health_url" 2>/dev/null || true)"
+    health_json="$(curl -fsS --max-time 5 -A "BoringCacheBenchmark/1.0" "$health_url" 2>/dev/null || true)"
     if [[ -n "$health_json" ]]; then
       web_revision="$(printf '%s' "$health_json" | jq -r '.revision // empty' 2>/dev/null || true)"
     fi

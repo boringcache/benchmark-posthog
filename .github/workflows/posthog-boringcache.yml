@@ -196,6 +196,37 @@ jobs:
           start_proxy() { :; }
           stop_proxy() { :; }
           wait_proxy_ready() { return 0; }
+          flush_action_proxy() {
+            local pid_file="${BORINGCACHE_PROXY_PID_FILE:-/tmp/boringcache-proxy.pid}"
+            [[ -s "$pid_file" ]] || return 0
+
+            local pid=""
+            pid="$(tr -d '[:space:]' < "$pid_file" 2>/dev/null || true)"
+            [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "Registry proxy (PID: $pid) already exited"
+              return 0
+            fi
+
+            echo "Stopping registry proxy (PID: $pid)..."
+            if ! kill -TERM "$pid" 2>/dev/null; then
+              echo "Failed to send SIGTERM to registry proxy (PID: $pid); continuing"
+              return 0
+            fi
+
+            local started elapsed
+            started="$(date +%s)"
+            while kill -0 "$pid" 2>/dev/null; do
+              sleep 1
+              elapsed=$(($(date +%s) - started))
+              if (( elapsed > 0 && elapsed % 30 == 0 )); then
+                echo "Waiting for registry proxy to flush and exit... (${elapsed}s elapsed)"
+              fi
+            done
+            elapsed=$(($(date +%s) - started))
+            echo "Registry proxy exited gracefully after ${elapsed}s"
+          }
           cleanup() { :; }
           trap cleanup EXIT
 
@@ -364,7 +395,7 @@ jobs:
                 wc -l < "$observability_path" | tr -d ' '
                 printf '\n'
                 echo "observability_summary<<EOF"
-                grep -E 'oci_blob_upload|upload_session_commit|cache_finalize_publish|receipt|429|rate' "$observability_path" | tail -n 160 || true
+                grep -E 'cache_session_summary|oci_blob_upload|upload_session_commit|cache_finalize_publish|receipt|429|rate' "$observability_path" | tail -n 160 || true
                 echo "EOF"
               fi
             } > "$output_path"
@@ -435,7 +466,7 @@ jobs:
               # Stop proxy gracefully so it can flush pending uploads
               if [[ "$mode" =~ ^(seed-cache|full)$ ]]; then
                 echo "Flushing proxy cache to backend..."
-                stop_proxy
+                flush_action_proxy
               fi
               # Dump proxy log for diagnostics
               echo "=== Proxy log (${mode}, last 200 lines) ==="
@@ -635,6 +666,37 @@ jobs:
           start_proxy() { :; }
           stop_proxy() { :; }
           wait_proxy_ready() { return 0; }
+          flush_action_proxy() {
+            local pid_file="${BORINGCACHE_PROXY_PID_FILE:-/tmp/boringcache-proxy.pid}"
+            [[ -s "$pid_file" ]] || return 0
+
+            local pid=""
+            pid="$(tr -d '[:space:]' < "$pid_file" 2>/dev/null || true)"
+            [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "Registry proxy (PID: $pid) already exited"
+              return 0
+            fi
+
+            echo "Stopping registry proxy (PID: $pid)..."
+            if ! kill -TERM "$pid" 2>/dev/null; then
+              echo "Failed to send SIGTERM to registry proxy (PID: $pid); continuing"
+              return 0
+            fi
+
+            local started elapsed
+            started="$(date +%s)"
+            while kill -0 "$pid" 2>/dev/null; do
+              sleep 1
+              elapsed=$(($(date +%s) - started))
+              if (( elapsed > 0 && elapsed % 30 == 0 )); then
+                echo "Waiting for registry proxy to flush and exit... (${elapsed}s elapsed)"
+              fi
+            done
+            elapsed=$(($(date +%s) - started))
+            echo "Registry proxy exited gracefully after ${elapsed}s"
+          }
           cleanup() { :; }
           trap cleanup EXIT
 
@@ -810,7 +872,7 @@ jobs:
               # Stop proxy gracefully so it can flush pending uploads
               if [[ "$mode" =~ ^(seed-cache|full)$ ]]; then
                 echo "Flushing proxy cache to backend..."
-                stop_proxy
+                flush_action_proxy
               fi
               # Dump proxy log for diagnostics
               echo "=== Proxy log (${mode}, last 200 lines) ==="

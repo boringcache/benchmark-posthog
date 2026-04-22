@@ -277,15 +277,11 @@ jobs:
 
 
   scenario-builds:
-    name: Scenario (${{ matrix.phase }}) (GHA cache)
+    name: Warm rerun (GHA cache)
     needs: seed-cache
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.cache_lane != 'rolling' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    strategy:
-      fail-fast: false
-      matrix:
-        phase: [warm1, layer_miss]
     steps:
       - name: Free disk space
         run: |
@@ -307,7 +303,7 @@ jobs:
           git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
 
       - name: Prepare scenario source tree
-        run: ./scripts/prepare-source.sh "${{ matrix.phase }}"
+        run: ./scripts/prepare-source.sh warm1
 
       - name: Start scenario timing
         id: scenario_timing_start
@@ -324,7 +320,6 @@ jobs:
         run: docker buildx prune -f --builder "${{ steps.buildx.outputs.name }}"
       - name: Run warm build 1
         id: warm1_build
-        if: matrix.phase == 'warm1'
         env:
           BUILDER: ${{ steps.buildx.outputs.name }}
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
@@ -380,167 +375,6 @@ jobs:
             echo "docker_cache_import_seconds=${import_seconds}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run warm build 2
-        id: warm2_build
-        if: matrix.phase == 'warm2'
-        env:
-          BUILDER: ${{ steps.buildx.outputs.name }}
-          CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-        run: |
-          set -euo pipefail
-
-          phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
-          start="$(date +%s)"
-          attempt=1
-          while true; do
-            set +e
-            DOCKER_BUILDKIT=1 docker buildx build \
-              --builder "$BUILDER" \
-              --file upstream/Dockerfile \
-              --tag posthog-benchmark:latest \
-              --progress=plain \
-              --cache-from "type=gha,scope=${CACHE_SCOPE}" \
-              upstream
-            status=$?
-            set -e
-
-            if [[ "$status" -eq 0 ]]; then
-              break
-            fi
-
-            if [[ "$attempt" -ge 2 ]]; then
-              echo "Warm build 2 failed after retry" >&2
-              exit "$status"
-            fi
-
-            attempt=$((attempt + 1))
-            sleep 5
-          done
-
-          end="$(date +%s)"
-          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
-          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
-
-      - name: Run stale-low build (committed source change)
-        id: stale_low_build
-        if: matrix.phase == 'stale-low'
-        env:
-          BUILDER: ${{ steps.buildx.outputs.name }}
-          CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-        run: |
-          set -euo pipefail
-          phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
-          start="$(date +%s)"
-          attempt=1
-          while true; do
-            set +e
-            DOCKER_BUILDKIT=1 docker buildx build \
-              --builder "$BUILDER" \
-              --file upstream/Dockerfile \
-              --tag posthog-benchmark:latest \
-              --progress=plain \
-              --cache-from "type=gha,scope=${CACHE_SCOPE}" \
-              upstream
-            status=$?
-            set -e
-
-            if [[ "$status" -eq 0 ]]; then
-              break
-            fi
-
-            if [[ "$attempt" -ge 2 ]]; then
-              echo "Stale-low build failed after retry" >&2
-              exit "$status"
-            fi
-
-            attempt=$((attempt + 1))
-            sleep 5
-          done
-
-          end="$(date +%s)"
-          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
-          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
-
-      - name: Run stale-mid build (committed frontend package descriptor change)
-        id: stale_mid_build
-        if: matrix.phase == 'stale-mid'
-        env:
-          BUILDER: ${{ steps.buildx.outputs.name }}
-          CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
-        run: |
-          set -euo pipefail
-          phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
-          start="$(date +%s)"
-          attempt=1
-          while true; do
-            set +e
-            DOCKER_BUILDKIT=1 docker buildx build \
-              --builder "$BUILDER" \
-              --file upstream/Dockerfile \
-              --tag posthog-benchmark:latest \
-              --progress=plain \
-              --cache-from "type=gha,scope=${CACHE_SCOPE}" \
-              upstream
-            status=$?
-            set -e
-
-            if [[ "$status" -eq 0 ]]; then
-              break
-            fi
-
-            if [[ "$attempt" -ge 2 ]]; then
-              echo "Stale-mid build failed after retry" >&2
-              exit "$status"
-            fi
-
-            attempt=$((attempt + 1))
-            sleep 5
-          done
-
-          end="$(date +%s)"
-          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
-          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
-
-      - name: Run layer-miss build (no Docker cache, full image)
-        id: layer_miss_build
-        if: matrix.phase == 'layer_miss'
-        env:
-          BUILDER: ${{ steps.buildx.outputs.name }}
-        run: |
-          set -euo pipefail
-
-          phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
-          start="$(date +%s)"
-          attempt=1
-          while true; do
-            set +e
-            DOCKER_BUILDKIT=1 docker buildx build \
-              --builder "$BUILDER" \
-              --file upstream/Dockerfile \
-              --tag posthog-benchmark:latest \
-              --progress=plain \
-              --no-cache \
-              upstream
-            status=$?
-            set -e
-
-            if [[ "$status" -eq 0 ]]; then
-              break
-            fi
-
-            if [[ "$attempt" -ge 2 ]]; then
-              echo "Layer-miss build failed after retry" >&2
-              exit "$status"
-            fi
-
-            attempt=$((attempt + 1))
-            sleep 5
-          done
-
-          end="$(date +%s)"
-          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
-          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
-
       - name: Capture scenario timing
         id: phase_timing
         run: |
@@ -548,35 +382,11 @@ jobs:
           seconds=""
           build_seconds=""
           docker_cache_import_seconds=""
-          case "${{ matrix.phase }}" in
-            warm1)
-              seconds="${{ steps.warm1_build.outputs.seconds }}"
-              build_seconds="${{ steps.warm1_build.outputs.build_seconds }}"
-              docker_cache_import_seconds="${{ steps.warm1_build.outputs.docker_cache_import_seconds }}"
-              ;;
-            warm2)
-              seconds="${{ steps.warm2_build.outputs.seconds }}"
-              build_seconds="${{ steps.warm2_build.outputs.build_seconds }}"
-              ;;
-            stale-low)
-              seconds="${{ steps.stale_low_build.outputs.seconds }}"
-              build_seconds="${{ steps.stale_low_build.outputs.build_seconds }}"
-              ;;
-            stale-mid)
-              seconds="${{ steps.stale_mid_build.outputs.seconds }}"
-              build_seconds="${{ steps.stale_mid_build.outputs.build_seconds }}"
-              ;;
-            layer_miss)
-              seconds="${{ steps.layer_miss_build.outputs.seconds }}"
-              build_seconds="${{ steps.layer_miss_build.outputs.build_seconds }}"
-              ;;
-            *)
-              echo "Unknown phase: ${{ matrix.phase }}" >&2
-              exit 1
-              ;;
-          esac
+          seconds="${{ steps.warm1_build.outputs.seconds }}"
+          build_seconds="${{ steps.warm1_build.outputs.build_seconds }}"
+          docker_cache_import_seconds="${{ steps.warm1_build.outputs.docker_cache_import_seconds }}"
           if [[ -z "${seconds}" ]]; then
-            echo "No timing captured for phase ${{ matrix.phase }}" >&2
+            echo "No timing captured for warm1" >&2
             exit 1
           fi
           echo "seconds=${seconds}" >> "$GITHUB_OUTPUT"
@@ -588,8 +398,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p benchmark-phase
-          cat > "benchmark-phase/${{ matrix.phase }}.env" <<EOF
-          phase=${{ matrix.phase }}
+          cat > "benchmark-phase/warm1.env" <<EOF
+          phase=warm1
           seconds=${{ steps.phase_timing.outputs.seconds }}
           build_seconds=${{ steps.phase_timing.outputs.build_seconds }}
           docker_cache_import_seconds=${{ steps.phase_timing.outputs.docker_cache_import_seconds }}
@@ -597,8 +407,8 @@ jobs:
       - name: Upload scenario timing artifact
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-phase-${{ env.BENCHMARK_ID }}-actions-cache-${{ matrix.phase }}
-          path: benchmark-phase/${{ matrix.phase }}.env
+          name: benchmark-phase-${{ env.BENCHMARK_ID }}-actions-cache-warm1
+          path: benchmark-phase/warm1.env
           if-no-files-found: error
 
   finalize-benchmark:
@@ -650,7 +460,6 @@ jobs:
             fi
           }
           parse_phase warm1
-          parse_phase layer_miss
       - name: Measure GHA cache storage usage
         id: cache_size
         env:
@@ -674,12 +483,11 @@ jobs:
             --project-ref "${{ steps.upstream_ref.outputs.sha }}" \
             --cold-seconds "${{ needs.seed-cache.outputs.cold_seconds }}" \
             --warm1-seconds "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.warm1_seconds }}" \
-            --layer-miss-seconds "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.layer_miss_seconds }}" \
             --docker-cache-import-seconds "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.warm1_docker_cache_import_seconds }}" \
             --docker-cache-export-seconds "${{ needs.seed-cache.outputs.docker_cache_export_seconds }}" \
             --cache-storage-bytes "${{ steps.cache_size.outputs.bytes }}" \
             --cache-storage-source "github-actions-cache-api" \
-            --hit-behavior-note "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Rolling lane: this run executes only the upstream-sync seed build; warm1 and layer-miss follow-up runs are intentionally skipped.' || 'Fresh lane: cold+seed runs the pinned base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only and no synthetic mutations.' }}"
+            --hit-behavior-note "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Rolling lane: this run executes only the upstream-sync seed build; warm1 follow-up runs are intentionally skipped.' || 'Fresh lane: cold+seed runs the pinned base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only and no synthetic mutations.' }}"
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v6

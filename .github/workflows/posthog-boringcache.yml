@@ -258,6 +258,10 @@ jobs:
             done
 
             if [[ "$ready" == "1" ]]; then
+              if [[ "$require_cache_refs" == "1" && "$mode" == "partial-warm" ]]; then
+                echo "Registry proxy reached ready state before cache-from refs became readable; refusing invalid warm sample after ${cache_ready_timeout_seconds}s" >&2
+                return 1
+              fi
               echo "Registry proxy reached ready state before cache-from refs became readable; continuing after ${cache_ready_timeout_seconds}s"
               return 0
             fi
@@ -317,14 +321,17 @@ jobs:
             local export_step=""
             local import_seconds=""
             local export_seconds=""
+            local import_status=""
 
             import_step="$(find_step_id "importing cache manifest from")"
             export_step="$(find_step_id "exporting cache to registry")"
             import_seconds="$(find_step_seconds "$import_step")"
             export_seconds="$(find_step_seconds "$export_step")"
+            import_status="$(build_import_status)"
 
             mkdir -p "$(dirname "$output_path")"
             : > "$output_path"
+            echo "cache_import_status=$import_status" >> "$output_path"
             if [[ -n "$import_seconds" ]]; then
               echo "docker_cache_import_seconds=$import_seconds" >> "$output_path"
             fi
@@ -520,6 +527,16 @@ jobs:
             set -e
 
             if [[ "$status" -eq 0 ]]; then
+              import_status="$(build_import_status)"
+              if [[ "$mode" == "partial-warm" && "$import_status" != "ok" ]]; then
+                capture_proxy_status
+                write_build_metrics
+                echo "Warm build completed without a usable registry cache import (status: ${import_status}); refusing invalid fresh sample." >&2
+                if [[ -n "${BENCHMARK_METRICS_OUTPUT:-}" && -s "$BENCHMARK_METRICS_OUTPUT" ]]; then
+                  cat "$BENCHMARK_METRICS_OUTPUT" >&2
+                fi
+                exit 1
+              fi
               if [[ "$mode" =~ ^(full|seed-cache)$ ]] && grep -Eq "$cache_export_pattern" "$build_log"; then
                 stop_proxy
                 if [[ "$attempt" -lt "$max_attempts" ]]; then
@@ -792,6 +809,10 @@ jobs:
             done
 
             if [[ "$ready" == "1" ]]; then
+              if [[ "$require_cache_refs" == "1" && "$mode" == "partial-warm" ]]; then
+                echo "Registry proxy reached ready state before cache-from refs became readable; refusing invalid warm sample after ${cache_ready_timeout_seconds}s" >&2
+                return 1
+              fi
               echo "Registry proxy reached ready state before cache-from refs became readable; continuing after ${cache_ready_timeout_seconds}s"
               return 0
             fi
@@ -851,14 +872,17 @@ jobs:
             local export_step=""
             local import_seconds=""
             local export_seconds=""
+            local import_status=""
 
             import_step="$(find_step_id "importing cache manifest from")"
             export_step="$(find_step_id "exporting cache to registry")"
             import_seconds="$(find_step_seconds "$import_step")"
             export_seconds="$(find_step_seconds "$export_step")"
+            import_status="$(build_import_status)"
 
             mkdir -p "$(dirname "$output_path")"
             : > "$output_path"
+            echo "cache_import_status=$import_status" >> "$output_path"
             if [[ -n "$import_seconds" ]]; then
               echo "docker_cache_import_seconds=$import_seconds" >> "$output_path"
             fi
@@ -940,6 +964,16 @@ jobs:
             curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$output_path" 2>/dev/null || true
           }
 
+          build_import_status() {
+            if grep -Eq 'failed to configure .*cache importer' "$build_log"; then
+              echo "not_found"
+            elif grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
+              echo "ok"
+            else
+              echo "none"
+            fi
+          }
+
           cache_from_disabled=0
           cache_from_is_enabled() {
             [[ "$cache_from_disabled" != "1" && -n "${CACHE_FROM:-}" ]]
@@ -990,6 +1024,16 @@ jobs:
             set -e
 
             if [[ "$status" -eq 0 ]]; then
+              import_status="$(build_import_status)"
+              if [[ "$mode" == "partial-warm" && "$import_status" != "ok" ]]; then
+                capture_proxy_status
+                write_build_metrics
+                echo "Warm build completed without a usable registry cache import (status: ${import_status}); refusing invalid fresh sample." >&2
+                if [[ -n "${BENCHMARK_METRICS_OUTPUT:-}" && -s "$BENCHMARK_METRICS_OUTPUT" ]]; then
+                  cat "$BENCHMARK_METRICS_OUTPUT" >&2
+                fi
+                exit 1
+              fi
               if [[ "$mode" =~ ^(full|seed-cache)$ ]] && grep -Eq "$cache_export_pattern" "$build_log"; then
                 stop_proxy
                 if [[ "$attempt" -lt "$max_attempts" ]]; then
@@ -1079,8 +1123,17 @@ jobs:
           rm -f "$metrics_file"
           phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
           start="$(date +%s)"
+          set +e
           BENCHMARK_METRICS_OUTPUT="$metrics_file" ./run-boringcache-build.sh partial-warm
+          status="$?"
+          set -e
           end="$(date +%s)"
+          if [[ "$status" -ne 0 ]]; then
+            if [[ -s "$metrics_file" ]]; then
+              cat "$metrics_file" >&2
+            fi
+            exit "$status"
+          fi
           echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
           echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
           if [[ -s "$metrics_file" ]]; then

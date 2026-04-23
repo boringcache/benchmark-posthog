@@ -199,7 +199,41 @@ jobs:
           mode="${1:-full}"
           start_proxy() { :; }
           stop_proxy() { :; }
-          wait_proxy_ready() { return 0; }
+          wait_proxy_ready() {
+            local started phase elapsed ready require_cache_refs
+            started="$(date +%s)"
+            ready=0
+            require_cache_refs=0
+
+            if [[ "$mode" =~ ^(full|partial-warm)$ ]] && cache_from_is_enabled; then
+              require_cache_refs=1
+            fi
+
+            while true; do
+              if curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$status_snapshot_path" 2>/dev/null; then
+                phase="$(jq -r '.phase // empty' "$status_snapshot_path" 2>/dev/null || true)"
+                if [[ "$phase" == "ready" ]]; then
+                  ready=1
+                  if [[ "$require_cache_refs" != "1" ]] || cache_from_refs_ready; then
+                    return 0
+                  fi
+                fi
+              fi
+
+              elapsed=$(($(date +%s) - started))
+              if (( elapsed >= cache_ready_timeout_seconds )); then
+                break
+              fi
+              sleep 1
+            done
+
+            if [[ "$ready" == "1" ]]; then
+              echo "Registry proxy reached ready state before cache-from refs became readable; continuing after ${cache_ready_timeout_seconds}s"
+              return 0
+            fi
+
+            return 1
+          }
           flush_action_proxy() {
             local pid_file="${BORINGCACHE_PROXY_PID_FILE:-/tmp/boringcache-proxy.pid}"
             [[ -s "$pid_file" ]] || return 0
@@ -669,7 +703,41 @@ jobs:
           mode="${1:-full}"
           start_proxy() { :; }
           stop_proxy() { :; }
-          wait_proxy_ready() { return 0; }
+          wait_proxy_ready() {
+            local started phase elapsed ready require_cache_refs
+            started="$(date +%s)"
+            ready=0
+            require_cache_refs=0
+
+            if [[ "$mode" =~ ^(full|partial-warm)$ ]] && cache_from_is_enabled; then
+              require_cache_refs=1
+            fi
+
+            while true; do
+              if curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$status_snapshot_path" 2>/dev/null; then
+                phase="$(jq -r '.phase // empty' "$status_snapshot_path" 2>/dev/null || true)"
+                if [[ "$phase" == "ready" ]]; then
+                  ready=1
+                  if [[ "$require_cache_refs" != "1" ]] || cache_from_refs_ready; then
+                    return 0
+                  fi
+                fi
+              fi
+
+              elapsed=$(($(date +%s) - started))
+              if (( elapsed >= cache_ready_timeout_seconds )); then
+                break
+              fi
+              sleep 1
+            done
+
+            if [[ "$ready" == "1" ]]; then
+              echo "Registry proxy reached ready state before cache-from refs became readable; continuing after ${cache_ready_timeout_seconds}s"
+              return 0
+            fi
+
+            return 1
+          }
           flush_action_proxy() {
             local pid_file="${BORINGCACHE_PROXY_PID_FILE:-/tmp/boringcache-proxy.pid}"
             [[ -s "$pid_file" ]] || return 0

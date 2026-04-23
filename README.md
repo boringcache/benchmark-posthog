@@ -32,7 +32,8 @@ Rolling runs record only the first build after upstream sync against the stable 
 
 The story this benchmark is meant to show is:
 
-- speed on cold and warm paths
+- speed on fresh cold and warm paths
+- first-build behavior after upstream sync in the rolling lane
 - storage footprint in each backend
 - whether the OCI registry cache behaves as a simple outer Docker cache backend
 - whether cache reuse stays understandable instead of turning into opaque blob growth

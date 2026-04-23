@@ -29,6 +29,10 @@ on:
       - "scripts/**"
       - "upstream"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   actions: write

@@ -9,6 +9,10 @@ on:
       - ".gitmodules"
       - "upstream"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   actions: write

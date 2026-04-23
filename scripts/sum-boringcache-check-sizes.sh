@@ -33,18 +33,34 @@ total="$(
       elif type == "string" then (try (capture("(?<n>[0-9]+)").n | tonumber) catch 0)
       else 0 end;
 
+    def dedupe_key:
+      .cache_entry_id //
+      .cacheEntryId //
+      .manifest_root_digest //
+      .manifestRootDigest //
+      .requested_tag //
+      .requestedTag //
+      .tag //
+      .entry //
+      "unknown";
+
     [
       .results[]?
       | select((.status // "") == "hit")
-      | (
-          .compressed_size //
-          .compressedSize //
-          .size_bytes //
-          .sizeBytes //
-          .size
-        )
-      | to_num
-    ] | add // 0
+      | {
+          key: dedupe_key,
+          size: (
+            .compressed_size //
+            .compressedSize //
+            .size_bytes //
+            .sizeBytes //
+            .size
+          ) | to_num
+        }
+    ]
+    | group_by(.key)
+    | map(max_by(.size) | .size)
+    | add // 0
   ' "$tmp_file"
 )"
 

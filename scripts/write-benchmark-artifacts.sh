@@ -18,6 +18,7 @@ action_ref="${BENCHMARK_ACTION_REF:-}"
 action_sha="${BENCHMARK_ACTION_SHA:-}"
 web_revision="${BENCHMARK_WEB_REVISION:-}"
 api_url="${BENCHMARK_API_URL:-${BORINGCACHE_API_URL:-https://api.boringcache.com}}"
+cache_import_status=""
 docker_cache_import_seconds=""
 docker_cache_export_seconds=""
 oci_hydration_policy=""
@@ -107,6 +108,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --api-url)
       api_url="$2"
+      shift 2
+      ;;
+    --cache-import-status)
+      cache_import_status="$2"
       shift 2
       ;;
     --docker-cache-import-seconds)
@@ -309,6 +314,15 @@ sanitize_number() {
   fi
 }
 
+sanitize_token() {
+  local v="$1"
+  if [[ -n "$v" && "$v" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+    echo "$v"
+  else
+    echo ""
+  fi
+}
+
 if [[ -n "$bytes_uploaded" ]] && ! [[ "$bytes_uploaded" =~ ^[0-9]+$ ]]; then
   bytes_uploaded=""
 fi
@@ -338,6 +352,7 @@ oci_upload_already_present="$(sanitize_uint "$oci_upload_already_present")"
 oci_upload_batch_seconds="$(sanitize_number "$oci_upload_batch_seconds")"
 reseed_new_blob_threshold="$(sanitize_uint "$reseed_new_blob_threshold")"
 reseed_new_blob_threshold="${reseed_new_blob_threshold:-0}"
+cache_import_status="$(sanitize_token "$cache_import_status")"
 collect_default_product_refs
 
 warm_count=0
@@ -382,6 +397,30 @@ if [[ "$lane" == "rolling" && "$strategy" == "boringcache" ]]; then
   else
     reseed_reason="OCI upload diagnostics unavailable"
   fi
+fi
+
+warm_rerun_succeeded=$([[ -n "$warm1_seconds" ]] && echo true || echo false)
+sample_valid=true
+reporting_mode="comparative"
+reporting_reason=""
+reporting_note=""
+validity_reason=""
+
+if [[ "$strategy" == "boringcache" && "$lane" == "fresh" && -n "$warm1_seconds" && -n "$cache_import_status" && "$cache_import_status" != "ok" ]]; then
+  warm_rerun_succeeded=false
+  sample_valid=false
+  reporting_mode="invalid"
+  reporting_reason="fresh_warm_cache_import_not_ok"
+  reporting_note="Fresh BoringCache warm reruns require a usable cache import; treat this run as invalid."
+  validity_reason="fresh_warm_cache_import_not_ok"
+elif [[ "$strategy" == "boringcache" && "$lane" == "rolling" && "$rolling_reseed" == "true" ]]; then
+  reporting_mode="investigation_only"
+  reporting_reason="rolling_reseed"
+  reporting_note="Rolling Docker reseeds are first-build investigation samples, not steady-state parity."
+elif [[ "$strategy" == "boringcache" && "$lane" == "rolling" && -n "$cache_import_status" && "$cache_import_status" != "ok" ]]; then
+  reporting_mode="investigation_only"
+  reporting_reason="rolling_cache_import_not_ok"
+  reporting_note="Rolling BoringCache seed completed without a usable cache import; treat this run as investigation-only."
 fi
 
 lane_label() {
@@ -468,6 +507,12 @@ cat > "$json_path" <<JSON
     "upload_batch_seconds": $(json_num_or_null "$oci_upload_batch_seconds")
   },
   "classification": {
+    "sample_valid": $sample_valid,
+    "reporting_mode": $(json_string_or_null "$reporting_mode"),
+    "reporting_reason": $(json_string_or_null "$reporting_reason"),
+    "reporting_note": $(json_string_or_null "$reporting_note"),
+    "validity_reason": $(json_string_or_null "$validity_reason"),
+    "cache_import_status": $(json_string_or_null "$cache_import_status"),
     "rolling_reseed": $rolling_reseed,
     "steady_state_candidate": $steady_state_candidate,
     "reseed_new_blob_threshold": $reseed_new_blob_threshold,
@@ -478,7 +523,7 @@ cat > "$json_path" <<JSON
     "bytes_downloaded": $(json_num_or_null "$bytes_downloaded")
   },
   "hit_behavior": {
-    "warm_rerun_succeeded": $([[ -n "$warm1_seconds" ]] && echo true || echo false),
+    "warm_rerun_succeeded": $warm_rerun_succeeded,
     "note": $(json_string_or_null "$hit_behavior_note")
   }
 }
@@ -517,6 +562,16 @@ JSON
   if [[ "$warm_avg" != "null" ]]; then
     echo "| Warm avg | ${warm_avg}s (${warm_improvement_pct}% faster) |"
   fi
+  echo "| Reporting mode | ${reporting_mode} |"
+  if [[ "$sample_valid" != "true" ]]; then
+    echo "| Validity reason | ${validity_reason} |"
+  fi
+  if [[ -n "$reporting_reason" ]]; then
+    echo "| Reporting reason | ${reporting_reason} |"
+  fi
+  if [[ -n "$cache_import_status" ]]; then
+    echo "| Cache import status | ${cache_import_status} |"
+  fi
 
   if [[ "$cache_storage_bytes" != "0" ]]; then
     echo "| Cache storage | ${cache_storage_mib} MiB |"
@@ -552,6 +607,9 @@ JSON
   if [[ "$rolling_reseed" != "null" ]]; then
     echo "| Rolling classification | $([[ "$rolling_reseed" == "true" ]] && echo "reseed" || echo "steady-state candidate") |"
     echo "| Rolling classification reason | ${reseed_reason} |"
+  fi
+  if [[ -n "$reporting_note" ]]; then
+    echo "| Reporting note | ${reporting_note} |"
   fi
 
   if [[ -n "$bytes_uploaded" ]]; then

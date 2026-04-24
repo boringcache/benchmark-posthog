@@ -54,6 +54,7 @@ jobs:
     outputs:
       cache_scope: ${{ steps.scope.outputs.cache_scope }}
       cold_seconds: ${{ steps.cold_baseline_build.outputs.seconds }}
+      cache_import_status: ${{ steps.cold_baseline_build.outputs.cache_import_status }}
       docker_cache_export_seconds: ${{ steps.cold_baseline_build.outputs.docker_cache_export_seconds }}
       oci_hydration_policy: ${{ steps.cold_baseline_build.outputs.oci_hydration_policy }}
       oci_body_local_hits: ${{ steps.cold_baseline_build.outputs.oci_body_local_hits }}
@@ -195,78 +196,26 @@ jobs:
           max_attempts=3
           cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
           cache_import_blob_pattern='failed to copy: httpReadSeeker: failed open: could not fetch content descriptor .* from remote: (not found|500 Internal Server Error)|Blob storage returned error|OCI blob body download failed'
-          cache_ready_timeout_seconds=15
-
           mode="${1:-full}"
+          cache_import_ready="${BORINGCACHE_CACHE_IMPORT_READY:-true}"
+          cache_requested_from_refs="${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}"
+          cache_used_from_refs="${BORINGCACHE_CACHE_USED_FROM_REFS:-}"
+          cache_unreadable_from_refs="${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}"
           start_proxy() { :; }
           stop_proxy() { :; }
-          cache_from_ref_tags() {
-            [[ -n "${CACHE_FROM:-}" ]] || return 0
-            printf '%s\n' "$CACHE_FROM" | sed -nE 's#.*ref=[^:]+/cache:([^,]+).*#\1#p'
-          }
-          cache_from_probe_ref_tag() {
-            local ref=""
-            local fallback=""
-            while IFS= read -r ref; do
-              [[ -n "$ref" ]] || continue
-              if [[ "$ref" == "buildcache" ]]; then
-                echo "$ref"
-                return 0
-              fi
-              fallback="$ref"
-            done < <(cache_from_ref_tags)
-            [[ -n "$fallback" ]] && echo "$fallback"
-          }
-          cache_from_refs_ready() {
-            local ref=""
-            ref="$(cache_from_probe_ref_tag)"
-            [[ -n "$ref" ]] || return 1
-            if curl -fsSI \
-              -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json' \
-              "http://127.0.0.1:${proxy_port}/v2/cache/manifests/${ref}" >/dev/null 2>&1; then
-              echo "Registry proxy cache ref is readable: cache:${ref}"
-              return 0
-            fi
-            return 1
-          }
-          wait_proxy_ready() {
-            local started phase elapsed ready require_cache_refs
+          ensure_proxy_available() {
+            local started elapsed
             started="$(date +%s)"
-            ready=0
-            require_cache_refs=0
-
-            if [[ "$mode" =~ ^(full|partial-warm)$ ]] && cache_from_is_enabled; then
-              require_cache_refs=1
-            fi
-
             while true; do
               if curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$status_snapshot_path" 2>/dev/null; then
-                phase="$(jq -r '.phase // empty' "$status_snapshot_path" 2>/dev/null || true)"
-                if [[ "$phase" == "ready" ]]; then
-                  ready=1
-                  if [[ "$require_cache_refs" != "1" ]] || cache_from_refs_ready; then
-                    return 0
-                  fi
-                fi
+                return 0
               fi
-
               elapsed=$(($(date +%s) - started))
-              if (( elapsed >= cache_ready_timeout_seconds )); then
-                break
+              if (( elapsed >= 5 )); then
+                return 1
               fi
               sleep 1
             done
-
-            if [[ "$ready" == "1" ]]; then
-              if [[ "$require_cache_refs" == "1" && "$mode" == "partial-warm" ]]; then
-                echo "Registry proxy reached ready state before cache-from refs became readable; refusing invalid warm sample after ${cache_ready_timeout_seconds}s" >&2
-                return 1
-              fi
-              echo "Registry proxy reached ready state before cache-from refs became readable; continuing after ${cache_ready_timeout_seconds}s"
-              return 0
-            fi
-
-            return 1
           }
           flush_action_proxy() {
             local pid_file="${BORINGCACHE_PROXY_PID_FILE:-/tmp/boringcache-proxy.pid}"
@@ -413,8 +362,14 @@ jobs:
             curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$output_path" 2>/dev/null || true
           }
 
+          cache_from_requested() {
+            [[ "$mode" =~ ^(full|partial-warm)$ ]] && [[ -n "$cache_requested_from_refs" ]]
+          }
+
           build_import_status() {
-            if grep -Eq 'failed to configure .*cache importer' "$build_log"; then
+            if cache_from_requested && [[ "$cache_import_ready" != "true" ]]; then
+              echo "proxy_unreadable"
+            elif grep -Eq 'failed to configure .*cache importer' "$build_log"; then
               echo "not_found"
             elif grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
               echo "ok"
@@ -438,6 +393,10 @@ jobs:
               echo "builder=${BUILDER:-}"
               echo "cache_scope=${CACHE_SCOPE:-}"
               echo "cache_from=${CACHE_FROM:-}"
+              echo "cache_import_ready=${cache_import_ready}"
+              echo "cache_requested_from_refs=${cache_requested_from_refs}"
+              echo "cache_used_from_refs=${cache_used_from_refs}"
+              echo "cache_unreadable_from_refs=${cache_unreadable_from_refs}"
               echo "cache_from_disabled=${cache_from_disabled:-0}"
               echo "cache_to=${CACHE_TO:-}"
               echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
@@ -501,8 +460,8 @@ jobs:
               exit 1
             fi
             start_proxy
-            if ! wait_proxy_ready; then
-              echo "Registry proxy did not become ready (attempt ${attempt}/${max_attempts})" >&2
+            if ! ensure_proxy_available; then
+              echo "Registry proxy status was unavailable before build start (attempt ${attempt}/${max_attempts})" >&2
               tail -n 200 "$proxy_log" || true
               if [[ "$attempt" -ge "$max_attempts" ]]; then
                 write_build_diagnostics
@@ -617,6 +576,10 @@ jobs:
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
+          BORINGCACHE_CACHE_IMPORT_READY: ${{ steps.docker_cache.outputs.docker-cache-import-ready }}
+          BORINGCACHE_CACHE_REQUESTED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-requested-from-refs }}
+          BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
+          BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
@@ -746,78 +709,26 @@ jobs:
           max_attempts=3
           cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
           cache_import_blob_pattern='failed to copy: httpReadSeeker: failed open: could not fetch content descriptor .* from remote: (not found|500 Internal Server Error)|Blob storage returned error|OCI blob body download failed'
-          cache_ready_timeout_seconds=15
-
           mode="${1:-full}"
+          cache_import_ready="${BORINGCACHE_CACHE_IMPORT_READY:-true}"
+          cache_requested_from_refs="${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}"
+          cache_used_from_refs="${BORINGCACHE_CACHE_USED_FROM_REFS:-}"
+          cache_unreadable_from_refs="${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}"
           start_proxy() { :; }
           stop_proxy() { :; }
-          cache_from_ref_tags() {
-            [[ -n "${CACHE_FROM:-}" ]] || return 0
-            printf '%s\n' "$CACHE_FROM" | sed -nE 's#.*ref=[^:]+/cache:([^,]+).*#\1#p'
-          }
-          cache_from_probe_ref_tag() {
-            local ref=""
-            local fallback=""
-            while IFS= read -r ref; do
-              [[ -n "$ref" ]] || continue
-              if [[ "$ref" == "buildcache" ]]; then
-                echo "$ref"
-                return 0
-              fi
-              fallback="$ref"
-            done < <(cache_from_ref_tags)
-            [[ -n "$fallback" ]] && echo "$fallback"
-          }
-          cache_from_refs_ready() {
-            local ref=""
-            ref="$(cache_from_probe_ref_tag)"
-            [[ -n "$ref" ]] || return 1
-            if curl -fsSI \
-              -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json' \
-              "http://127.0.0.1:${proxy_port}/v2/cache/manifests/${ref}" >/dev/null 2>&1; then
-              echo "Registry proxy cache ref is readable: cache:${ref}"
-              return 0
-            fi
-            return 1
-          }
-          wait_proxy_ready() {
-            local started phase elapsed ready require_cache_refs
+          ensure_proxy_available() {
+            local started elapsed
             started="$(date +%s)"
-            ready=0
-            require_cache_refs=0
-
-            if [[ "$mode" =~ ^(full|partial-warm)$ ]] && cache_from_is_enabled; then
-              require_cache_refs=1
-            fi
-
             while true; do
               if curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$status_snapshot_path" 2>/dev/null; then
-                phase="$(jq -r '.phase // empty' "$status_snapshot_path" 2>/dev/null || true)"
-                if [[ "$phase" == "ready" ]]; then
-                  ready=1
-                  if [[ "$require_cache_refs" != "1" ]] || cache_from_refs_ready; then
-                    return 0
-                  fi
-                fi
+                return 0
               fi
-
               elapsed=$(($(date +%s) - started))
-              if (( elapsed >= cache_ready_timeout_seconds )); then
-                break
+              if (( elapsed >= 5 )); then
+                return 1
               fi
               sleep 1
             done
-
-            if [[ "$ready" == "1" ]]; then
-              if [[ "$require_cache_refs" == "1" && "$mode" == "partial-warm" ]]; then
-                echo "Registry proxy reached ready state before cache-from refs became readable; refusing invalid warm sample after ${cache_ready_timeout_seconds}s" >&2
-                return 1
-              fi
-              echo "Registry proxy reached ready state before cache-from refs became readable; continuing after ${cache_ready_timeout_seconds}s"
-              return 0
-            fi
-
-            return 1
           }
           flush_action_proxy() {
             local pid_file="${BORINGCACHE_PROXY_PID_FILE:-/tmp/boringcache-proxy.pid}"
@@ -964,8 +875,14 @@ jobs:
             curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$output_path" 2>/dev/null || true
           }
 
+          cache_from_requested() {
+            [[ "$mode" =~ ^(full|partial-warm)$ ]] && [[ -n "$cache_requested_from_refs" ]]
+          }
+
           build_import_status() {
-            if grep -Eq 'failed to configure .*cache importer' "$build_log"; then
+            if cache_from_requested && [[ "$cache_import_ready" != "true" ]]; then
+              echo "proxy_unreadable"
+            elif grep -Eq 'failed to configure .*cache importer' "$build_log"; then
               echo "not_found"
             elif grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
               echo "ok"
@@ -999,8 +916,8 @@ jobs:
               exit 1
             fi
             start_proxy
-            if ! wait_proxy_ready; then
-              echo "Registry proxy did not become ready (attempt ${attempt}/${max_attempts})" >&2
+            if ! ensure_proxy_available; then
+              echo "Registry proxy status was unavailable before build start (attempt ${attempt}/${max_attempts})" >&2
               tail -n 200 "$proxy_log" || true
               if [[ "$attempt" -ge "$max_attempts" ]]; then
                 exit 1
@@ -1112,6 +1029,10 @@ jobs:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
           BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
+          BORINGCACHE_CACHE_IMPORT_READY: ${{ steps.docker_cache.outputs.docker-cache-import-ready }}
+          BORINGCACHE_CACHE_REQUESTED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-requested-from-refs }}
+          BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
+          BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
           BUILDER: ${{ steps.docker_cache.outputs.buildx-name }}
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
@@ -1264,7 +1185,7 @@ jobs:
             if [[ -n "${docker_cache_import_seconds}" ]]; then
               echo "${key}_docker_cache_import_seconds=${docker_cache_import_seconds}" >> "$GITHUB_OUTPUT"
             fi
-            metric_names=(oci_hydration_policy oci_body_local_hits oci_body_remote_fetches oci_body_local_bytes oci_body_remote_bytes oci_body_local_duration_ms oci_body_remote_duration_ms startup_oci_body_inserted startup_oci_body_failures startup_oci_body_cold_blobs startup_oci_body_duration_ms)
+            metric_names=(cache_import_status oci_hydration_policy oci_body_local_hits oci_body_remote_fetches oci_body_local_bytes oci_body_remote_bytes oci_body_local_duration_ms oci_body_remote_duration_ms startup_oci_body_inserted startup_oci_body_failures startup_oci_body_cold_blobs startup_oci_body_duration_ms)
             for metric_name in "${metric_names[@]}"; do
               metric_value="$(grep "^${metric_name}=" "$file" | head -n1 | cut -d= -f2- || true)"
               if [[ -n "${metric_value}" ]]; then
@@ -1297,6 +1218,7 @@ jobs:
             --project-ref "${{ steps.upstream_ref.outputs.sha }}" \
             --cold-seconds "${{ needs.seed-cache.outputs.cold_seconds }}" \
             --warm1-seconds "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.warm1_seconds }}" \
+            --cache-import-status "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.cache_import_status || steps.timings.outputs.warm1_cache_import_status }}" \
             --docker-cache-import-seconds "${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.warm1_docker_cache_import_seconds }}" \
             --docker-cache-export-seconds "${{ needs.seed-cache.outputs.docker_cache_export_seconds }}" \
             --cache-storage-bytes "${{ steps.cache_size.outputs.bytes }}" \

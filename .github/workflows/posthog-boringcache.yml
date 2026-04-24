@@ -1067,6 +1067,7 @@ jobs:
           set -euo pipefail
           seconds=""
           build_seconds=""
+          cache_import_status=""
           docker_cache_import_seconds=""
           metric_names=(oci_hydration_policy oci_body_local_hits oci_body_remote_fetches oci_body_local_bytes oci_body_remote_bytes oci_body_local_duration_ms oci_body_remote_duration_ms startup_oci_body_inserted startup_oci_body_failures startup_oci_body_cold_blobs startup_oci_body_duration_ms)
           for metric_name in "${metric_names[@]}"; do
@@ -1074,6 +1075,7 @@ jobs:
           done
           seconds="${{ steps.warm1_build.outputs.seconds }}"
           build_seconds="${{ steps.warm1_build.outputs.build_seconds }}"
+          cache_import_status="${{ steps.warm1_build.outputs.cache_import_status }}"
           docker_cache_import_seconds="${{ steps.warm1_build.outputs.docker_cache_import_seconds }}"
           oci_hydration_policy="${{ steps.warm1_build.outputs.oci_hydration_policy }}"
           oci_body_local_hits="${{ steps.warm1_build.outputs.oci_body_local_hits }}"
@@ -1092,6 +1094,9 @@ jobs:
           fi
           echo "seconds=${seconds}" >> "$GITHUB_OUTPUT"
           echo "build_seconds=${build_seconds}" >> "$GITHUB_OUTPUT"
+          if [[ -n "${cache_import_status}" ]]; then
+            echo "cache_import_status=${cache_import_status}" >> "$GITHUB_OUTPUT"
+          fi
           if [[ -n "${docker_cache_import_seconds}" ]]; then
             echo "docker_cache_import_seconds=${docker_cache_import_seconds}" >> "$GITHUB_OUTPUT"
           fi
@@ -1109,6 +1114,7 @@ jobs:
           phase=warm1
           seconds=${{ steps.phase_timing.outputs.seconds }}
           build_seconds=${{ steps.phase_timing.outputs.build_seconds }}
+          cache_import_status=${{ steps.phase_timing.outputs.cache_import_status }}
           docker_cache_import_seconds=${{ steps.phase_timing.outputs.docker_cache_import_seconds }}
           oci_hydration_policy=${{ steps.phase_timing.outputs.oci_hydration_policy }}
           oci_body_local_hits=${{ steps.phase_timing.outputs.oci_body_local_hits }}

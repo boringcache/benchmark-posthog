@@ -193,9 +193,8 @@ jobs:
           proxy_log="${BORINGCACHE_PROXY_LOG_PATH:-/tmp/boringcache-proxy-${proxy_port}.log}"
           build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
           status_snapshot_path="$(mktemp /tmp/boringcache-status.XXXXXX.json)"
-          max_attempts=3
+          max_attempts=1
           cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
-          cache_import_blob_pattern='failed to copy: httpReadSeeker: failed open: could not fetch content descriptor .* from remote: (not found|500 Internal Server Error)|Blob storage returned error|OCI blob body download failed'
           mode="${1:-full}"
           cache_import_ready="${BORINGCACHE_CACHE_IMPORT_READY:-true}"
           cache_requested_from_refs="${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}"
@@ -397,7 +396,6 @@ jobs:
               echo "cache_requested_from_refs=${cache_requested_from_refs}"
               echo "cache_used_from_refs=${cache_used_from_refs}"
               echo "cache_unreadable_from_refs=${cache_unreadable_from_refs}"
-              echo "cache_from_disabled=${cache_from_disabled:-0}"
               echo "cache_to=${CACHE_TO:-}"
               echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
               echo "docker_registry_tag=${BORINGCACHE_DOCKER_REGISTRY_TAG:-}"
@@ -435,16 +433,12 @@ jobs:
             } > "$output_path"
           }
 
-          cache_from_disabled=0
-          cache_from_is_enabled() {
-            [[ "$cache_from_disabled" != "1" && -n "${CACHE_FROM:-}" ]]
-          }
 
           attempt=1
           while true; do
             cache_args=()
             if [[ "$mode" == "full" ]]; then
-              cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
+              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
             elif [[ "$mode" == "seed-cache" ]]; then
               # --no-cache is required for type=registry export: without it, buildx
@@ -454,7 +448,7 @@ jobs:
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
             elif [[ "$mode" == "partial-warm" ]]; then
               # Read-only: no --cache-to.
-              cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
+              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
             else
               echo "Unknown build mode: $mode" >&2
               exit 1
@@ -497,14 +491,14 @@ jobs:
                 exit 1
               fi
               if [[ "$mode" =~ ^(full|seed-cache)$ ]] && grep -Eq "$cache_export_pattern" "$build_log"; then
+                capture_proxy_status
+                write_build_metrics
+                write_build_diagnostics
+                echo "Build succeeded but registry cache export reported an error; failing benchmark." >&2
+                tail -n 200 "$build_log" || true
+                tail -n 400 "$proxy_log" || true
                 stop_proxy
-                if [[ "$attempt" -lt "$max_attempts" ]]; then
-                  echo "Build succeeded but cache export was degraded (attempt ${attempt}/${max_attempts}); retrying to self-heal cache..." >&2
-                  attempt=$((attempt + 1))
-                  sleep 3
-                  continue
-                fi
-                echo "Build succeeded but cache export still degraded after ${max_attempts} attempts; continuing run with best-effort cache state." >&2
+                exit 1
               fi
               capture_proxy_status
               # Stop proxy gracefully so it can flush pending uploads
@@ -523,10 +517,6 @@ jobs:
 
             stop_proxy
 
-            if [[ "$cache_from_disabled" != "1" && "$mode" =~ ^(full|partial-warm)$ ]] && grep -Eq "$cache_import_blob_pattern" "$build_log"; then
-              echo "Detected registry cache manifest with an unreadable blob body (attempt ${attempt}/${max_attempts}); retrying without --cache-from to reseed." >&2
-              cache_from_disabled=1
-            fi
 
             if [[ "$attempt" -ge "$max_attempts" ]]; then
               echo "Build (${mode}) failed after ${max_attempts} attempts" >&2
@@ -536,14 +526,6 @@ jobs:
               exit "$status"
             fi
 
-            if grep -Eq "$cache_export_pattern" "$build_log"; then
-              echo "Detected registry blob finalize mismatch (attempt ${attempt}/${max_attempts}); restarting proxy and retrying..." >&2
-            else
-              echo "Build (${mode}) failed (attempt ${attempt}/${max_attempts}); retrying..." >&2
-            fi
-
-            attempt=$((attempt + 1))
-            sleep 3
           done
           SH
           chmod +x ./run-boringcache-build.sh
@@ -706,9 +688,8 @@ jobs:
           proxy_log="${BORINGCACHE_PROXY_LOG_PATH:-/tmp/boringcache-proxy-${proxy_port}.log}"
           build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
           status_snapshot_path="$(mktemp /tmp/boringcache-status.XXXXXX.json)"
-          max_attempts=3
+          max_attempts=1
           cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
-          cache_import_blob_pattern='failed to copy: httpReadSeeker: failed open: could not fetch content descriptor .* from remote: (not found|500 Internal Server Error)|Blob storage returned error|OCI blob body download failed'
           mode="${1:-full}"
           cache_import_ready="${BORINGCACHE_CACHE_IMPORT_READY:-true}"
           cache_requested_from_refs="${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}"
@@ -891,16 +872,12 @@ jobs:
             fi
           }
 
-          cache_from_disabled=0
-          cache_from_is_enabled() {
-            [[ "$cache_from_disabled" != "1" && -n "${CACHE_FROM:-}" ]]
-          }
 
           attempt=1
           while true; do
             cache_args=()
             if [[ "$mode" == "full" ]]; then
-              cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
+              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
             elif [[ "$mode" == "seed-cache" ]]; then
               # --no-cache is required for type=registry export: without it, buildx
@@ -910,7 +887,7 @@ jobs:
               [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
             elif [[ "$mode" == "partial-warm" ]]; then
               # Read-only: no --cache-to.
-              cache_from_is_enabled && cache_args+=(--cache-from "$CACHE_FROM")
+              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
             else
               echo "Unknown build mode: $mode" >&2
               exit 1
@@ -952,14 +929,14 @@ jobs:
                 exit 1
               fi
               if [[ "$mode" =~ ^(full|seed-cache)$ ]] && grep -Eq "$cache_export_pattern" "$build_log"; then
+                capture_proxy_status
+                write_build_metrics
+                write_build_diagnostics
+                echo "Build succeeded but registry cache export reported an error; failing benchmark." >&2
+                tail -n 200 "$build_log" || true
+                tail -n 400 "$proxy_log" || true
                 stop_proxy
-                if [[ "$attempt" -lt "$max_attempts" ]]; then
-                  echo "Build succeeded but cache export was degraded (attempt ${attempt}/${max_attempts}); retrying to self-heal cache..." >&2
-                  attempt=$((attempt + 1))
-                  sleep 3
-                  continue
-                fi
-                echo "Build succeeded but cache export still degraded after ${max_attempts} attempts; continuing run with best-effort cache state." >&2
+                exit 1
               fi
               capture_proxy_status
               # Stop proxy gracefully so it can flush pending uploads
@@ -977,10 +954,6 @@ jobs:
 
             stop_proxy
 
-            if [[ "$cache_from_disabled" != "1" && "$mode" =~ ^(full|partial-warm)$ ]] && grep -Eq "$cache_import_blob_pattern" "$build_log"; then
-              echo "Detected registry cache manifest with an unreadable blob body (attempt ${attempt}/${max_attempts}); retrying without --cache-from to reseed." >&2
-              cache_from_disabled=1
-            fi
 
             if [[ "$attempt" -ge "$max_attempts" ]]; then
               echo "Build (${mode}) failed after ${max_attempts} attempts" >&2
@@ -989,14 +962,6 @@ jobs:
               exit "$status"
             fi
 
-            if grep -Eq "$cache_export_pattern" "$build_log"; then
-              echo "Detected registry blob finalize mismatch (attempt ${attempt}/${max_attempts}); restarting proxy and retrying..." >&2
-            else
-              echo "Build (${mode}) failed (attempt ${attempt}/${max_attempts}); retrying..." >&2
-            fi
-
-            attempt=$((attempt + 1))
-            sleep 3
           done
           SH
           chmod +x ./run-boringcache-build.sh

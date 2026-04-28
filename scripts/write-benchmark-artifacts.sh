@@ -38,6 +38,8 @@ oci_upload_requested_blobs=""
 oci_upload_already_present=""
 oci_upload_batch_seconds=""
 reseed_new_blob_threshold="${BENCHMARK_RESEED_NEW_BLOB_THRESHOLD:-0}"
+tiny_metadata_churn_max_blobs="${BENCHMARK_TINY_METADATA_CHURN_MAX_BLOBS:-1}"
+tiny_metadata_churn_max_bytes="${BENCHMARK_TINY_METADATA_CHURN_MAX_BYTES:-65536}"
 output_dir="benchmark-results"
 
 while [[ $# -gt 0 ]]; do
@@ -188,6 +190,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --reseed-new-blob-threshold)
       reseed_new_blob_threshold="$2"
+      shift 2
+      ;;
+    --tiny-metadata-churn-max-blobs)
+      tiny_metadata_churn_max_blobs="$2"
+      shift 2
+      ;;
+    --tiny-metadata-churn-max-bytes)
+      tiny_metadata_churn_max_bytes="$2"
       shift 2
       ;;
     --output-dir)
@@ -352,6 +362,10 @@ oci_upload_already_present="$(sanitize_uint "$oci_upload_already_present")"
 oci_upload_batch_seconds="$(sanitize_number "$oci_upload_batch_seconds")"
 reseed_new_blob_threshold="$(sanitize_uint "$reseed_new_blob_threshold")"
 reseed_new_blob_threshold="${reseed_new_blob_threshold:-0}"
+tiny_metadata_churn_max_blobs="$(sanitize_uint "$tiny_metadata_churn_max_blobs")"
+tiny_metadata_churn_max_blobs="${tiny_metadata_churn_max_blobs:-1}"
+tiny_metadata_churn_max_bytes="$(sanitize_uint "$tiny_metadata_churn_max_bytes")"
+tiny_metadata_churn_max_bytes="${tiny_metadata_churn_max_bytes:-65536}"
 cache_import_status="$(sanitize_token "$cache_import_status")"
 collect_default_product_refs
 
@@ -379,19 +393,35 @@ cache_storage_mib=$(awk -v bytes="$cache_storage_bytes" 'BEGIN { printf "%.2f", 
 
 rolling_reseed="null"
 steady_state_candidate="null"
+rolling_reseed_kind=""
+tiny_metadata_churn=false
 reseed_reason=""
 if [[ "$lane" == "rolling" && "$strategy" == "boringcache" ]]; then
   if [[ -n "$oci_new_blob_count" ]]; then
     if (( oci_new_blob_count > reseed_new_blob_threshold )); then
       rolling_reseed="true"
       steady_state_candidate="false"
-      reseed_reason="${oci_new_blob_count} new OCI blobs exceeded threshold ${reseed_new_blob_threshold}"
-      if [[ -n "$oci_new_blob_bytes" ]]; then
-        reseed_reason+=" (${oci_new_blob_bytes} bytes)"
+      if [[ "$cache_import_status" == "ok" && -n "$oci_new_blob_bytes" ]] \
+        && (( oci_new_blob_count <= tiny_metadata_churn_max_blobs )) \
+        && (( oci_new_blob_bytes <= tiny_metadata_churn_max_bytes )); then
+        rolling_reseed_kind="tiny_metadata_churn"
+        tiny_metadata_churn=true
+        blob_word="blobs"
+        if (( oci_new_blob_count == 1 )); then
+          blob_word="blob"
+        fi
+        reseed_reason="${oci_new_blob_count} tiny OCI metadata ${blob_word} changed (${oci_new_blob_bytes} bytes)"
+      else
+        rolling_reseed_kind="blob_reseed"
+        reseed_reason="${oci_new_blob_count} new OCI blobs exceeded threshold ${reseed_new_blob_threshold}"
+        if [[ -n "$oci_new_blob_bytes" ]]; then
+          reseed_reason+=" (${oci_new_blob_bytes} bytes)"
+        fi
       fi
     else
       rolling_reseed="false"
       steady_state_candidate="true"
+      rolling_reseed_kind="none"
       reseed_reason="new OCI blob count did not exceed threshold ${reseed_new_blob_threshold}"
     fi
   else
@@ -413,6 +443,10 @@ if [[ "$strategy" == "boringcache" && "$lane" == "fresh" && -n "$warm1_seconds" 
   reporting_reason="fresh_warm_cache_import_not_ok"
   reporting_note="Fresh BoringCache warm reruns require a usable cache import; treat this run as invalid."
   validity_reason="fresh_warm_cache_import_not_ok"
+elif [[ "$strategy" == "boringcache" && "$lane" == "rolling" && "$rolling_reseed_kind" == "tiny_metadata_churn" ]]; then
+  reporting_mode="investigation_only"
+  reporting_reason="rolling_metadata_churn"
+  reporting_note="Rolling Docker uploaded only tiny OCI metadata after a successful import; keep it separate from blob reseeds and do not treat it as steady-state parity."
 elif [[ "$strategy" == "boringcache" && "$lane" == "rolling" && "$rolling_reseed" == "true" ]]; then
   reporting_mode="investigation_only"
   reporting_reason="rolling_reseed"
@@ -514,6 +548,10 @@ cat > "$json_path" <<JSON
     "validity_reason": $(json_string_or_null "$validity_reason"),
     "cache_import_status": $(json_string_or_null "$cache_import_status"),
     "rolling_reseed": $rolling_reseed,
+    "rolling_reseed_kind": $(json_string_or_null "$rolling_reseed_kind"),
+    "tiny_metadata_churn": $tiny_metadata_churn,
+    "tiny_metadata_churn_max_blobs": $tiny_metadata_churn_max_blobs,
+    "tiny_metadata_churn_max_bytes": $tiny_metadata_churn_max_bytes,
     "steady_state_candidate": $steady_state_candidate,
     "reseed_new_blob_threshold": $reseed_new_blob_threshold,
     "reseed_reason": $(json_string_or_null "$reseed_reason")
@@ -605,7 +643,15 @@ JSON
     echo "| New OCI blob bytes | ${oci_new_blob_bytes} |"
   fi
   if [[ "$rolling_reseed" != "null" ]]; then
-    echo "| Rolling classification | $([[ "$rolling_reseed" == "true" ]] && echo "reseed" || echo "steady-state candidate") |"
+    rolling_label="steady-state candidate"
+    if [[ "$rolling_reseed" == "true" ]]; then
+      if [[ "$tiny_metadata_churn" == "true" ]]; then
+        rolling_label="tiny metadata churn"
+      else
+        rolling_label="reseed"
+      fi
+    fi
+    echo "| Rolling classification | ${rolling_label} |"
     echo "| Rolling classification reason | ${reseed_reason} |"
   fi
   if [[ -n "$reporting_note" ]]; then

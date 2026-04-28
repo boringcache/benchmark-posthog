@@ -1,0 +1,1633 @@
+name: "Reusable Docker BuildKit Benchmark"
+
+on:
+  workflow_call:
+    inputs:
+      strategy:
+        required: true
+        type: string
+      cache_lane:
+        required: false
+        type: string
+        default: fresh
+      benchmark_id:
+        required: true
+        type: string
+      project_repo:
+        required: true
+        type: string
+      dockerfile_path:
+        required: false
+        type: string
+        default: upstream/Dockerfile
+      docker_context:
+        required: false
+        type: string
+        default: upstream
+      image_tag:
+        required: true
+        type: string
+      cli_platform:
+        required: false
+        type: string
+        default: linux-amd64
+      benchmark_workspace:
+        required: false
+        type: string
+        default: boringcache/benchmarks
+      cli_ref:
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  PROJECT_REPO: ${{ inputs.project_repo }}
+  BENCHMARK_ID: ${{ inputs.benchmark_id }}
+  BENCHMARK_WORKSPACE: ${{ inputs.benchmark_workspace }}
+  CACHE_LANE: ${{ inputs.cache_lane }}
+
+jobs:
+  seed-cache:
+    name: ${{ format('Docker Seed ({0}, {1})', inputs.strategy == 'actions-cache' && 'actions/cache' || 'BoringCache', inputs.cache_lane == 'rolling' && 'rolling' || 'fresh') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      cache_scope: ${{ inputs.strategy == 'boringcache' && steps.scope.outputs.cache_scope || steps.cold_baseline_build.outputs.cache_scope }}
+      cold_seconds: ${{ steps.cold_baseline_build.outputs.seconds }}
+      scope_started_at: ${{ steps.scope.outputs.scope_started_at }}
+      docker_cache_export_seconds: ${{ steps.cold_baseline_build.outputs.docker_cache_export_seconds }}
+      tags_csv: ${{ steps.scope.outputs.tags_csv }}
+      cache_import_status: ${{ steps.cold_baseline_build.outputs.cache_import_status }}
+      oci_hydration_policy: ${{ steps.cold_baseline_build.outputs.oci_hydration_policy }}
+      oci_body_local_hits: ${{ steps.cold_baseline_build.outputs.oci_body_local_hits }}
+      oci_body_remote_fetches: ${{ steps.cold_baseline_build.outputs.oci_body_remote_fetches }}
+      oci_body_local_bytes: ${{ steps.cold_baseline_build.outputs.oci_body_local_bytes }}
+      oci_body_remote_bytes: ${{ steps.cold_baseline_build.outputs.oci_body_remote_bytes }}
+      oci_body_local_duration_ms: ${{ steps.cold_baseline_build.outputs.oci_body_local_duration_ms }}
+      oci_body_remote_duration_ms: ${{ steps.cold_baseline_build.outputs.oci_body_remote_duration_ms }}
+      startup_oci_body_inserted: ${{ steps.cold_baseline_build.outputs.startup_oci_body_inserted }}
+      startup_oci_body_failures: ${{ steps.cold_baseline_build.outputs.startup_oci_body_failures }}
+      startup_oci_body_cold_blobs: ${{ steps.cold_baseline_build.outputs.startup_oci_body_cold_blobs }}
+      startup_oci_body_duration_ms: ${{ steps.cold_baseline_build.outputs.startup_oci_body_duration_ms }}
+      oci_new_blob_count: ${{ steps.cold_baseline_build.outputs.oci_new_blob_count }}
+      oci_new_blob_bytes: ${{ steps.cold_baseline_build.outputs.oci_new_blob_bytes }}
+      oci_upload_requested_blobs: ${{ steps.cold_baseline_build.outputs.oci_upload_requested_blobs }}
+      oci_upload_already_present: ${{ steps.cold_baseline_build.outputs.oci_upload_already_present }}
+      oci_upload_batch_seconds: ${{ steps.cold_baseline_build.outputs.oci_upload_batch_seconds }}
+    steps:
+      - name: Validate BoringCache secrets
+        if: inputs.strategy == 'boringcache'
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${BORINGCACHE_RESTORE_TOKEN}" ]]; then
+            echo "Missing BORINGCACHE_RESTORE_TOKEN secret" >&2
+            exit 1
+          fi
+          if [[ -z "${BORINGCACHE_SAVE_TOKEN}" ]]; then
+            echo "Missing BORINGCACHE_SAVE_TOKEN secret" >&2
+            exit 1
+          fi
+
+      - name: Install BoringCache CLI with boringcache/one
+        if: inputs.strategy == 'boringcache'
+        uses: boringcache/one@v1
+        with:
+          setup: none
+          mode: archive
+          workspace: ${{ inputs.benchmark_workspace }}
+          cli-platform: ${{ inputs.cli_platform }}
+          cache-runtime: false
+
+      - name: Validate internal CLI ref diagnostic
+        if: inputs.strategy == 'boringcache' && inputs.cli_ref != ''
+        env:
+          CLI_REF: ${{ inputs.cli_ref }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          if [[ "${REPOSITORY_OWNER}" != "boringcache" ]]; then
+            echo "cli_ref is an internal BoringCache benchmark diagnostic and is disabled outside boringcache-owned benchmark repos." >&2
+            exit 1
+          fi
+          {
+            echo "### Internal CLI ref diagnostic"
+            echo
+            echo "Using boringcache/cli ref \`${CLI_REF}\` for the outer registry proxy only."
+            echo "Launch proof runs should leave \`cli_ref\` empty and use the released CLI resolved by \`boringcache/one@v1\`."
+            echo "The Dockerfile and build context remain the pinned upstream source; no BoringCache helper is mounted into Docker RUN steps."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout BoringCache CLI ref
+        if: inputs.strategy == 'boringcache' && inputs.cli_ref != ''
+        uses: actions/checkout@v6
+        with:
+          repository: boringcache/cli
+          ref: ${{ inputs.cli_ref }}
+          path: .boringcache-cli
+          fetch-depth: 1
+
+      - name: Build BoringCache CLI ref
+        if: inputs.strategy == 'boringcache' && inputs.cli_ref != ''
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          cargo build --release --locked --target x86_64-unknown-linux-musl --manifest-path .boringcache-cli/Cargo.toml --bin boringcache
+          mkdir -p "$HOME/.local/bin"
+          cp .boringcache-cli/target/x86_64-unknown-linux-musl/release/boringcache "$HOME/.local/bin/boringcache"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/boringcache" --version
+
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Checkout pinned upstream submodule shallowly
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+
+      - name: Prepare base benchmark source tree
+        run: ./scripts/prepare-source.sh base
+
+      - name: Start seed timing
+        id: seed_timing_start
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare benchmark scope
+        id: scope
+        run: |
+          set -euo pipefail
+          ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+          ref_slug="${ref_slug#-}"
+          ref_slug="${ref_slug%-}"
+          ref_slug="${ref_slug:-main}"
+          scope_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "scope_started_at=${scope_started_at}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$CACHE_LANE" == "rolling" ]]; then
+            run_suffix="rolling-${ref_slug}"
+          else
+            run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          fi
+
+          if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
+            cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
+            docker_registry_tag="${BENCHMARK_ID}-docker-layers-${run_suffix}"
+            tags_csv="${cache_scope},${docker_registry_tag}"
+            registry_proxy_tags="${cache_scope},${docker_registry_tag}"
+            echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
+            echo "docker_registry_tag=${docker_registry_tag}" >> "$GITHUB_OUTPUT"
+            echo "registry_proxy_tags=${registry_proxy_tags}" >> "$GITHUB_OUTPUT"
+            echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
+          else
+            if [[ "$CACHE_LANE" == "rolling" ]]; then
+              cache_scope_primary="${BENCHMARK_ID}-rolling-${ref_slug}"
+              cache_scope_fallback="${BENCHMARK_ID}-rolling-${ref_slug}-fallback"
+            else
+              cache_scope_primary="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}-s1"
+              cache_scope_fallback="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}-s2"
+            fi
+            echo "cache_scope_primary=${cache_scope_primary}" >> "$GITHUB_OUTPUT"
+            echo "cache_scope_fallback=${cache_scope_fallback}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare benchmark build inputs
+        if: inputs.strategy == 'boringcache'
+        run: |
+          cat > ./run-boringcache-build.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          proxy_port="${BORINGCACHE_PROXY_PORT:-5000}"
+          proxy_log="${BORINGCACHE_PROXY_LOG_PATH:-/tmp/boringcache-proxy-${proxy_port}.log}"
+          build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
+          status_snapshot_path="$(mktemp /tmp/boringcache-status.XXXXXX.json)"
+          max_attempts=1
+          cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
+          mode="${1:-full}"
+          cache_import_ready="${BORINGCACHE_CACHE_IMPORT_READY:-true}"
+          cache_requested_from_refs="${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}"
+          cache_used_from_refs="${BORINGCACHE_CACHE_USED_FROM_REFS:-}"
+          cache_unreadable_from_refs="${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}"
+          start_proxy() { :; }
+          stop_proxy() { :; }
+          ensure_proxy_available() {
+            local started elapsed
+            started="$(date +%s)"
+            while true; do
+              if curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$status_snapshot_path" 2>/dev/null; then
+                return 0
+              fi
+              elapsed=$(($(date +%s) - started))
+              if (( elapsed >= 5 )); then
+                return 1
+              fi
+              sleep 1
+            done
+          }
+          flush_action_proxy() {
+            local pid_file="${BORINGCACHE_PROXY_PID_FILE:-/tmp/boringcache-proxy.pid}"
+            [[ -s "$pid_file" ]] || return 0
+
+            local pid=""
+            pid="$(tr -d '[:space:]' < "$pid_file" 2>/dev/null || true)"
+            [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "Registry proxy (PID: $pid) already exited"
+              return 0
+            fi
+
+            echo "Stopping registry proxy (PID: $pid)..."
+            if ! kill -TERM "$pid" 2>/dev/null; then
+              echo "Failed to send SIGTERM to registry proxy (PID: $pid); continuing"
+              return 0
+            fi
+
+            local started elapsed
+            started="$(date +%s)"
+            while kill -0 "$pid" 2>/dev/null; do
+              sleep 1
+              elapsed=$(($(date +%s) - started))
+              if (( elapsed > 0 && elapsed % 30 == 0 )); then
+                echo "Waiting for registry proxy to flush and exit... (${elapsed}s elapsed)"
+              fi
+            done
+            elapsed=$(($(date +%s) - started))
+            echo "Registry proxy exited gracefully after ${elapsed}s"
+          }
+          cleanup() { :; }
+          trap cleanup EXIT
+
+          find_step_id() {
+            local pattern="$1"
+            sed -nE "s/^#([0-9]+) ${pattern}.*/\\1/p" "$build_log" | tail -n1
+          }
+
+          find_step_seconds() {
+            local step_id="$1"
+            [[ -n "$step_id" ]] || return 0
+            sed -nE "s/^#${step_id} DONE ([0-9]+(\\.[0-9]+)?)s$/\\1/p" "$build_log" | tail -n1
+          }
+
+          write_build_metrics() {
+            local output_path="${BENCHMARK_METRICS_OUTPUT:-}"
+            [[ -n "$output_path" ]] || return 0
+
+            local import_step=""
+            local export_step=""
+            local import_seconds=""
+            local export_seconds=""
+            local import_status=""
+
+            import_step="$(find_step_id "importing cache manifest from")"
+            export_step="$(find_step_id "exporting cache to registry")"
+            import_seconds="$(find_step_seconds "$import_step")"
+            export_seconds="$(find_step_seconds "$export_step")"
+            import_status="$(build_import_status)"
+
+            mkdir -p "$(dirname "$output_path")"
+            : > "$output_path"
+            echo "cache_import_status=$import_status" >> "$output_path"
+            if [[ -n "$import_seconds" ]]; then
+              echo "docker_cache_import_seconds=$import_seconds" >> "$output_path"
+            fi
+            if [[ -n "$export_seconds" ]]; then
+              echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
+            fi
+
+            if [[ -s "$status_snapshot_path" ]] && command -v jq >/dev/null 2>&1; then
+              append_status_metric() {
+                local key="$1"
+                local jq_expr="$2"
+                local value=""
+                value="$(jq -r "$jq_expr // empty" "$status_snapshot_path" 2>/dev/null || true)"
+                if [[ -n "$value" && "$value" != "null" ]]; then
+                  echo "$key=$value" >> "$output_path"
+                fi
+              }
+
+              append_status_metric oci_hydration_policy '.startup_prefetch.startup_prefetch_oci_hydration'
+              append_status_metric startup_oci_body_inserted '.startup_prefetch.startup_prefetch_oci_body_inserted'
+              append_status_metric startup_oci_body_failures '.startup_prefetch.startup_prefetch_oci_body_failures'
+              append_status_metric startup_oci_body_cold_blobs '.startup_prefetch.startup_prefetch_oci_body_cold_blobs'
+              append_status_metric startup_oci_body_duration_ms '.startup_prefetch.startup_prefetch_oci_body_duration_ms'
+              append_status_metric oci_body_local_hits '.oci_body.oci_body_local_hits'
+              append_status_metric oci_body_remote_fetches '.oci_body.oci_body_remote_fetches'
+              append_status_metric oci_body_local_bytes '.oci_body.oci_body_local_bytes'
+              append_status_metric oci_body_remote_bytes '.oci_body.oci_body_remote_bytes'
+              append_status_metric oci_body_local_duration_ms '.oci_body.oci_body_local_duration_ms'
+              append_status_metric oci_body_remote_duration_ms '.oci_body.oci_body_remote_duration_ms'
+            fi
+
+            local observability_path="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}"
+            if [[ -n "$observability_path" && -s "$observability_path" ]] && command -v jq >/dev/null 2>&1; then
+              detail_value() {
+                local details="$1"
+                local name="$2"
+                printf '%s\n' "$details" | tr ' ' '\n' | awk -F= -v key="$name" '$1 == key { print $2; exit }'
+              }
+              append_metric() {
+                local key="$1"
+                local value="$2"
+                if [[ -n "$value" && "$value" != "null" ]]; then
+                  echo "$key=$value" >> "$output_path"
+                fi
+              }
+
+              local plan_details=""
+              plan_details="$(jq -r 'select(.operation == "oci_blob_upload_plan") | .details // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
+              if [[ -n "$plan_details" ]]; then
+                append_metric oci_upload_requested_blobs "$(detail_value "$plan_details" requested_blobs)"
+                append_metric oci_new_blob_count "$(detail_value "$plan_details" upload_urls)"
+                append_metric oci_upload_already_present "$(detail_value "$plan_details" already_present)"
+              else
+                append_metric oci_new_blob_count "0"
+              fi
+
+              local uploaded_blob_bytes=""
+              uploaded_blob_bytes="$(jq -s -r '
+                ([range(0; length) as $i | select(.[$i].operation == "oci_blob_upload_plan") | $i] | last) as $plan
+                | if $plan == null then
+                    0
+                  else
+                    ([range(($plan + 1); length) as $i | .[$i] | select(.operation == "oci_blob_upload") | (.request_bytes // 0)] | add // 0)
+                  end
+              ' "$observability_path" 2>/dev/null || true)"
+              append_metric oci_new_blob_bytes "${uploaded_blob_bytes:-0}"
+
+              local batch_duration_ms=""
+              batch_duration_ms="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .duration_ms // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
+              if [[ -n "$batch_duration_ms" ]]; then
+                awk -v ms="$batch_duration_ms" 'BEGIN { printf "oci_upload_batch_seconds=%.3f\n", ms / 1000 }' >> "$output_path"
+              fi
+            fi
+          }
+
+
+          capture_proxy_status() {
+            local output_path="${1:-$status_snapshot_path}"
+            curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$output_path" 2>/dev/null || true
+          }
+
+          cache_from_requested() {
+            [[ "$mode" =~ ^(full|partial-warm)$ ]] && [[ -n "$cache_requested_from_refs" ]]
+          }
+
+          build_import_status() {
+            if cache_from_requested && [[ "$cache_import_ready" != "true" ]]; then
+              echo "proxy_unreadable"
+            elif grep -Eq 'failed to configure .*cache importer' "$build_log"; then
+              echo "not_found"
+            elif grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
+              echo "ok"
+            else
+              echo "none"
+            fi
+          }
+
+          write_build_diagnostics() {
+            local output_path="${BENCHMARK_DIAGNOSTICS_OUTPUT:-}"
+            [[ -n "$output_path" ]] || return 0
+
+            local cached_steps=""
+            cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
+            local observability_path="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}"
+
+            mkdir -p "$(dirname "$output_path")"
+            {
+              echo "strategy=boringcache"
+              echo "mode=${mode}"
+              echo "builder=${BUILDER:-}"
+              echo "cache_scope=${CACHE_SCOPE:-}"
+              echo "cache_from=${CACHE_FROM:-}"
+              echo "cache_import_ready=${cache_import_ready}"
+              echo "cache_requested_from_refs=${cache_requested_from_refs}"
+              echo "cache_used_from_refs=${cache_used_from_refs}"
+              echo "cache_unreadable_from_refs=${cache_unreadable_from_refs}"
+              echo "cache_to=${CACHE_TO:-}"
+              echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
+              echo "docker_registry_tag=${BORINGCACHE_DOCKER_REGISTRY_TAG:-}"
+              printf 'cache_args='
+              printf '%q ' "${cache_args[@]}"
+              printf '\n'
+              echo "import_status=$(build_import_status)"
+              echo "cached_steps=${cached_steps}"
+              echo "import_lines<<EOF"
+              grep -E 'importing cache manifest|failed to configure .*cache importer|inferred cache manifest type' "$build_log" || true
+              echo "EOF"
+              echo "export_lines<<EOF"
+              grep -E 'exporting cache to registry|DONE [0-9.]+s$' "$build_log" | tail -n 80 || true
+              echo "EOF"
+              echo "proxy_summary<<EOF"
+              grep -E 'Mode:|OCI Human Tags|Internal Registry Root Tag|Startup mode|Full-tag hydration|OCI body hydration|OCI HEAD|SESSION tool=oci|KV flush|root publish|error|warn' "$proxy_log" | tail -n 160 || true
+              echo "EOF"
+              echo "proxy_status<<EOF"
+              if [[ -s "$status_snapshot_path" ]]; then
+                cat "$status_snapshot_path"
+              fi
+              echo "EOF"
+              echo "slow_done_lines<<EOF"
+              grep -E '^#[0-9]+ DONE [0-9]+(\.[0-9]+)?s$' "$build_log" | tail -n 80 || true
+              echo "EOF"
+              echo "observability_jsonl=${observability_path}"
+              if [[ -n "$observability_path" && -s "$observability_path" ]]; then
+                printf 'observability_events='
+                wc -l < "$observability_path" | tr -d ' '
+                printf '\n'
+                echo "observability_summary<<EOF"
+                grep -E 'cache_session_summary|oci_blob_upload|upload_session_commit|cache_finalize_publish|receipt|429|rate' "$observability_path" | tail -n 160 || true
+                echo "EOF"
+              fi
+            } > "$output_path"
+          }
+
+
+          attempt=1
+          while true; do
+            cache_args=()
+            if [[ "$mode" == "full" ]]; then
+              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
+              [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
+            elif [[ "$mode" == "seed-cache" ]]; then
+              # --no-cache is required for type=registry export: without it, buildx
+              # sees cached layers from the builder and skips pushing blobs to the
+              # registry proxy, so the proxy never uploads to BC backend.
+              cache_args=(--no-cache)
+              [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
+            elif [[ "$mode" == "partial-warm" ]]; then
+              # Read-only: no --cache-to.
+              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
+            else
+              echo "Unknown build mode: $mode" >&2
+              exit 1
+            fi
+            start_proxy
+            if ! ensure_proxy_available; then
+              echo "Registry proxy status was unavailable before build start (attempt ${attempt}/${max_attempts})" >&2
+              tail -n 200 "$proxy_log" || true
+              if [[ "$attempt" -ge "$max_attempts" ]]; then
+                write_build_diagnostics
+                exit 1
+              fi
+              stop_proxy
+              attempt=$((attempt + 1))
+              sleep 3
+              continue
+            fi
+
+            : > "$build_log"
+            set +e
+            DOCKER_BUILDKIT=1 docker buildx build \
+              --builder "$BUILDER" \
+              --file ${{ inputs.dockerfile_path }} \
+              --tag "$IMAGE_TAG" \
+              --progress=plain \
+              "${cache_args[@]}" \
+              ${{ inputs.docker_context }} 2>&1 | tee "$build_log"
+            status=${PIPESTATUS[0]}
+            set -e
+
+            if [[ "$status" -eq 0 ]]; then
+              import_status="$(build_import_status)"
+              if [[ "$mode" == "partial-warm" && "$import_status" != "ok" ]]; then
+                capture_proxy_status
+                write_build_metrics
+                echo "Warm build completed without a usable registry cache import (status: ${import_status}); refusing invalid fresh sample." >&2
+                if [[ -n "${BENCHMARK_METRICS_OUTPUT:-}" && -s "$BENCHMARK_METRICS_OUTPUT" ]]; then
+                  cat "$BENCHMARK_METRICS_OUTPUT" >&2
+                fi
+                exit 1
+              fi
+              if [[ "$mode" =~ ^(full|seed-cache)$ ]] && grep -Eq "$cache_export_pattern" "$build_log"; then
+                capture_proxy_status
+                write_build_metrics
+                write_build_diagnostics
+                echo "Build succeeded but registry cache export reported an error; failing benchmark." >&2
+                tail -n 200 "$build_log" || true
+                tail -n 400 "$proxy_log" || true
+                stop_proxy
+                exit 1
+              fi
+              capture_proxy_status
+              # Stop proxy gracefully so it can flush pending uploads
+              if [[ "$mode" =~ ^(seed-cache|full)$ ]]; then
+                echo "Flushing proxy cache to backend..."
+                flush_action_proxy
+              fi
+              # Dump proxy log for diagnostics
+              echo "=== Proxy log (${mode}, last 200 lines) ==="
+              tail -n 200 "$proxy_log" 2>/dev/null || true
+              echo "=== End proxy log ==="
+              write_build_metrics
+              write_build_diagnostics
+              break
+            fi
+
+            stop_proxy
+
+
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Build (${mode}) failed after ${max_attempts} attempts" >&2
+              tail -n 200 "$build_log" || true
+              tail -n 400 "$proxy_log" || true
+              write_build_diagnostics
+              exit "$status"
+            fi
+
+          done
+          SH
+          chmod +x ./run-boringcache-build.sh
+
+      - name: Configure boringcache/one for Docker
+        if: inputs.strategy == 'boringcache'
+        id: docker_cache
+        uses: boringcache/one@v1
+        with:
+          cli-version: skip
+          setup: none
+          cache-runtime: false
+          mode: docker
+          docker-command: setup
+          workspace: ${{ inputs.benchmark_workspace }}
+          cache-tag: ${{ steps.scope.outputs.cache_scope }}
+          registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
+          proxy-no-git: 'true'
+          driver-opts: |
+            network=host
+          verbose: true
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-seed-observability.jsonl
+
+      - name: Set up Docker Buildx
+        if: inputs.strategy == 'actions-cache'
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Expose GitHub runtime for Buildx cache
+        if: inputs.strategy == 'actions-cache'
+        uses: crazy-max/ghaction-github-runtime@v4
+
+      - name: Prepare AC write probe
+        if: inputs.strategy == 'actions-cache'
+        run: |
+          set -euo pipefail
+          mkdir -p .bench-cache-probe
+          printf '%s\n' "probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(date +%s)" > .bench-cache-probe/probe.txt
+
+      - name: Verify Actions Cache write access
+        if: inputs.strategy == 'actions-cache'
+        id: cache_write_probe
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .bench-cache-probe
+          key: ac-${{ inputs.benchmark_id }}-write-probe-r${{ github.run_id }}-a${{ github.run_attempt }}
+
+      - name: Fail early if Actions Cache is read-only
+        if: inputs.strategy == 'actions-cache' && steps.cache_write_probe.outcome != 'success'
+        run: |
+          echo "Actions Cache write probe failed (likely read-only budget/spending cap)." >&2
+          echo "Cannot produce reliable AC benchmark results until cache writes are enabled." >&2
+          exit 1
+
+      - name: ${{ inputs.cache_lane == 'rolling' && 'Run rolling seed-only build' || 'Run fresh seed build' }}
+        id: cold_baseline_build
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+          BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
+          BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
+          BORINGCACHE_CACHE_IMPORT_READY: ${{ steps.docker_cache.outputs.docker-cache-import-ready }}
+          BORINGCACHE_CACHE_REQUESTED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-requested-from-refs }}
+          BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
+          BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
+          BUILDER: ${{ inputs.strategy == 'boringcache' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name }}
+          CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
+          CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
+          CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
+          CACHE_SCOPE_PRIMARY: ${{ steps.scope.outputs.cache_scope_primary }}
+          CACHE_SCOPE_FALLBACK: ${{ steps.scope.outputs.cache_scope_fallback }}
+          BORINGCACHE_REGISTRY_PROXY_TAGS: ${{ steps.scope.outputs.registry_proxy_tags }}
+          BORINGCACHE_DOCKER_REGISTRY_TAG: ${{ steps.scope.outputs.docker_registry_tag }}
+          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-seed-observability.jsonl
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
+            metrics_file="${RUNNER_TEMP}/cold-build-metrics.env"
+            diagnostics_file="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-${CACHE_LANE}-seed.txt"
+            observability_artifact="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-${CACHE_LANE}-seed-observability.jsonl"
+            rm -f "$metrics_file"
+            rm -f "$diagnostics_file"
+            rm -f "$observability_artifact"
+            mkdir -p "$(dirname "$diagnostics_file")"
+            phase_start="${{ steps.seed_timing_start.outputs.started_at }}"
+            start="$(date +%s)"
+            set +e
+            BENCHMARK_METRICS_OUTPUT="$metrics_file" BENCHMARK_DIAGNOSTICS_OUTPUT="$diagnostics_file" ./run-boringcache-build.sh ${{ inputs.cache_lane == 'rolling' && 'full' || 'seed-cache' }}
+            status="$?"
+            set -e
+            end="$(date +%s)"
+            if [[ -s "$diagnostics_file" ]]; then
+              {
+                echo "seed_phase_started_at=${phase_start}"
+                echo "seed_build_started_at=${start}"
+                echo "seed_build_finished_at=${end}"
+                echo "seed_phase_wall_seconds=$((end - phase_start))"
+                echo "seed_build_wall_seconds=$((end - start))"
+              } >> "$diagnostics_file"
+            fi
+            if [[ -s "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" ]]; then
+              cp "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" "$observability_artifact"
+            fi
+            if [[ "$status" -ne 0 ]]; then
+              exit "$status"
+            fi
+            echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+            echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+            if [[ -s "$metrics_file" ]]; then
+              cat "$metrics_file" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            build_log="$(mktemp /tmp/${BENCHMARK_ID}-ac-seed.XXXXXX.log)"
+            find_step_id() {
+              local pattern="$1"
+              sed -nE "s/^#([0-9]+) ${pattern}.*/\\1/p" "$build_log" | tail -n1
+            }
+            find_step_seconds() {
+              local step_id="$1"
+              [[ -n "$step_id" ]] || return 0
+              sed -nE "s/^#${step_id} DONE ([0-9]+(\\.[0-9]+)?)s$/\\1/p" "$build_log" | tail -n1
+            }
+
+            selected_scope="$CACHE_SCOPE_PRIMARY"
+            phase_start="${{ steps.seed_timing_start.outputs.started_at }}"
+            start="$(date +%s)"
+            attempt=1
+            while true; do
+              if [[ "$CACHE_LANE" == "rolling" ]]; then
+                build_cache_args=(
+                  --cache-from "type=gha,scope=${selected_scope}"
+                  --cache-to "type=gha,mode=max,scope=${selected_scope}"
+                )
+              else
+                build_cache_args=(
+                  --no-cache
+                  --cache-to "type=gha,mode=max,scope=${selected_scope}"
+                )
+              fi
+              : > "$build_log"
+              set +e
+              DOCKER_BUILDKIT=1 docker buildx build \
+                --builder "$BUILDER" \
+                --file ${{ inputs.dockerfile_path }} \
+                --tag ${{ inputs.image_tag }} \
+                --progress=plain \
+                "${build_cache_args[@]}" \
+                ${{ inputs.docker_context }} 2>&1 | tee "$build_log"
+              status=${PIPESTATUS[0]}
+              set -e
+
+              if [[ "$status" -eq 0 ]]; then
+                break
+              fi
+
+              if [[ "$attempt" -ge 2 ]]; then
+                echo "Cold + seed cache build failed after retry" >&2
+                exit "$status"
+              fi
+
+              attempt=$((attempt + 1))
+              if [[ "$attempt" -eq 2 ]]; then
+                selected_scope="$CACHE_SCOPE_FALLBACK"
+                echo "Retrying cold seed with fallback cache scope: ${selected_scope}"
+              fi
+              sleep 5
+            done
+
+            export_verified=0
+            for _ in $(seq 1 20); do
+              response="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100&key=index-${selected_scope}" 2>/dev/null || true)"
+              if [[ -n "$response" ]] && jq -e '.actions_caches | type == "array"' <<<"$response" >/dev/null 2>&1; then
+                matches="$(jq '.actions_caches | length' <<<"$response")"
+                if [[ "$matches" -gt 0 ]]; then
+                  export_verified=1
+                  break
+                fi
+              fi
+              sleep 3
+            done
+
+            if [[ "$export_verified" -ne 1 ]]; then
+              echo "Cold + seed cache export probe failed: no index cache entry was touched for index-${selected_scope}" >&2
+              exit 1
+            fi
+
+            end="$(date +%s)"
+            echo "cache_scope=${selected_scope}" >> "$GITHUB_OUTPUT"
+            echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+            echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+            export_step="$(find_step_id "preparing build cache for export")"
+            export_seconds="$(find_step_seconds "$export_step")"
+            if [[ -n "$export_seconds" ]]; then
+              echo "docker_cache_export_seconds=${export_seconds}" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Upload seed diagnostics
+        if: inputs.strategy == 'boringcache' && always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-diagnostics-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}
+          path: benchmark-diagnostics/*
+          if-no-files-found: ignore
+
+  scenario-builds:
+    name: ${{ format('Warm rerun ({0})', inputs.strategy == 'actions-cache' && 'GHA cache' || 'BoringCache') }}
+    needs: seed-cache
+    if: ${{ inputs.cache_lane != 'rolling' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      BORINGCACHE_SAVE_TOKEN: ''
+    steps:
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Checkout pinned upstream submodule shallowly
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+
+      - name: Prepare scenario source tree
+        run: ./scripts/prepare-source.sh warm1
+
+      - name: Start scenario timing
+        id: scenario_timing_start
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Install BoringCache CLI with boringcache/one
+        if: inputs.strategy == 'boringcache'
+        uses: boringcache/one@v1
+        with:
+          setup: none
+          mode: archive
+          workspace: ${{ inputs.benchmark_workspace }}
+          cli-platform: ${{ inputs.cli_platform }}
+          cache-runtime: false
+
+      - name: Prepare benchmark scope
+        if: inputs.strategy == 'boringcache'
+        id: scope
+        run: |
+          set -euo pipefail
+          ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+          ref_slug="${ref_slug#-}"
+          ref_slug="${ref_slug%-}"
+          ref_slug="${ref_slug:-main}"
+          if [[ "$CACHE_LANE" == "rolling" ]]; then
+            run_suffix="rolling-${ref_slug}"
+          else
+            run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          fi
+          cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
+          docker_registry_tag="${BENCHMARK_ID}-docker-layers-${run_suffix}"
+          tags_csv="${cache_scope},${docker_registry_tag}"
+          registry_proxy_tags="${cache_scope},${docker_registry_tag}"
+          echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
+          echo "docker_registry_tag=${docker_registry_tag}" >> "$GITHUB_OUTPUT"
+          echo "registry_proxy_tags=${registry_proxy_tags}" >> "$GITHUB_OUTPUT"
+          echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare benchmark build inputs
+        if: inputs.strategy == 'boringcache'
+        run: |
+          cat > ./run-boringcache-build.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          proxy_port="${BORINGCACHE_PROXY_PORT:-5000}"
+          proxy_log="${BORINGCACHE_PROXY_LOG_PATH:-/tmp/boringcache-proxy-${proxy_port}.log}"
+          build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
+          status_snapshot_path="$(mktemp /tmp/boringcache-status.XXXXXX.json)"
+          max_attempts=1
+          cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
+          mode="${1:-full}"
+          cache_import_ready="${BORINGCACHE_CACHE_IMPORT_READY:-true}"
+          cache_requested_from_refs="${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}"
+          cache_used_from_refs="${BORINGCACHE_CACHE_USED_FROM_REFS:-}"
+          cache_unreadable_from_refs="${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}"
+          start_proxy() { :; }
+          stop_proxy() { :; }
+          ensure_proxy_available() {
+            local started elapsed
+            started="$(date +%s)"
+            while true; do
+              if curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$status_snapshot_path" 2>/dev/null; then
+                return 0
+              fi
+              elapsed=$(($(date +%s) - started))
+              if (( elapsed >= 5 )); then
+                return 1
+              fi
+              sleep 1
+            done
+          }
+          flush_action_proxy() {
+            local pid_file="${BORINGCACHE_PROXY_PID_FILE:-/tmp/boringcache-proxy.pid}"
+            [[ -s "$pid_file" ]] || return 0
+
+            local pid=""
+            pid="$(tr -d '[:space:]' < "$pid_file" 2>/dev/null || true)"
+            [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "Registry proxy (PID: $pid) already exited"
+              return 0
+            fi
+
+            echo "Stopping registry proxy (PID: $pid)..."
+            if ! kill -TERM "$pid" 2>/dev/null; then
+              echo "Failed to send SIGTERM to registry proxy (PID: $pid); continuing"
+              return 0
+            fi
+
+            local started elapsed
+            started="$(date +%s)"
+            while kill -0 "$pid" 2>/dev/null; do
+              sleep 1
+              elapsed=$(($(date +%s) - started))
+              if (( elapsed > 0 && elapsed % 30 == 0 )); then
+                echo "Waiting for registry proxy to flush and exit... (${elapsed}s elapsed)"
+              fi
+            done
+            elapsed=$(($(date +%s) - started))
+            echo "Registry proxy exited gracefully after ${elapsed}s"
+          }
+          cleanup() { :; }
+          trap cleanup EXIT
+
+          find_step_id() {
+            local pattern="$1"
+            sed -nE "s/^#([0-9]+) ${pattern}.*/\\1/p" "$build_log" | tail -n1
+          }
+
+          find_step_seconds() {
+            local step_id="$1"
+            [[ -n "$step_id" ]] || return 0
+            sed -nE "s/^#${step_id} DONE ([0-9]+(\\.[0-9]+)?)s$/\\1/p" "$build_log" | tail -n1
+          }
+
+          write_build_metrics() {
+            local output_path="${BENCHMARK_METRICS_OUTPUT:-}"
+            [[ -n "$output_path" ]] || return 0
+
+            local import_step=""
+            local export_step=""
+            local import_seconds=""
+            local export_seconds=""
+            local import_status=""
+
+            import_step="$(find_step_id "importing cache manifest from")"
+            export_step="$(find_step_id "exporting cache to registry")"
+            import_seconds="$(find_step_seconds "$import_step")"
+            export_seconds="$(find_step_seconds "$export_step")"
+            import_status="$(build_import_status)"
+
+            mkdir -p "$(dirname "$output_path")"
+            : > "$output_path"
+            echo "cache_import_status=$import_status" >> "$output_path"
+            if [[ -n "$import_seconds" ]]; then
+              echo "docker_cache_import_seconds=$import_seconds" >> "$output_path"
+            fi
+            if [[ -n "$export_seconds" ]]; then
+              echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
+            fi
+
+            if [[ -s "$status_snapshot_path" ]] && command -v jq >/dev/null 2>&1; then
+              append_status_metric() {
+                local key="$1"
+                local jq_expr="$2"
+                local value=""
+                value="$(jq -r "$jq_expr // empty" "$status_snapshot_path" 2>/dev/null || true)"
+                if [[ -n "$value" && "$value" != "null" ]]; then
+                  echo "$key=$value" >> "$output_path"
+                fi
+              }
+
+              append_status_metric oci_hydration_policy '.startup_prefetch.startup_prefetch_oci_hydration'
+              append_status_metric startup_oci_body_inserted '.startup_prefetch.startup_prefetch_oci_body_inserted'
+              append_status_metric startup_oci_body_failures '.startup_prefetch.startup_prefetch_oci_body_failures'
+              append_status_metric startup_oci_body_cold_blobs '.startup_prefetch.startup_prefetch_oci_body_cold_blobs'
+              append_status_metric startup_oci_body_duration_ms '.startup_prefetch.startup_prefetch_oci_body_duration_ms'
+              append_status_metric oci_body_local_hits '.oci_body.oci_body_local_hits'
+              append_status_metric oci_body_remote_fetches '.oci_body.oci_body_remote_fetches'
+              append_status_metric oci_body_local_bytes '.oci_body.oci_body_local_bytes'
+              append_status_metric oci_body_remote_bytes '.oci_body.oci_body_remote_bytes'
+              append_status_metric oci_body_local_duration_ms '.oci_body.oci_body_local_duration_ms'
+              append_status_metric oci_body_remote_duration_ms '.oci_body.oci_body_remote_duration_ms'
+            fi
+
+            local observability_path="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}"
+            if [[ -n "$observability_path" && -s "$observability_path" ]] && command -v jq >/dev/null 2>&1; then
+              detail_value() {
+                local details="$1"
+                local name="$2"
+                printf '%s\n' "$details" | tr ' ' '\n' | awk -F= -v key="$name" '$1 == key { print $2; exit }'
+              }
+              append_metric() {
+                local key="$1"
+                local value="$2"
+                if [[ -n "$value" && "$value" != "null" ]]; then
+                  echo "$key=$value" >> "$output_path"
+                fi
+              }
+
+              local plan_details=""
+              plan_details="$(jq -r 'select(.operation == "oci_blob_upload_plan") | .details // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
+              if [[ -n "$plan_details" ]]; then
+                append_metric oci_upload_requested_blobs "$(detail_value "$plan_details" requested_blobs)"
+                append_metric oci_new_blob_count "$(detail_value "$plan_details" upload_urls)"
+                append_metric oci_upload_already_present "$(detail_value "$plan_details" already_present)"
+              else
+                append_metric oci_new_blob_count "0"
+              fi
+
+              local uploaded_blob_bytes=""
+              uploaded_blob_bytes="$(jq -s -r '
+                ([range(0; length) as $i | select(.[$i].operation == "oci_blob_upload_plan") | $i] | last) as $plan
+                | if $plan == null then
+                    0
+                  else
+                    ([range(($plan + 1); length) as $i | .[$i] | select(.operation == "oci_blob_upload") | (.request_bytes // 0)] | add // 0)
+                  end
+              ' "$observability_path" 2>/dev/null || true)"
+              append_metric oci_new_blob_bytes "${uploaded_blob_bytes:-0}"
+
+              local batch_duration_ms=""
+              batch_duration_ms="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .duration_ms // empty' "$observability_path" 2>/dev/null | tail -n1 || true)"
+              if [[ -n "$batch_duration_ms" ]]; then
+                awk -v ms="$batch_duration_ms" 'BEGIN { printf "oci_upload_batch_seconds=%.3f\n", ms / 1000 }' >> "$output_path"
+              fi
+            fi
+          }
+
+
+          capture_proxy_status() {
+            local output_path="${1:-$status_snapshot_path}"
+            curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$output_path" 2>/dev/null || true
+          }
+
+          cache_from_requested() {
+            [[ "$mode" =~ ^(full|partial-warm)$ ]] && [[ -n "$cache_requested_from_refs" ]]
+          }
+
+          build_import_status() {
+            if cache_from_requested && [[ "$cache_import_ready" != "true" ]]; then
+              echo "proxy_unreadable"
+            elif grep -Eq 'failed to configure .*cache importer' "$build_log"; then
+              echo "not_found"
+            elif grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
+              echo "ok"
+            else
+              echo "none"
+            fi
+          }
+
+
+          attempt=1
+          while true; do
+            cache_args=()
+            if [[ "$mode" == "full" ]]; then
+              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
+              [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
+            elif [[ "$mode" == "seed-cache" ]]; then
+              # --no-cache is required for type=registry export: without it, buildx
+              # sees cached layers from the builder and skips pushing blobs to the
+              # registry proxy, so the proxy never uploads to BC backend.
+              cache_args=(--no-cache)
+              [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
+            elif [[ "$mode" == "partial-warm" ]]; then
+              # Read-only: no --cache-to.
+              [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
+            else
+              echo "Unknown build mode: $mode" >&2
+              exit 1
+            fi
+            start_proxy
+            if ! ensure_proxy_available; then
+              echo "Registry proxy status was unavailable before build start (attempt ${attempt}/${max_attempts})" >&2
+              tail -n 200 "$proxy_log" || true
+              if [[ "$attempt" -ge "$max_attempts" ]]; then
+                exit 1
+              fi
+              stop_proxy
+              attempt=$((attempt + 1))
+              sleep 3
+              continue
+            fi
+
+            : > "$build_log"
+            set +e
+            DOCKER_BUILDKIT=1 docker buildx build \
+              --builder "$BUILDER" \
+              --file ${{ inputs.dockerfile_path }} \
+              --tag "$IMAGE_TAG" \
+              --progress=plain \
+              "${cache_args[@]}" \
+              ${{ inputs.docker_context }} 2>&1 | tee "$build_log"
+            status=${PIPESTATUS[0]}
+            set -e
+
+            if [[ "$status" -eq 0 ]]; then
+              import_status="$(build_import_status)"
+              if [[ "$mode" == "partial-warm" && "$import_status" != "ok" ]]; then
+                capture_proxy_status
+                write_build_metrics
+                echo "Warm build completed without a usable registry cache import (status: ${import_status}); refusing invalid fresh sample." >&2
+                if [[ -n "${BENCHMARK_METRICS_OUTPUT:-}" && -s "$BENCHMARK_METRICS_OUTPUT" ]]; then
+                  cat "$BENCHMARK_METRICS_OUTPUT" >&2
+                fi
+                exit 1
+              fi
+              if [[ "$mode" =~ ^(full|seed-cache)$ ]] && grep -Eq "$cache_export_pattern" "$build_log"; then
+                capture_proxy_status
+                write_build_metrics
+                echo "Build succeeded but registry cache export reported an error; failing benchmark." >&2
+                tail -n 200 "$build_log" || true
+                tail -n 400 "$proxy_log" || true
+                stop_proxy
+                exit 1
+              fi
+              capture_proxy_status
+              # Stop proxy gracefully so it can flush pending uploads
+              if [[ "$mode" =~ ^(seed-cache|full)$ ]]; then
+                echo "Flushing proxy cache to backend..."
+                flush_action_proxy
+              fi
+              # Dump proxy log for diagnostics
+              echo "=== Proxy log (${mode}, last 200 lines) ==="
+              tail -n 200 "$proxy_log" 2>/dev/null || true
+              echo "=== End proxy log ==="
+              write_build_metrics
+              break
+            fi
+
+            stop_proxy
+
+
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+              echo "Build (${mode}) failed after ${max_attempts} attempts" >&2
+              tail -n 200 "$build_log" || true
+              tail -n 400 "$proxy_log" || true
+              exit "$status"
+            fi
+
+          done
+          SH
+          chmod +x ./run-boringcache-build.sh
+
+      - name: Configure boringcache/one for Docker
+        if: inputs.strategy == 'boringcache'
+        id: docker_cache
+        uses: boringcache/one@v1
+        with:
+          cli-version: skip
+          setup: none
+          cache-runtime: false
+          mode: docker
+          docker-command: setup
+          workspace: ${{ inputs.benchmark_workspace }}
+          cache-tag: ${{ needs.seed-cache.outputs.cache_scope }}
+          registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
+          proxy-no-git: 'true'
+          read-only: true
+          driver-opts: |
+            network=host
+          verbose: true
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+
+      - name: Set up Docker Buildx
+        if: inputs.strategy == 'actions-cache'
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Expose GitHub runtime for Buildx cache
+        if: inputs.strategy == 'actions-cache'
+        uses: crazy-max/ghaction-github-runtime@v4
+
+      - name: Prune builder cache for isolated scenario
+        run: docker buildx prune -f --builder "${{ inputs.strategy == 'boringcache' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name }}"
+
+      - name: Run warm build 1
+        id: warm1_build
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
+          BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
+          BORINGCACHE_CACHE_IMPORT_READY: ${{ steps.docker_cache.outputs.docker-cache-import-ready }}
+          BORINGCACHE_CACHE_REQUESTED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-requested-from-refs }}
+          BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
+          BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
+          BUILDER: ${{ inputs.strategy == 'boringcache' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name }}
+          CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
+          CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
+          CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
+            metrics_file="${RUNNER_TEMP}/warm1-build-metrics.env"
+            rm -f "$metrics_file"
+            phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
+            start="$(date +%s)"
+            set +e
+            BENCHMARK_METRICS_OUTPUT="$metrics_file" ./run-boringcache-build.sh partial-warm
+            status="$?"
+            set -e
+            end="$(date +%s)"
+            if [[ "$status" -ne 0 ]]; then
+              if [[ -s "$metrics_file" ]]; then
+                cat "$metrics_file" >&2
+              fi
+              exit "$status"
+            fi
+            echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+            echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+            if [[ -s "$metrics_file" ]]; then
+              cat "$metrics_file" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            build_log="$(mktemp /tmp/${BENCHMARK_ID}-ac-warm1.XXXXXX.log)"
+            find_step_id() {
+              local pattern="$1"
+              sed -nE "s/^#([0-9]+) ${pattern}.*/\\1/p" "$build_log" | tail -n1
+            }
+            find_step_seconds() {
+              local step_id="$1"
+              [[ -n "$step_id" ]] || return 0
+              sed -nE "s/^#${step_id} DONE ([0-9]+(\\.[0-9]+)?)s$/\\1/p" "$build_log" | tail -n1
+            }
+
+            phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
+            start="$(date +%s)"
+            attempt=1
+            while true; do
+              : > "$build_log"
+              set +e
+              DOCKER_BUILDKIT=1 docker buildx build \
+                --builder "$BUILDER" \
+                --file ${{ inputs.dockerfile_path }} \
+                --tag ${{ inputs.image_tag }} \
+                --progress=plain \
+                --cache-from "type=gha,scope=${CACHE_SCOPE}" \
+                ${{ inputs.docker_context }} 2>&1 | tee "$build_log"
+              status=${PIPESTATUS[0]}
+              set -e
+
+              if [[ "$status" -eq 0 ]]; then
+                break
+              fi
+
+              if [[ "$attempt" -ge 2 ]]; then
+                echo "Warm build 1 failed after retry" >&2
+                exit "$status"
+              fi
+
+              attempt=$((attempt + 1))
+              sleep 5
+            done
+
+            end="$(date +%s)"
+            echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+            echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+            import_step="$(find_step_id "importing cache manifest from")"
+            import_seconds="$(find_step_seconds "$import_step")"
+            if [[ -n "$import_seconds" ]]; then
+              echo "docker_cache_import_seconds=${import_seconds}" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Capture scenario timing
+        id: phase_timing
+        run: |
+          set -euo pipefail
+          seconds=""
+          build_seconds=""
+          cache_import_status=""
+          docker_cache_import_seconds=""
+          metric_names=(oci_hydration_policy oci_body_local_hits oci_body_remote_fetches oci_body_local_bytes oci_body_remote_bytes oci_body_local_duration_ms oci_body_remote_duration_ms startup_oci_body_inserted startup_oci_body_failures startup_oci_body_cold_blobs startup_oci_body_duration_ms)
+          for metric_name in "${metric_names[@]}"; do
+            printf -v "$metric_name" '%s' ''
+          done
+          seconds="${{ steps.warm1_build.outputs.seconds }}"
+          build_seconds="${{ steps.warm1_build.outputs.build_seconds }}"
+          cache_import_status="${{ steps.warm1_build.outputs.cache_import_status }}"
+          docker_cache_import_seconds="${{ steps.warm1_build.outputs.docker_cache_import_seconds }}"
+          oci_hydration_policy="${{ steps.warm1_build.outputs.oci_hydration_policy }}"
+          oci_body_local_hits="${{ steps.warm1_build.outputs.oci_body_local_hits }}"
+          oci_body_remote_fetches="${{ steps.warm1_build.outputs.oci_body_remote_fetches }}"
+          oci_body_local_bytes="${{ steps.warm1_build.outputs.oci_body_local_bytes }}"
+          oci_body_remote_bytes="${{ steps.warm1_build.outputs.oci_body_remote_bytes }}"
+          oci_body_local_duration_ms="${{ steps.warm1_build.outputs.oci_body_local_duration_ms }}"
+          oci_body_remote_duration_ms="${{ steps.warm1_build.outputs.oci_body_remote_duration_ms }}"
+          startup_oci_body_inserted="${{ steps.warm1_build.outputs.startup_oci_body_inserted }}"
+          startup_oci_body_failures="${{ steps.warm1_build.outputs.startup_oci_body_failures }}"
+          startup_oci_body_cold_blobs="${{ steps.warm1_build.outputs.startup_oci_body_cold_blobs }}"
+          startup_oci_body_duration_ms="${{ steps.warm1_build.outputs.startup_oci_body_duration_ms }}"
+          if [[ -z "${seconds}" ]]; then
+            echo "No timing captured for warm1" >&2
+            exit 1
+          fi
+          echo "seconds=${seconds}" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=${build_seconds}" >> "$GITHUB_OUTPUT"
+          if [[ -n "${cache_import_status}" ]]; then
+            echo "cache_import_status=${cache_import_status}" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ -n "${docker_cache_import_seconds}" ]]; then
+            echo "docker_cache_import_seconds=${docker_cache_import_seconds}" >> "$GITHUB_OUTPUT"
+          fi
+          for metric_name in "${metric_names[@]}"; do
+            metric_value="${!metric_name}"
+            if [[ -n "$metric_value" ]]; then
+              echo "${metric_name}=${metric_value}" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
+      - name: Persist scenario timing artifact
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-phase
+          cat > "benchmark-phase/warm1.env" <<EOF
+          phase=warm1
+          seconds=${{ steps.phase_timing.outputs.seconds }}
+          build_seconds=${{ steps.phase_timing.outputs.build_seconds }}
+          cache_import_status=${{ steps.phase_timing.outputs.cache_import_status }}
+          docker_cache_import_seconds=${{ steps.phase_timing.outputs.docker_cache_import_seconds }}
+          oci_hydration_policy=${{ steps.phase_timing.outputs.oci_hydration_policy }}
+          oci_body_local_hits=${{ steps.phase_timing.outputs.oci_body_local_hits }}
+          oci_body_remote_fetches=${{ steps.phase_timing.outputs.oci_body_remote_fetches }}
+          oci_body_local_bytes=${{ steps.phase_timing.outputs.oci_body_local_bytes }}
+          oci_body_remote_bytes=${{ steps.phase_timing.outputs.oci_body_remote_bytes }}
+          oci_body_local_duration_ms=${{ steps.phase_timing.outputs.oci_body_local_duration_ms }}
+          oci_body_remote_duration_ms=${{ steps.phase_timing.outputs.oci_body_remote_duration_ms }}
+          startup_oci_body_inserted=${{ steps.phase_timing.outputs.startup_oci_body_inserted }}
+          startup_oci_body_failures=${{ steps.phase_timing.outputs.startup_oci_body_failures }}
+          startup_oci_body_cold_blobs=${{ steps.phase_timing.outputs.startup_oci_body_cold_blobs }}
+          startup_oci_body_duration_ms=${{ steps.phase_timing.outputs.startup_oci_body_duration_ms }}
+          EOF
+
+      - name: Upload scenario timing artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-phase-${{ inputs.benchmark_id }}-${{ inputs.strategy }}-warm1
+          path: benchmark-phase/warm1.env
+          if-no-files-found: error
+
+  finalize-benchmark:
+    name: Finalize benchmark artifacts
+    needs: [seed-cache, scenario-builds]
+    if: ${{ always() && needs.seed-cache.result == 'success' && (needs.scenario-builds.result == 'success' || needs.scenario-builds.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout benchmark repo helpers
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          path: .benchmark-config
+
+      - name: Install BoringCache CLI with boringcache/one
+        if: inputs.strategy == 'boringcache'
+        uses: boringcache/one@v1
+        with:
+          setup: none
+          mode: archive
+          workspace: ${{ inputs.benchmark_workspace }}
+          cli-platform: ${{ inputs.cli_platform }}
+          cache-runtime: false
+
+      - name: Download scenario timing artifacts
+        if: ${{ inputs.cache_lane != 'rolling' }}
+        uses: actions/download-artifact@v8
+        with:
+          pattern: benchmark-phase-${{ inputs.benchmark_id }}-${{ inputs.strategy }}-*
+          path: benchmark-phase
+          merge-multiple: true
+
+      - name: Collect scenario timings
+        if: ${{ inputs.cache_lane != 'rolling' }}
+        id: timings
+        run: |
+          set -euo pipefail
+          parse_phase() {
+            local phase="$1"
+            local file="benchmark-phase/${phase}.env"
+            if [[ ! -f "$file" ]]; then
+              echo "Missing timing artifact for phase ${phase}" >&2
+              ls -R benchmark-phase || true
+              exit 1
+            fi
+            local seconds
+            seconds="$(grep "^seconds=" "$file" | head -n1 | cut -d= -f2-)"
+            if [[ -z "${seconds}" ]]; then
+              echo "Timing artifact for phase ${phase} has empty seconds" >&2
+              cat "$file" >&2
+              exit 1
+            fi
+            local key="${phase//-/_}"
+            echo "${key}_seconds=${seconds}" >> "$GITHUB_OUTPUT"
+            local docker_cache_import_seconds
+            docker_cache_import_seconds="$(grep "^docker_cache_import_seconds=" "$file" | head -n1 | cut -d= -f2- || true)"
+            if [[ -n "${docker_cache_import_seconds}" ]]; then
+              echo "${key}_docker_cache_import_seconds=${docker_cache_import_seconds}" >> "$GITHUB_OUTPUT"
+            fi
+            metric_names=(cache_import_status oci_hydration_policy oci_body_local_hits oci_body_remote_fetches oci_body_local_bytes oci_body_remote_bytes oci_body_local_duration_ms oci_body_remote_duration_ms startup_oci_body_inserted startup_oci_body_failures startup_oci_body_cold_blobs startup_oci_body_duration_ms)
+            for metric_name in "${metric_names[@]}"; do
+              metric_value="$(grep "^${metric_name}=" "$file" | head -n1 | cut -d= -f2- || true)"
+              if [[ -n "${metric_value}" ]]; then
+                echo "${key}_${metric_name}=${metric_value}" >> "$GITHUB_OUTPUT"
+              fi
+            done
+          }
+          parse_phase warm1
+
+      - name: Measure BoringCache storage usage
+        if: inputs.strategy == 'boringcache'
+        id: bc_cache_size
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
+        run: |
+          tags_csv="${{ needs.seed-cache.outputs.tags_csv }}"
+          bytes="$(.benchmark-config/scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
+          echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"
+
+      - name: Measure GHA cache storage usage
+        if: inputs.strategy == 'actions-cache'
+        id: ac_cache_size
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bytes="$(.benchmark-config/scripts/sum-gha-cache-by-key.sh "$BENCHMARK_ID" "${{ needs.seed-cache.outputs.scope_started_at }}")"
+          echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"
+
+      - name: Capture committed upstream ref
+        id: upstream_ref
+        run: echo "sha=$(git -C .benchmark-config rev-parse HEAD:upstream)" >> "$GITHUB_OUTPUT"
+
+      - name: Normalize benchmark fields
+        id: normalize
+        env:
+          STRATEGY: ${{ inputs.strategy }}
+          CACHE_LANE: ${{ inputs.cache_lane }}
+          SEED_COLD_SECONDS: ${{ needs.seed-cache.outputs.cold_seconds }}
+          SEED_DOCKER_EXPORT_SECONDS: ${{ needs.seed-cache.outputs.docker_cache_export_seconds }}
+          SEED_CACHE_IMPORT_STATUS: ${{ needs.seed-cache.outputs.cache_import_status }}
+          SEED_OCI_HYDRATION_POLICY: ${{ needs.seed-cache.outputs.oci_hydration_policy }}
+          SEED_OCI_BODY_LOCAL_HITS: ${{ needs.seed-cache.outputs.oci_body_local_hits }}
+          SEED_OCI_BODY_REMOTE_FETCHES: ${{ needs.seed-cache.outputs.oci_body_remote_fetches }}
+          SEED_OCI_BODY_LOCAL_BYTES: ${{ needs.seed-cache.outputs.oci_body_local_bytes }}
+          SEED_OCI_BODY_REMOTE_BYTES: ${{ needs.seed-cache.outputs.oci_body_remote_bytes }}
+          SEED_OCI_BODY_LOCAL_DURATION_MS: ${{ needs.seed-cache.outputs.oci_body_local_duration_ms }}
+          SEED_OCI_BODY_REMOTE_DURATION_MS: ${{ needs.seed-cache.outputs.oci_body_remote_duration_ms }}
+          SEED_STARTUP_OCI_BODY_INSERTED: ${{ needs.seed-cache.outputs.startup_oci_body_inserted }}
+          SEED_STARTUP_OCI_BODY_FAILURES: ${{ needs.seed-cache.outputs.startup_oci_body_failures }}
+          SEED_STARTUP_OCI_BODY_COLD_BLOBS: ${{ needs.seed-cache.outputs.startup_oci_body_cold_blobs }}
+          SEED_STARTUP_OCI_BODY_DURATION_MS: ${{ needs.seed-cache.outputs.startup_oci_body_duration_ms }}
+          SEED_OCI_NEW_BLOB_COUNT: ${{ needs.seed-cache.outputs.oci_new_blob_count }}
+          SEED_OCI_NEW_BLOB_BYTES: ${{ needs.seed-cache.outputs.oci_new_blob_bytes }}
+          SEED_OCI_UPLOAD_REQUESTED_BLOBS: ${{ needs.seed-cache.outputs.oci_upload_requested_blobs }}
+          SEED_OCI_UPLOAD_ALREADY_PRESENT: ${{ needs.seed-cache.outputs.oci_upload_already_present }}
+          SEED_OCI_UPLOAD_BATCH_SECONDS: ${{ needs.seed-cache.outputs.oci_upload_batch_seconds }}
+          WARM1_SECONDS: ${{ steps.timings.outputs.warm1_seconds }}
+          WARM1_DOCKER_CACHE_IMPORT_SECONDS: ${{ steps.timings.outputs.warm1_docker_cache_import_seconds }}
+          WARM1_CACHE_IMPORT_STATUS: ${{ steps.timings.outputs.warm1_cache_import_status }}
+          WARM1_OCI_HYDRATION_POLICY: ${{ steps.timings.outputs.warm1_oci_hydration_policy }}
+          WARM1_OCI_BODY_LOCAL_HITS: ${{ steps.timings.outputs.warm1_oci_body_local_hits }}
+          WARM1_OCI_BODY_REMOTE_FETCHES: ${{ steps.timings.outputs.warm1_oci_body_remote_fetches }}
+          WARM1_OCI_BODY_LOCAL_BYTES: ${{ steps.timings.outputs.warm1_oci_body_local_bytes }}
+          WARM1_OCI_BODY_REMOTE_BYTES: ${{ steps.timings.outputs.warm1_oci_body_remote_bytes }}
+          WARM1_OCI_BODY_LOCAL_DURATION_MS: ${{ steps.timings.outputs.warm1_oci_body_local_duration_ms }}
+          WARM1_OCI_BODY_REMOTE_DURATION_MS: ${{ steps.timings.outputs.warm1_oci_body_remote_duration_ms }}
+          WARM1_STARTUP_OCI_BODY_INSERTED: ${{ steps.timings.outputs.warm1_startup_oci_body_inserted }}
+          WARM1_STARTUP_OCI_BODY_FAILURES: ${{ steps.timings.outputs.warm1_startup_oci_body_failures }}
+          WARM1_STARTUP_OCI_BODY_COLD_BLOBS: ${{ steps.timings.outputs.warm1_startup_oci_body_cold_blobs }}
+          WARM1_STARTUP_OCI_BODY_DURATION_MS: ${{ steps.timings.outputs.warm1_startup_oci_body_duration_ms }}
+          BC_BYTES: ${{ steps.bc_cache_size.outputs.bytes }}
+          AC_BYTES: ${{ steps.ac_cache_size.outputs.bytes }}
+        run: |
+          set -euo pipefail
+
+          require() {
+            local name="$1"
+            local value="$2"
+            if [[ -z "$value" ]]; then
+              echo "Required field '${name}' is empty for strategy=${STRATEGY} lane=${CACHE_LANE}" >&2
+              exit 1
+            fi
+          }
+
+          emit() {
+            local key="$1"
+            local value="$2"
+            echo "${key}=${value}" >> "$GITHUB_OUTPUT"
+          }
+
+          require cold_seconds "$SEED_COLD_SECONDS"
+          emit cold_seconds "$SEED_COLD_SECONDS"
+          emit docker_cache_export_seconds "$SEED_DOCKER_EXPORT_SECONDS"
+
+          if [[ "$CACHE_LANE" != "rolling" ]]; then
+            require warm1_seconds "$WARM1_SECONDS"
+            emit warm1_seconds "$WARM1_SECONDS"
+            emit docker_cache_import_seconds "$WARM1_DOCKER_CACHE_IMPORT_SECONDS"
+          else
+            emit warm1_seconds ""
+            emit docker_cache_import_seconds ""
+          fi
+
+          if [[ "$STRATEGY" == "boringcache" ]]; then
+            if [[ "$CACHE_LANE" == "rolling" ]]; then
+              cache_import_status="$SEED_CACHE_IMPORT_STATUS"
+              oci_hydration_policy="$SEED_OCI_HYDRATION_POLICY"
+              oci_body_local_hits="$SEED_OCI_BODY_LOCAL_HITS"
+              oci_body_remote_fetches="$SEED_OCI_BODY_REMOTE_FETCHES"
+              oci_body_local_bytes="$SEED_OCI_BODY_LOCAL_BYTES"
+              oci_body_remote_bytes="$SEED_OCI_BODY_REMOTE_BYTES"
+              oci_body_local_duration_ms="$SEED_OCI_BODY_LOCAL_DURATION_MS"
+              oci_body_remote_duration_ms="$SEED_OCI_BODY_REMOTE_DURATION_MS"
+              startup_oci_body_inserted="$SEED_STARTUP_OCI_BODY_INSERTED"
+              startup_oci_body_failures="$SEED_STARTUP_OCI_BODY_FAILURES"
+              startup_oci_body_cold_blobs="$SEED_STARTUP_OCI_BODY_COLD_BLOBS"
+              startup_oci_body_duration_ms="$SEED_STARTUP_OCI_BODY_DURATION_MS"
+            else
+              require cache_import_status "$WARM1_CACHE_IMPORT_STATUS"
+              cache_import_status="$WARM1_CACHE_IMPORT_STATUS"
+              oci_hydration_policy="$WARM1_OCI_HYDRATION_POLICY"
+              oci_body_local_hits="$WARM1_OCI_BODY_LOCAL_HITS"
+              oci_body_remote_fetches="$WARM1_OCI_BODY_REMOTE_FETCHES"
+              oci_body_local_bytes="$WARM1_OCI_BODY_LOCAL_BYTES"
+              oci_body_remote_bytes="$WARM1_OCI_BODY_REMOTE_BYTES"
+              oci_body_local_duration_ms="$WARM1_OCI_BODY_LOCAL_DURATION_MS"
+              oci_body_remote_duration_ms="$WARM1_OCI_BODY_REMOTE_DURATION_MS"
+              startup_oci_body_inserted="$WARM1_STARTUP_OCI_BODY_INSERTED"
+              startup_oci_body_failures="$WARM1_STARTUP_OCI_BODY_FAILURES"
+              startup_oci_body_cold_blobs="$WARM1_STARTUP_OCI_BODY_COLD_BLOBS"
+              startup_oci_body_duration_ms="$WARM1_STARTUP_OCI_BODY_DURATION_MS"
+            fi
+
+            emit cache_import_status "$cache_import_status"
+            emit oci_hydration_policy "$oci_hydration_policy"
+            emit oci_body_local_hits "$oci_body_local_hits"
+            emit oci_body_remote_fetches "$oci_body_remote_fetches"
+            emit oci_body_local_bytes "$oci_body_local_bytes"
+            emit oci_body_remote_bytes "$oci_body_remote_bytes"
+            emit oci_body_local_duration_ms "$oci_body_local_duration_ms"
+            emit oci_body_remote_duration_ms "$oci_body_remote_duration_ms"
+            emit startup_oci_body_inserted "$startup_oci_body_inserted"
+            emit startup_oci_body_failures "$startup_oci_body_failures"
+            emit startup_oci_body_cold_blobs "$startup_oci_body_cold_blobs"
+            emit startup_oci_body_duration_ms "$startup_oci_body_duration_ms"
+            emit oci_new_blob_count "$SEED_OCI_NEW_BLOB_COUNT"
+            emit oci_new_blob_bytes "$SEED_OCI_NEW_BLOB_BYTES"
+            emit oci_upload_requested_blobs "$SEED_OCI_UPLOAD_REQUESTED_BLOBS"
+            emit oci_upload_already_present "$SEED_OCI_UPLOAD_ALREADY_PRESENT"
+            emit oci_upload_batch_seconds "$SEED_OCI_UPLOAD_BATCH_SECONDS"
+
+            require cache_storage_bytes "$BC_BYTES"
+            emit cache_storage_bytes "$BC_BYTES"
+            emit cache_storage_source "boringcache-check"
+            emit bytes_uploaded "$BC_BYTES"
+
+            if [[ "$CACHE_LANE" == "rolling" ]]; then
+              emit hit_behavior_note "Rolling lane: this run executes only the upstream-sync seed build; warm1 follow-up runs are intentionally skipped."
+            else
+              emit hit_behavior_note "Fresh lane: cold+seed starts from empty BC tags and empty Docker layer cache, uses --no-cache + cache-to via the BC registry proxy (mode=max), and records cold timing while priming the shared cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only, no helper mounted inside Docker RUN steps, and no synthetic mutations."
+            fi
+          else
+            emit cache_import_status ""
+            emit oci_hydration_policy ""
+            emit oci_body_local_hits ""
+            emit oci_body_remote_fetches ""
+            emit oci_body_local_bytes ""
+            emit oci_body_remote_bytes ""
+            emit oci_body_local_duration_ms ""
+            emit oci_body_remote_duration_ms ""
+            emit startup_oci_body_inserted ""
+            emit startup_oci_body_failures ""
+            emit startup_oci_body_cold_blobs ""
+            emit startup_oci_body_duration_ms ""
+            emit oci_new_blob_count ""
+            emit oci_new_blob_bytes ""
+            emit oci_upload_requested_blobs ""
+            emit oci_upload_already_present ""
+            emit oci_upload_batch_seconds ""
+
+            require cache_storage_bytes "$AC_BYTES"
+            emit cache_storage_bytes "$AC_BYTES"
+            emit cache_storage_source "github-actions-cache-api"
+            emit bytes_uploaded ""
+
+            if [[ "$CACHE_LANE" == "rolling" ]]; then
+              emit hit_behavior_note "Rolling lane: this run executes only the upstream-sync seed build; warm1 follow-up runs are intentionally skipped."
+            else
+              emit hit_behavior_note "Fresh lane: cold+seed runs the pinned base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only and no synthetic mutations."
+            fi
+          fi
+
+      - name: Write benchmark artifacts
+        id: artifact_files
+        run: |
+          .benchmark-config/scripts/write-benchmark-artifacts.sh \
+            --benchmark "$BENCHMARK_ID" \
+            --strategy "${{ inputs.strategy }}" \
+            --lane "$CACHE_LANE" \
+            --project-repo "$PROJECT_REPO" \
+            --project-ref "${{ steps.upstream_ref.outputs.sha }}" \
+            --cold-seconds "${{ steps.normalize.outputs.cold_seconds }}" \
+            --warm1-seconds "${{ steps.normalize.outputs.warm1_seconds }}" \
+            --cache-import-status "${{ steps.normalize.outputs.cache_import_status }}" \
+            --docker-cache-import-seconds "${{ steps.normalize.outputs.docker_cache_import_seconds }}" \
+            --docker-cache-export-seconds "${{ steps.normalize.outputs.docker_cache_export_seconds }}" \
+            --cache-storage-bytes "${{ steps.normalize.outputs.cache_storage_bytes }}" \
+            --cache-storage-source "${{ steps.normalize.outputs.cache_storage_source }}" \
+            --bytes-uploaded "${{ steps.normalize.outputs.bytes_uploaded }}" \
+            --oci-hydration-policy "${{ steps.normalize.outputs.oci_hydration_policy }}" \
+            --oci-body-local-hits "${{ steps.normalize.outputs.oci_body_local_hits }}" \
+            --oci-body-remote-fetches "${{ steps.normalize.outputs.oci_body_remote_fetches }}" \
+            --oci-body-local-bytes "${{ steps.normalize.outputs.oci_body_local_bytes }}" \
+            --oci-body-remote-bytes "${{ steps.normalize.outputs.oci_body_remote_bytes }}" \
+            --oci-body-local-duration-ms "${{ steps.normalize.outputs.oci_body_local_duration_ms }}" \
+            --oci-body-remote-duration-ms "${{ steps.normalize.outputs.oci_body_remote_duration_ms }}" \
+            --startup-oci-body-inserted "${{ steps.normalize.outputs.startup_oci_body_inserted }}" \
+            --startup-oci-body-failures "${{ steps.normalize.outputs.startup_oci_body_failures }}" \
+            --startup-oci-body-cold-blobs "${{ steps.normalize.outputs.startup_oci_body_cold_blobs }}" \
+            --startup-oci-body-duration-ms "${{ steps.normalize.outputs.startup_oci_body_duration_ms }}" \
+            --oci-new-blob-count "${{ steps.normalize.outputs.oci_new_blob_count }}" \
+            --oci-new-blob-bytes "${{ steps.normalize.outputs.oci_new_blob_bytes }}" \
+            --oci-upload-requested-blobs "${{ steps.normalize.outputs.oci_upload_requested_blobs }}" \
+            --oci-upload-already-present "${{ steps.normalize.outputs.oci_upload_already_present }}" \
+            --oci-upload-batch-seconds "${{ steps.normalize.outputs.oci_upload_batch_seconds }}" \
+            --reseed-new-blob-threshold "0" \
+            --hit-behavior-note "${{ steps.normalize.outputs.hit_behavior_note }}"
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-${{ inputs.benchmark_id }}-${{ inputs.strategy }}-${{ inputs.cache_lane }}
+          path: |
+            ${{ steps.artifact_files.outputs.json_path }}
+            ${{ steps.artifact_files.outputs.md_path }}
+          if-no-files-found: error
+
+      - name: Publish summary
+        run: cat "${{ steps.artifact_files.outputs.md_path }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Storage comparison with GHA cache
+        if: inputs.strategy == 'boringcache' && always() && steps.bc_cache_size.outputs.bytes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bc_bytes="${{ steps.bc_cache_size.outputs.bytes }}"
+
+          # Query GHA cache usage for this repo
+          gha_bytes="$(gh api "repos/${GITHUB_REPOSITORY}/actions/cache/usage" --jq '.active_caches_size_in_bytes' 2>/dev/null)" || {
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "_Storage comparison skipped (GHA API unreachable)_" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Storage comparison" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Cache | Storage | Notes |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| BoringCache | $(numfmt --to=iec-i --suffix=B "${bc_bytes}") | ${{ inputs.benchmark_id }} benchmark tags (content-addressed, deduped across branches) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| GitHub Actions | $(numfmt --to=iec-i --suffix=B "${gha_bytes}") | Repo total (buildkit blobs shared across projects, no cross-branch dedup) |" >> "$GITHUB_STEP_SUMMARY"

@@ -50,6 +50,7 @@ jobs:
       docker_context: upstream
       image_tag: posthog-benchmark:latest
       benchmark_workspace: boringcache/benchmarks
+      free_disk_space: true
     secrets: inherit
     permissions:
       contents: read

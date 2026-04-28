@@ -287,7 +287,7 @@ while true; do
     --tag "$IMAGE_TAG" \
     --progress=plain \
     "${cache_args[@]}" \
-    "$DOCKER_CONTEXT" 2>&1 | tee "$build_log"
+    "$BENCHMARK_DOCKER_CONTEXT" 2>&1 | tee "$build_log"
   status=${PIPESTATUS[0]}
   set -e
 

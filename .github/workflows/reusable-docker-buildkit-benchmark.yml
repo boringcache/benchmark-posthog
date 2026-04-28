@@ -297,7 +297,7 @@ jobs:
           BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-seed-observability.jsonl
           IMAGE_TAG: ${{ inputs.image_tag }}
           DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
-          DOCKER_CONTEXT: ${{ inputs.docker_context }}
+          BENCHMARK_DOCKER_CONTEXT: ${{ inputs.docker_context }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -550,7 +550,7 @@ jobs:
           CACHE_SCOPE: ${{ needs.seed-cache.outputs.cache_scope }}
           IMAGE_TAG: ${{ inputs.image_tag }}
           DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
-          DOCKER_CONTEXT: ${{ inputs.docker_context }}
+          BENCHMARK_DOCKER_CONTEXT: ${{ inputs.docker_context }}
         run: |
           set -euo pipefail
 

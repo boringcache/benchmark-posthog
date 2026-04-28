@@ -1,0 +1,10 @@
+workspace = "boringcache/benchmarks"
+
+# Docker BuildKit registry cache benchmark. The proxy is the only cache
+# surface (boringcache/one mode=docker exporting --cache-from / --cache-to
+# against the BoringCache OCI registry endpoint), so there are no
+# archive entries to declare here today.
+#
+# This file is the canonical config anchor; entries can be declared
+# here if a hybrid local-archive contract is later added (e.g. a build
+# context cache that the BuildKit OCI surface cannot express).

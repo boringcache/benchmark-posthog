@@ -39,6 +39,18 @@ on:
         required: false
         type: string
         default: ''
+      blob_download_concurrency:
+        required: false
+        type: string
+        default: ''
+      blob_prefetch_concurrency:
+        required: false
+        type: string
+        default: ''
+      oci_stream_through_min_bytes:
+        required: false
+        type: string
+        default: ''
       free_disk_space:
         description: 'Reclaim runner disk before the Docker build. Required for very large images (PostHog) that exceed the default GHA hosted-runner free space mid-build.'
         required: false
@@ -54,6 +66,9 @@ env:
   BENCHMARK_ID: ${{ inputs.benchmark_id }}
   BENCHMARK_WORKSPACE: ${{ inputs.benchmark_workspace }}
   CACHE_LANE: ${{ inputs.cache_lane }}
+  BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY: ${{ inputs.blob_download_concurrency }}
+  BORINGCACHE_BLOB_PREFETCH_CONCURRENCY: ${{ inputs.blob_prefetch_concurrency }}
+  BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES: ${{ inputs.oci_stream_through_min_bytes }}
 
 jobs:
   seed-cache:

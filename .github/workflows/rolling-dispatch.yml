@@ -2,6 +2,19 @@ name: "Rolling Benchmark Dispatch"
 
 on:
   workflow_dispatch:
+    inputs:
+      blob_download_concurrency:
+        description: "Optional BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY override for the BC run"
+        required: false
+        type: string
+      blob_prefetch_concurrency:
+        description: "Optional BORINGCACHE_BLOB_PREFETCH_CONCURRENCY override for the BC run"
+        required: false
+        type: string
+      oci_stream_through_min_bytes:
+        description: "Optional BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES for Docker/OCI BC runs"
+        required: false
+        type: string
   push:
     branches:
       - main
@@ -33,8 +46,16 @@ jobs:
             local workflow="$1"
             local attempt=1
             local max_attempts=3
+            local fields=(-f cache_lane=rolling)
+            if [[ "$workflow" == *boringcache.yml ]]; then
+              fields+=(
+                -f "blob_download_concurrency=${{ inputs.blob_download_concurrency || '' }}"
+                -f "blob_prefetch_concurrency=${{ inputs.blob_prefetch_concurrency || '' }}"
+                -f "oci_stream_through_min_bytes=${{ inputs.oci_stream_through_min_bytes || '' }}"
+              )
+            fi
 
-            until gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}" -f cache_lane=rolling; do
+            until gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}" "${fields[@]}"; do
               if [[ "$attempt" -ge "$max_attempts" ]]; then
                 echo "Failed to dispatch ${workflow} after ${attempt} attempts" >&2
                 return 1

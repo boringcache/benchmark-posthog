@@ -98,6 +98,15 @@ write_build_metrics() {
   if [[ -n "$export_seconds" ]]; then
     echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
   fi
+  if [[ -n "${BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY:-}" ]]; then
+    echo "blob_download_concurrency_override=${BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY}" >> "$output_path"
+  fi
+  if [[ -n "${BORINGCACHE_BLOB_PREFETCH_CONCURRENCY:-}" ]]; then
+    echo "blob_prefetch_concurrency_override=${BORINGCACHE_BLOB_PREFETCH_CONCURRENCY}" >> "$output_path"
+  fi
+  if [[ -n "${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES:-}" ]]; then
+    echo "oci_stream_through_min_bytes=${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES}" >> "$output_path"
+  fi
 
   if [[ -s "$status_snapshot_path" ]] && command -v jq >/dev/null 2>&1; then
     append_status_metric() {
@@ -121,6 +130,14 @@ write_build_metrics() {
     append_status_metric oci_body_remote_bytes '.oci_body.oci_body_remote_bytes'
     append_status_metric oci_body_local_duration_ms '.oci_body.oci_body_local_duration_ms'
     append_status_metric oci_body_remote_duration_ms '.oci_body.oci_body_remote_duration_ms'
+    append_status_metric proxy_blob_download_max_concurrency '.session_summary.proxy.blob_download_max_concurrency'
+    append_status_metric proxy_blob_prefetch_max_concurrency '.session_summary.proxy.blob_prefetch_max_concurrency'
+    append_status_metric proxy_blob_prefetch_concurrency_source '.session_summary.proxy.blob_prefetch_concurrency_source'
+    append_status_metric oci_stream_through_count '.oci_engine.oci_engine_stream_through_count'
+    append_status_metric oci_stream_through_bytes '.oci_engine.oci_engine_stream_through_bytes'
+    append_status_metric oci_stream_through_verify_duration_ms '.oci_engine.oci_engine_stream_through_verify_duration_ms'
+    append_status_metric oci_stream_through_verify_failures '.oci_engine.oci_engine_stream_through_verify_failures'
+    append_status_metric oci_stream_through_cache_promotion_failures '.oci_engine.oci_engine_stream_through_cache_promotion_failures'
   fi
 
   local observability_path="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}"
@@ -211,6 +228,9 @@ write_build_diagnostics() {
     echo "cache_to=${CACHE_TO:-}"
     echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
     echo "docker_registry_tag=${BORINGCACHE_DOCKER_REGISTRY_TAG:-}"
+    echo "blob_download_concurrency_override=${BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY:-}"
+    echo "blob_prefetch_concurrency_override=${BORINGCACHE_BLOB_PREFETCH_CONCURRENCY:-}"
+    echo "oci_stream_through_min_bytes=${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES:-}"
     printf 'cache_args='
     printf '%q ' "${cache_args[@]}"
     printf '\n'

@@ -195,12 +195,12 @@ cache_from_requested() {
 }
 
 build_import_status() {
-  if cache_from_requested && [[ "$cache_import_ready" != "true" ]]; then
-    echo "proxy_unreadable"
+  if grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
+    echo "ok"
   elif grep -Eq 'failed to configure .*cache importer' "$build_log"; then
     echo "not_found"
-  elif grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
-    echo "ok"
+  elif cache_from_requested && [[ "$cache_import_ready" != "true" ]]; then
+    echo "proxy_unreadable"
   else
     echo "none"
   fi

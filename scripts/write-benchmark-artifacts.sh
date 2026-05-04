@@ -63,6 +63,21 @@ action_sha="${BENCHMARK_ACTION_SHA:-}"
 web_revision="${BENCHMARK_WEB_REVISION:-}"
 api_url="${BENCHMARK_API_URL:-${BORINGCACHE_API_URL:-https://api.boringcache.com}}"
 action_timings_json=""
+workspace="${BENCHMARK_WORKSPACE:-${BORINGCACHE_WORKSPACE:-}}"
+cache_tag="${BENCHMARK_CACHE_TAG:-${CACHE_SCOPE:-}}"
+run_uid="${BENCHMARK_RUN_UID:-}"
+mode="${BENCHMARK_MODE:-}"
+adapter="${BENCHMARK_ADAPTER:-}"
+restore_result="${BENCHMARK_RESTORE_RESULT:-}"
+save_result="${BENCHMARK_SAVE_RESULT:-}"
+publish_status="${BENCHMARK_PUBLISH_STATUS:-}"
+reporting_url="${BENCHMARK_REPORTING_URL:-}"
+docker_cache_from_refs="${BENCHMARK_DOCKER_CACHE_FROM_REFS:-${BORINGCACHE_CACHE_USED_FROM_REFS:-}}"
+docker_cache_import_ready="${BENCHMARK_DOCKER_CACHE_IMPORT_READY:-${BORINGCACHE_CACHE_IMPORT_READY:-}}"
+cache_session_summary_json="${BENCHMARK_CACHE_SESSION_SUMMARY_JSON:-}"
+observability_jsonl="${BENCHMARK_OBSERVABILITY_JSONL:-${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}}"
+launch_proof_paths="${BENCHMARK_LAUNCH_PROOF_PATHS:-}"
+launch_proof_json="${BENCHMARK_LAUNCH_PROOF_JSON:-}"
 cache_import_status=""
 output_dir="benchmark-results"
 docker_cache_import_seconds=""
@@ -159,6 +174,73 @@ while [[ $# -gt 0 ]]; do
       ;;
     --api-url)
       api_url="$2"
+      shift 2
+      ;;
+    --workspace)
+      workspace="$2"
+      shift 2
+      ;;
+    --cache-tag)
+      cache_tag="$2"
+      shift 2
+      ;;
+    --run-uid)
+      run_uid="$2"
+      shift 2
+      ;;
+    --mode)
+      mode="$2"
+      shift 2
+      ;;
+    --adapter)
+      adapter="$2"
+      shift 2
+      ;;
+    --restore-result)
+      restore_result="$2"
+      shift 2
+      ;;
+    --save-result)
+      save_result="$2"
+      shift 2
+      ;;
+    --publish-status)
+      publish_status="$2"
+      shift 2
+      ;;
+    --reporting-url)
+      reporting_url="$2"
+      shift 2
+      ;;
+    --docker-cache-from-refs)
+      docker_cache_from_refs="$2"
+      shift 2
+      ;;
+    --docker-cache-import-ready)
+      docker_cache_import_ready="$2"
+      shift 2
+      ;;
+    --cache-session-summary-json)
+      cache_session_summary_json="$2"
+      shift 2
+      ;;
+    --observability-jsonl)
+      observability_jsonl="$2"
+      shift 2
+      ;;
+    --launch-proof-path)
+      if [[ -n "$launch_proof_paths" ]]; then
+        launch_proof_paths+=","
+      fi
+      launch_proof_paths+="$2"
+      shift 2
+      ;;
+    --launch-proof-paths)
+      launch_proof_paths="$2"
+      shift 2
+      ;;
+    --launch-proof-json)
+      launch_proof_json="$2"
       shift 2
       ;;
     --cache-import-status)
@@ -304,6 +386,30 @@ json_string_or_null() {
   fi
 }
 
+json_bool_or_null() {
+  local v="$1"
+  case "$v" in
+    true|TRUE|1|yes|YES)
+      echo "true"
+      ;;
+    false|FALSE|0|no|NO)
+      echo "false"
+      ;;
+    *)
+      echo "null"
+      ;;
+  esac
+}
+
+json_array_from_csv_or_null() {
+  local v="$1"
+  if [[ -z "$v" ]]; then
+    echo "null"
+  else
+    jq -Rn --arg value "$v" '$value | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))'
+  fi
+}
+
 sanitize_uint() {
   local v="$1"
   if [[ -n "$v" && "$v" =~ ^[0-9]+$ ]]; then
@@ -386,6 +492,95 @@ collect_default_product_refs() {
   fi
 }
 
+infer_default_launch_context() {
+  if [[ -z "$run_uid" && -n "${GITHUB_RUN_ID:-}" ]]; then
+    run_uid="gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+  fi
+
+  if [[ -z "$mode" && "$strategy" == "boringcache" ]]; then
+    case "$benchmark" in
+      *hugo*|*immich*|*mastodon*|*posthog*)
+        mode="docker"
+        ;;
+      *grpc*|*bazel*)
+        mode="bazel"
+        ;;
+      *zed*|*sccache*)
+        mode="sccache"
+        ;;
+      *gradle*|*otel*)
+        mode="gradle"
+        ;;
+      *maven*|*spring*)
+        mode="maven"
+        ;;
+      *n8n*|*turbo*)
+        mode="turbo"
+        ;;
+      *go*)
+        mode="go"
+        ;;
+    esac
+  fi
+
+  if [[ -z "$adapter" && "$strategy" == "boringcache" ]]; then
+    case "$mode" in
+      docker|buildkit)
+        adapter="oci"
+        ;;
+      go)
+        adapter="gocache"
+        ;;
+      turbo)
+        adapter="turborepo"
+        ;;
+      *)
+        adapter="$mode"
+        ;;
+    esac
+  fi
+}
+
+session_summary_payload_from_inputs() {
+  if [[ -n "$cache_session_summary_json" ]]; then
+    if [[ ! -f "$cache_session_summary_json" ]]; then
+      echo "Missing cache session summary JSON: $cache_session_summary_json" >&2
+      exit 1
+    fi
+    jq -c '.' "$cache_session_summary_json"
+    return
+  fi
+
+  if [[ -n "$observability_jsonl" && -s "$observability_jsonl" ]]; then
+    local summary
+    summary="$(jq -c 'select(.operation == "cache_session_summary") | .summary // .details // .' "$observability_jsonl" 2>/dev/null | tail -n 1 || true)"
+    if [[ -n "$summary" ]]; then
+      printf '%s\n' "$summary"
+      return
+    fi
+  fi
+
+  echo "null"
+}
+
+launch_proof_paths_payload_from_inputs() {
+  if [[ -n "$launch_proof_json" ]]; then
+    if [[ ! -f "$launch_proof_json" ]]; then
+      echo "Missing launch proof JSON: $launch_proof_json" >&2
+      exit 1
+    fi
+    jq -c '.' "$launch_proof_json"
+    return
+  fi
+
+  if [[ -n "$launch_proof_paths" ]]; then
+    jq -Rn --arg value "$launch_proof_paths" '$value | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))'
+    return
+  fi
+
+  echo "[]"
+}
+
 if [[ -n "$bytes_uploaded" ]] && ! [[ "$bytes_uploaded" =~ ^[0-9]+$ ]]; then
   bytes_uploaded=""
 fi
@@ -393,6 +588,7 @@ if [[ -n "$bytes_downloaded" ]] && ! [[ "$bytes_downloaded" =~ ^[0-9]+$ ]]; then
   bytes_downloaded=""
 fi
 cache_import_status="$(sanitize_token "$cache_import_status")"
+docker_cache_import_ready="$(sanitize_token "$docker_cache_import_ready")"
 
 if [[ -n "$docker_cache_import_seconds" ]] && ! [[ "$docker_cache_import_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   docker_cache_import_seconds=""
@@ -422,6 +618,7 @@ tiny_metadata_churn_max_blobs="${tiny_metadata_churn_max_blobs:-1}"
 tiny_metadata_churn_max_bytes="$(sanitize_uint "$tiny_metadata_churn_max_bytes")"
 tiny_metadata_churn_max_bytes="${tiny_metadata_churn_max_bytes:-65536}"
 collect_default_product_refs
+infer_default_launch_context
 
 action_timings_payload="null"
 if [[ -n "$action_timings_json" ]]; then
@@ -431,6 +628,8 @@ if [[ -n "$action_timings_json" ]]; then
   fi
   action_timings_payload="$(jq -c '.' "$action_timings_json")"
 fi
+session_summary_payload="$(session_summary_payload_from_inputs)"
+launch_proof_paths_payload="$(launch_proof_paths_payload_from_inputs)"
 
 warm_count=0
 warm_total=0
@@ -566,6 +765,19 @@ cat > "$json_path" <<JSON
     "web_revision": $(json_string_or_null "$web_revision"),
     "api_url": $(json_string_or_null "$api_url")
   },
+  "workspace": $(json_string_or_null "$workspace"),
+  "cache_tag": $(json_string_or_null "$cache_tag"),
+  "run_uid": $(json_string_or_null "$run_uid"),
+  "mode": $(json_string_or_null "$mode"),
+  "adapter": $(json_string_or_null "$adapter"),
+  "docker_cache_from_refs": $(json_array_from_csv_or_null "$docker_cache_from_refs"),
+  "docker_cache_import_ready": $(json_bool_or_null "$docker_cache_import_ready"),
+  "restore_result": $(json_string_or_null "$restore_result"),
+  "save_result": $(json_string_or_null "$save_result"),
+  "publish_status": $(json_string_or_null "$publish_status"),
+  "session_summary": $session_summary_payload,
+  "reporting_url": $(json_string_or_null "$reporting_url"),
+  "launch_proof_paths": $launch_proof_paths_payload,
   "generated_at": "$generated_at",
   "runs": {
     "cold_seconds": $(json_num_or_null "$cold_seconds"),

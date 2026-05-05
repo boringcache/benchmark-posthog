@@ -297,7 +297,6 @@ write_build_diagnostics() {
     echo "cache_promotion_refs=${cache_promotion_refs}"
     echo "cache_to=${CACHE_TO:-}"
     echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
-    echo "docker_registry_tag=${BORINGCACHE_DOCKER_REGISTRY_TAG:-}"
     echo "blob_download_concurrency_override=${BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY:-}"
     echo "blob_prefetch_concurrency_override=${BORINGCACHE_BLOB_PREFETCH_CONCURRENCY:-}"
     echo "oci_stream_through_min_bytes=${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES:-}"

@@ -12,6 +12,7 @@ cache_import_ready="${BORINGCACHE_CACHE_IMPORT_READY:-true}"
 cache_requested_from_refs="${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}"
 cache_used_from_refs="${BORINGCACHE_CACHE_USED_FROM_REFS:-}"
 cache_unreadable_from_refs="${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}"
+cache_promotion_refs="${BORINGCACHE_DOCKER_PROMOTION_REFS:-}"
 start_proxy() { :; }
 stop_proxy() { :; }
 ensure_proxy_available() {
@@ -58,6 +59,37 @@ flush_action_proxy() {
   done
   elapsed=$(($(date +%s) - started))
   echo "Registry proxy exited gracefully after ${elapsed}s"
+}
+normalize_ref_csv() {
+  local refs="$1"
+  printf '%s\n' "$refs" \
+    | tr ',' '\n' \
+    | awk '{$1=$1} NF { printf "%s%s", sep, $0; sep="," } END { print "" }'
+}
+verify_promoted_oci_refs() {
+  [[ "$mode" =~ ^(seed-cache|full)$ ]] || return 0
+
+  local refs_csv
+  refs_csv="$(normalize_ref_csv "$cache_promotion_refs")"
+  [[ -n "$refs_csv" ]] || return 0
+
+  local workspace="${BENCHMARK_WORKSPACE:?BENCHMARK_WORKSPACE must be set}"
+  local check_log
+  check_log="$(mktemp /tmp/boringcache-oci-promotion-check.XXXXXX.log)"
+  local attempt
+  for attempt in $(seq 1 30); do
+    if boringcache check "$workspace" "$refs_csv" --no-platform --no-git --exact --fail-on-miss >"$check_log" 2>&1; then
+      echo "Verified promoted OCI ref(s): ${refs_csv}"
+      rm -f "$check_log"
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "Promoted OCI ref(s) were not visible after save: ${refs_csv}" >&2
+  cat "$check_log" >&2 || true
+  rm -f "$check_log"
+  exit 1
 }
 cleanup() { :; }
 trap cleanup EXIT
@@ -191,7 +223,11 @@ capture_proxy_status() {
 }
 
 cache_from_requested() {
-  [[ "$mode" =~ ^(full|partial-warm)$ ]] && [[ -n "$cache_requested_from_refs" ]]
+  [[ "$mode" =~ ^(full|partial-warm)$ ]] && { [[ -n "$cache_requested_from_refs" ]] || [[ -n "${CACHE_FROM:-}" ]]; }
+}
+
+cache_from_usable() {
+  [[ -n "${CACHE_FROM:-}" ]] || [[ -n "$cache_used_from_refs" ]]
 }
 
 build_import_status() {
@@ -199,7 +235,7 @@ build_import_status() {
     echo "ok"
   elif grep -Eq 'failed to configure .*cache importer' "$build_log"; then
     echo "not_found"
-  elif cache_from_requested && [[ "$cache_import_ready" != "true" ]]; then
+  elif cache_from_requested && ! cache_from_usable; then
     echo "proxy_unreadable"
   else
     echo "none"
@@ -225,6 +261,7 @@ write_build_diagnostics() {
     echo "cache_requested_from_refs=${cache_requested_from_refs}"
     echo "cache_used_from_refs=${cache_used_from_refs}"
     echo "cache_unreadable_from_refs=${cache_unreadable_from_refs}"
+    echo "cache_promotion_refs=${cache_promotion_refs}"
     echo "cache_to=${CACHE_TO:-}"
     echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
     echo "docker_registry_tag=${BORINGCACHE_DOCKER_REGISTRY_TAG:-}"
@@ -337,6 +374,7 @@ while true; do
     if [[ "$mode" =~ ^(seed-cache|full)$ ]]; then
       echo "Flushing proxy cache to backend..."
       flush_action_proxy
+      verify_promoted_oci_refs
     fi
     # Dump proxy log for diagnostics
     echo "=== Proxy log (${mode}, last 200 lines) ==="

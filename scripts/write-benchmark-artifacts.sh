@@ -40,7 +40,8 @@
 #     before.
 #   - JSON shape is a strict superset: all blocks every fork emitted
 #     are emitted here. New fields are nullable and never required
-#     by the aggregator.
+#     by the aggregator. Build-only/setup splits and Docker rolling
+#     first-build/warm fields are emitted when callers provide the data.
 #
 set -euo pipefail
 
@@ -50,7 +51,9 @@ lane="fresh"
 project_repo=""
 project_ref=""
 cold_seconds=""
+cold_build_seconds=""
 warm1_seconds=""
+warm1_build_seconds=""
 cache_storage_bytes="0"
 cache_storage_source=""
 cache_storage_note=""
@@ -128,8 +131,16 @@ while [[ $# -gt 0 ]]; do
       cold_seconds="$2"
       shift 2
       ;;
+    --cold-build-seconds)
+      cold_build_seconds="$2"
+      shift 2
+      ;;
     --warm1-seconds)
       warm1_seconds="$2"
+      shift 2
+      ;;
+    --warm1-build-seconds)
+      warm1_build_seconds="$2"
       shift 2
       ;;
     --cache-storage-bytes)
@@ -587,6 +598,12 @@ fi
 if [[ -n "$bytes_downloaded" ]] && ! [[ "$bytes_downloaded" =~ ^[0-9]+$ ]]; then
   bytes_downloaded=""
 fi
+if [[ -n "$cold_build_seconds" ]] && ! [[ "$cold_build_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  cold_build_seconds=""
+fi
+if [[ -n "$warm1_build_seconds" ]] && ! [[ "$warm1_build_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  warm1_build_seconds=""
+fi
 cache_import_status="$(sanitize_token "$cache_import_status")"
 docker_cache_import_ready="$(sanitize_token "$docker_cache_import_ready")"
 
@@ -653,6 +670,20 @@ fi
 
 cache_storage_mib=$(awk -v bytes="$cache_storage_bytes" 'BEGIN { printf "%.2f", bytes / 1048576 }')
 warm_rerun_succeeded=$([[ -n "$warm1_seconds" ]] && echo true || echo false)
+cold_setup_seconds=""
+warm1_setup_seconds=""
+if [[ -n "$cold_seconds" && -n "$cold_build_seconds" ]]; then
+  cold_setup_seconds="$(awk -v total="$cold_seconds" -v build="$cold_build_seconds" 'BEGIN { v = total - build; if (v < 0) { v = 0 }; printf "%.0f", v }')"
+fi
+if [[ -n "$warm1_seconds" && -n "$warm1_build_seconds" ]]; then
+  warm1_setup_seconds="$(awk -v total="$warm1_seconds" -v build="$warm1_build_seconds" 'BEGIN { v = total - build; if (v < 0) { v = 0 }; printf "%.0f", v }')"
+fi
+rolling_first_build_seconds=""
+rolling_warm_seconds=""
+if [[ "$lane" == "rolling" ]]; then
+  rolling_first_build_seconds="$cold_seconds"
+  rolling_warm_seconds="$warm1_seconds"
+fi
 sample_valid=true
 reporting_mode="comparative"
 reporting_reason=""
@@ -781,7 +812,13 @@ cat > "$json_path" <<JSON
   "generated_at": "$generated_at",
   "runs": {
     "cold_seconds": $(json_num_or_null "$cold_seconds"),
-    "warm1_seconds": $(json_num_or_null "$warm1_seconds")
+    "cold_build_seconds": $(json_num_or_null "$cold_build_seconds"),
+    "cold_restore_or_setup_seconds": $(json_num_or_null "$cold_setup_seconds"),
+    "warm1_seconds": $(json_num_or_null "$warm1_seconds"),
+    "warm1_build_seconds": $(json_num_or_null "$warm1_build_seconds"),
+    "warm1_restore_or_setup_seconds": $(json_num_or_null "$warm1_setup_seconds"),
+    "rolling_first_build_seconds": $(json_num_or_null "$rolling_first_build_seconds"),
+    "rolling_warm_seconds": $(json_num_or_null "$rolling_warm_seconds")
   },
   "speed": {
     "warm_average_seconds": $warm_avg,
@@ -875,6 +912,18 @@ JSON
 
   if [[ "$warm_avg" != "null" ]]; then
     echo "| Warm avg | ${warm_avg}s (${warm_improvement_pct}% faster) |"
+  fi
+  if [[ -n "$cold_build_seconds" ]]; then
+    echo "| Cold build-only | ${cold_build_seconds}s |"
+  fi
+  if [[ -n "$cold_setup_seconds" ]]; then
+    echo "| Cold restore/setup | ${cold_setup_seconds}s |"
+  fi
+  if [[ -n "$warm1_build_seconds" ]]; then
+    echo "| Warm build-only | ${warm1_build_seconds}s |"
+  fi
+  if [[ -n "$warm1_setup_seconds" ]]; then
+    echo "| Warm restore/setup | ${warm1_setup_seconds}s |"
   fi
   echo "| Reporting mode | ${reporting_mode} |"
   if [[ "$sample_valid" != "true" ]]; then

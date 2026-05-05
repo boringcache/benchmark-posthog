@@ -80,6 +80,7 @@ jobs:
     outputs:
       cache_scope: ${{ inputs.strategy == 'boringcache' && steps.scope.outputs.cache_scope || steps.cold_baseline_build.outputs.cache_scope }}
       cold_seconds: ${{ steps.cold_baseline_build.outputs.seconds }}
+      cold_build_seconds: ${{ steps.cold_baseline_build.outputs.build_seconds }}
       scope_started_at: ${{ steps.scope.outputs.scope_started_at }}
       docker_cache_export_seconds: ${{ steps.cold_baseline_build.outputs.docker_cache_export_seconds }}
       tags_csv: ${{ steps.scope.outputs.tags_csv }}
@@ -301,6 +302,7 @@ jobs:
           BORINGCACHE_CACHE_REQUESTED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-requested-from-refs }}
           BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
           BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
+          BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
           BUILDER: ${{ inputs.strategy == 'boringcache' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name }}
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
@@ -325,6 +327,15 @@ jobs:
             rm -f "$diagnostics_file"
             rm -f "$observability_artifact"
             mkdir -p "$(dirname "$diagnostics_file")"
+            if [[ "$CACHE_LANE" == "rolling" ]]; then
+              if [[ -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ]]; then
+                echo "Rolling BoringCache Docker import had no usable refs; refusing cold reseed sample." >&2
+                echo "requested refs: ${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}" >&2
+                echo "used refs: ${BORINGCACHE_CACHE_USED_FROM_REFS:-}" >&2
+                echo "unreadable refs: ${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}" >&2
+                exit 1
+              fi
+            fi
             phase_start="${{ steps.seed_timing_start.outputs.started_at }}"
             start="$(date +%s)"
             set +e
@@ -447,9 +458,8 @@ jobs:
           if-no-files-found: ignore
 
   scenario-builds:
-    name: ${{ format('Warm rerun ({0})', inputs.strategy == 'actions-cache' && 'GHA cache' || 'BoringCache') }}
+    name: ${{ inputs.cache_lane == 'rolling' && format('Rolling warm ({0})', inputs.strategy == 'actions-cache' && 'GHA cache' || 'BoringCache') || format('Warm rerun ({0})', inputs.strategy == 'actions-cache' && 'GHA cache' || 'BoringCache') }}
     needs: seed-cache
-    if: ${{ inputs.cache_lane != 'rolling' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -559,6 +569,7 @@ jobs:
           BORINGCACHE_CACHE_REQUESTED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-requested-from-refs }}
           BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
           BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
+          BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
           BUILDER: ${{ inputs.strategy == 'boringcache' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name }}
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
@@ -572,6 +583,13 @@ jobs:
           if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
             metrics_file="${RUNNER_TEMP}/warm1-build-metrics.env"
             rm -f "$metrics_file"
+            if [[ -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ]]; then
+              echo "BoringCache Docker warm import had no usable refs; refusing invalid warm sample." >&2
+              echo "requested refs: ${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}" >&2
+              echo "used refs: ${BORINGCACHE_CACHE_USED_FROM_REFS:-}" >&2
+              echo "unreadable refs: ${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}" >&2
+              exit 1
+            fi
             phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
             start="$(date +%s)"
             set +e
@@ -741,7 +759,6 @@ jobs:
           cache-runtime: false
 
       - name: Download scenario timing artifacts
-        if: ${{ inputs.cache_lane != 'rolling' }}
         uses: actions/download-artifact@v8
         with:
           pattern: benchmark-phase-${{ inputs.benchmark_id }}-${{ inputs.strategy }}-*
@@ -749,7 +766,6 @@ jobs:
           merge-multiple: true
 
       - name: Collect scenario timings
-        if: ${{ inputs.cache_lane != 'rolling' }}
         id: timings
         run: |
           set -euo pipefail
@@ -770,6 +786,11 @@ jobs:
             fi
             local key="${phase//-/_}"
             echo "${key}_seconds=${seconds}" >> "$GITHUB_OUTPUT"
+            local build_seconds
+            build_seconds="$(grep "^build_seconds=" "$file" | head -n1 | cut -d= -f2- || true)"
+            if [[ -n "${build_seconds}" ]]; then
+              echo "${key}_build_seconds=${build_seconds}" >> "$GITHUB_OUTPUT"
+            fi
             local docker_cache_import_seconds
             docker_cache_import_seconds="$(grep "^docker_cache_import_seconds=" "$file" | head -n1 | cut -d= -f2- || true)"
             if [[ -n "${docker_cache_import_seconds}" ]]; then
@@ -814,6 +835,7 @@ jobs:
           STRATEGY: ${{ inputs.strategy }}
           CACHE_LANE: ${{ inputs.cache_lane }}
           SEED_COLD_SECONDS: ${{ needs.seed-cache.outputs.cold_seconds }}
+          SEED_COLD_BUILD_SECONDS: ${{ needs.seed-cache.outputs.cold_build_seconds }}
           SEED_DOCKER_EXPORT_SECONDS: ${{ needs.seed-cache.outputs.docker_cache_export_seconds }}
           SEED_CACHE_IMPORT_STATUS: ${{ needs.seed-cache.outputs.cache_import_status }}
           SEED_OCI_HYDRATION_POLICY: ${{ needs.seed-cache.outputs.oci_hydration_policy }}
@@ -833,6 +855,7 @@ jobs:
           SEED_OCI_UPLOAD_ALREADY_PRESENT: ${{ needs.seed-cache.outputs.oci_upload_already_present }}
           SEED_OCI_UPLOAD_BATCH_SECONDS: ${{ needs.seed-cache.outputs.oci_upload_batch_seconds }}
           WARM1_SECONDS: ${{ steps.timings.outputs.warm1_seconds }}
+          WARM1_BUILD_SECONDS: ${{ steps.timings.outputs.warm1_build_seconds }}
           WARM1_DOCKER_CACHE_IMPORT_SECONDS: ${{ steps.timings.outputs.warm1_docker_cache_import_seconds }}
           WARM1_CACHE_IMPORT_STATUS: ${{ steps.timings.outputs.warm1_cache_import_status }}
           WARM1_OCI_HYDRATION_POLICY: ${{ steps.timings.outputs.warm1_oci_hydration_policy }}
@@ -868,16 +891,13 @@ jobs:
 
           require cold_seconds "$SEED_COLD_SECONDS"
           emit cold_seconds "$SEED_COLD_SECONDS"
+          emit cold_build_seconds "$SEED_COLD_BUILD_SECONDS"
           emit docker_cache_export_seconds "$SEED_DOCKER_EXPORT_SECONDS"
 
-          if [[ "$CACHE_LANE" != "rolling" ]]; then
-            require warm1_seconds "$WARM1_SECONDS"
-            emit warm1_seconds "$WARM1_SECONDS"
-            emit docker_cache_import_seconds "$WARM1_DOCKER_CACHE_IMPORT_SECONDS"
-          else
-            emit warm1_seconds ""
-            emit docker_cache_import_seconds ""
-          fi
+          require warm1_seconds "$WARM1_SECONDS"
+          emit warm1_seconds "$WARM1_SECONDS"
+          emit warm1_build_seconds "$WARM1_BUILD_SECONDS"
+          emit docker_cache_import_seconds "$WARM1_DOCKER_CACHE_IMPORT_SECONDS"
 
           if [[ "$STRATEGY" == "boringcache" ]]; then
             if [[ "$CACHE_LANE" == "rolling" ]]; then
@@ -933,7 +953,7 @@ jobs:
             emit bytes_uploaded "$BC_BYTES"
 
             if [[ "$CACHE_LANE" == "rolling" ]]; then
-              emit hit_behavior_note "Rolling lane: this run executes only the upstream-sync seed build; warm1 follow-up runs are intentionally skipped."
+              emit hit_behavior_note "Rolling lane: first build imports the prior branch/default OCI cache, exports/promotes the updated cache, then rolling warm rebuilds the same pinned tree on a fresh runner in read-only mode."
             else
               emit hit_behavior_note "Fresh lane: cold+seed starts from empty BC tags and empty Docker layer cache, uses --no-cache + cache-to via the BC registry proxy (mode=max), and records cold timing while priming the shared cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only, no helper mounted inside Docker RUN steps, and no synthetic mutations."
             fi
@@ -962,7 +982,7 @@ jobs:
             emit bytes_uploaded ""
 
             if [[ "$CACHE_LANE" == "rolling" ]]; then
-              emit hit_behavior_note "Rolling lane: this run executes only the upstream-sync seed build; warm1 follow-up runs are intentionally skipped."
+              emit hit_behavior_note "Rolling lane: first build imports the prior GitHub Actions cache, exports the updated cache, then rolling warm rebuilds the same pinned tree on a fresh runner from that cache."
             else
               emit hit_behavior_note "Fresh lane: cold+seed runs the pinned base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only and no synthetic mutations."
             fi
@@ -978,7 +998,9 @@ jobs:
             --project-repo "$PROJECT_REPO" \
             --project-ref "${{ steps.upstream_ref.outputs.sha }}" \
             --cold-seconds "${{ steps.normalize.outputs.cold_seconds }}" \
+            --cold-build-seconds "${{ steps.normalize.outputs.cold_build_seconds }}" \
             --warm1-seconds "${{ steps.normalize.outputs.warm1_seconds }}" \
+            --warm1-build-seconds "${{ steps.normalize.outputs.warm1_build_seconds }}" \
             --cache-import-status "${{ steps.normalize.outputs.cache_import_status }}" \
             --docker-cache-import-seconds "${{ steps.normalize.outputs.docker_cache_import_seconds }}" \
             --docker-cache-export-seconds "${{ steps.normalize.outputs.docker_cache_export_seconds }}" \

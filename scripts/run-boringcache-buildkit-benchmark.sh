@@ -241,6 +241,28 @@ cache_from_usable() {
   [[ -n "${CACHE_FROM:-}" ]] || [[ -n "$cache_used_from_refs" ]]
 }
 
+require_readable_cache_import() {
+  cache_from_requested || return 0
+
+  if ! cache_from_usable; then
+    echo "BoringCache Docker import had no usable refs; refusing invalid cache sample." >&2
+    echo "requested refs: ${cache_requested_from_refs}" >&2
+    echo "used refs: ${cache_used_from_refs}" >&2
+    echo "unreadable refs: ${cache_unreadable_from_refs}" >&2
+    write_build_diagnostics
+    exit 1
+  fi
+
+  if [[ "$cache_import_ready" != "true" ]]; then
+    echo "BoringCache Docker import was not ready; refusing invalid cache sample." >&2
+    echo "requested refs: ${cache_requested_from_refs}" >&2
+    echo "used refs: ${cache_used_from_refs}" >&2
+    echo "unreadable refs: ${cache_unreadable_from_refs}" >&2
+    write_build_diagnostics
+    exit 1
+  fi
+}
+
 build_import_status() {
   if grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
     echo "ok"
@@ -333,6 +355,7 @@ while true; do
     echo "Unknown build mode: $mode" >&2
     exit 1
   fi
+  require_readable_cache_import
   start_proxy
   if ! ensure_proxy_available; then
     echo "Registry proxy status was unavailable before build start (attempt ${attempt}/${max_attempts})" >&2

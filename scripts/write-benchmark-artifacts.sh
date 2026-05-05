@@ -18,7 +18,7 @@
 #
 #   - 629-line variant (hugo, immich)
 #       adds Docker buildkit timings, OCI hydration / blob diagnostics,
-#       reseed classification (rolling_reseed/steady_state_candidate),
+#       rolling cache-update diagnostics (rolling_reseed/steady_state_candidate),
 #       fresh-warm cache-import-not-ok validity gating.
 #
 #   - 675-line variant (mastodon, posthog)
@@ -41,7 +41,7 @@
 #   - JSON shape is a strict superset: all blocks every fork emitted
 #     are emitted here. New fields are nullable and never required
 #     by the aggregator. Build-only/setup splits and Docker rolling
-#     first-build/warm fields are emitted when callers provide the data.
+#     first-build fields are emitted with nullable warm fields.
 #
 set -euo pipefail
 
@@ -77,6 +77,9 @@ publish_status="${BENCHMARK_PUBLISH_STATUS:-}"
 reporting_url="${BENCHMARK_REPORTING_URL:-}"
 docker_cache_from_refs="${BENCHMARK_DOCKER_CACHE_FROM_REFS:-${BORINGCACHE_CACHE_USED_FROM_REFS:-}}"
 docker_cache_import_ready="${BENCHMARK_DOCKER_CACHE_IMPORT_READY:-${BORINGCACHE_CACHE_IMPORT_READY:-}}"
+http_transport="${BENCHMARK_HTTP_TRANSPORT:-}"
+http2_enabled="${BENCHMARK_HTTP2_ENABLED:-}"
+oci_stream_through_min_bytes="${BENCHMARK_OCI_STREAM_THROUGH_MIN_BYTES:-}"
 cache_session_summary_json="${BENCHMARK_CACHE_SESSION_SUMMARY_JSON:-}"
 observability_jsonl="${BENCHMARK_OBSERVABILITY_JSONL:-${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}}"
 launch_proof_paths="${BENCHMARK_LAUNCH_PROOF_PATHS:-}"
@@ -268,6 +271,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --docker-cache-export-seconds)
       docker_cache_export_seconds="$2"
+      shift 2
+      ;;
+    --http-transport)
+      http_transport="$2"
+      shift 2
+      ;;
+    --http2-enabled)
+      http2_enabled="$2"
+      shift 2
+      ;;
+    --oci-stream-through-min-bytes)
+      oci_stream_through_min_bytes="$2"
       shift 2
       ;;
     --oci-hydration-policy)
@@ -696,35 +711,25 @@ rolling_reseed_kind=""
 tiny_metadata_churn=false
 reseed_reason=""
 if [[ "$lane" == "rolling" && "$strategy" == "boringcache" ]]; then
-  if [[ -n "$oci_new_blob_count" ]]; then
-    if (( oci_new_blob_count > reseed_new_blob_threshold )); then
-      rolling_reseed="true"
+  if [[ -n "$cache_import_status" || -n "$oci_new_blob_count" ]]; then
+    if [[ -n "$cache_import_status" && "$cache_import_status" != "ok" ]]; then
+      rolling_reseed="null"
       steady_state_candidate="false"
-      if [[ "$cache_import_status" == "ok" && -n "$oci_new_blob_bytes" ]] \
-        && (( oci_new_blob_count <= tiny_metadata_churn_max_blobs )) \
-        && (( oci_new_blob_bytes <= tiny_metadata_churn_max_bytes )); then
-        rolling_reseed_kind="tiny_metadata_churn"
-        tiny_metadata_churn=true
-        blob_word="blobs"
-        if (( oci_new_blob_count == 1 )); then
-          blob_word="blob"
-        fi
-        reseed_reason="${oci_new_blob_count} tiny OCI metadata ${blob_word} changed (${oci_new_blob_bytes} bytes)"
-      else
-        rolling_reseed_kind="blob_reseed"
-        reseed_reason="${oci_new_blob_count} new OCI blobs exceeded threshold ${reseed_new_blob_threshold}"
-        if [[ -n "$oci_new_blob_bytes" ]]; then
-          reseed_reason+=" (${oci_new_blob_bytes} bytes)"
-        fi
-      fi
+      rolling_reseed_kind="cache_import_not_ok"
+      reseed_reason="rolling cache import status was ${cache_import_status}"
     else
       rolling_reseed="false"
       steady_state_candidate="true"
       rolling_reseed_kind="none"
-      reseed_reason="new OCI blob count did not exceed threshold ${reseed_new_blob_threshold}"
+      if [[ -n "$oci_new_blob_count" ]]; then
+        reseed_reason="rolling imported prior cache; ${oci_new_blob_count} new OCI blobs recorded as continuous-commit cache updates"
+        if [[ -n "$oci_new_blob_bytes" ]]; then
+          reseed_reason+=" (${oci_new_blob_bytes} bytes)"
+        fi
+      else
+        reseed_reason="rolling imported prior cache; OCI upload diagnostics unavailable"
+      fi
     fi
-  else
-    reseed_reason="OCI upload diagnostics unavailable"
   fi
 fi
 
@@ -735,14 +740,6 @@ if [[ "$strategy" == "boringcache" && "$lane" == "fresh" && -n "$warm1_seconds" 
   reporting_reason="fresh_warm_cache_import_not_ok"
   reporting_note="Fresh BoringCache warm reruns require a usable cache import; treat this run as invalid."
   validity_reason="fresh_warm_cache_import_not_ok"
-elif [[ "$strategy" == "boringcache" && "$lane" == "rolling" && "$rolling_reseed" == "true" && "$rolling_reseed_kind" == "tiny_metadata_churn" ]]; then
-  reporting_mode="investigation_only"
-  reporting_reason="rolling_metadata_churn"
-  reporting_note="Rolling Docker uploaded only tiny OCI metadata after a successful import; keep it separate from blob reseeds and do not treat it as steady-state parity."
-elif [[ "$strategy" == "boringcache" && "$lane" == "rolling" && "$rolling_reseed" == "true" ]]; then
-  reporting_mode="investigation_only"
-  reporting_reason="rolling_reseed"
-  reporting_note="Rolling Docker reseeds are first-build investigation samples, not steady-state parity."
 elif [[ "$strategy" == "boringcache" && "$lane" == "rolling" && -n "$cache_import_status" && "$cache_import_status" != "ok" ]]; then
   reporting_mode="investigation_only"
   reporting_reason="rolling_cache_import_not_ok"
@@ -803,6 +800,9 @@ cat > "$json_path" <<JSON
   "adapter": $(json_string_or_null "$adapter"),
   "docker_cache_from_refs": $(json_array_from_csv_or_null "$docker_cache_from_refs"),
   "docker_cache_import_ready": $(json_bool_or_null "$docker_cache_import_ready"),
+  "http_transport": $(json_string_or_null "$http_transport"),
+  "http2_enabled": $(json_bool_or_null "$http2_enabled"),
+  "oci_stream_through_min_bytes": $(json_num_or_null "$oci_stream_through_min_bytes"),
   "restore_result": $(json_string_or_null "$restore_result"),
   "save_result": $(json_string_or_null "$save_result"),
   "publish_status": $(json_string_or_null "$publish_status"),
@@ -953,6 +953,12 @@ JSON
   if [[ -n "$oci_hydration_policy" ]]; then
     echo "| OCI hydration | ${oci_hydration_policy} |"
   fi
+  if [[ -n "$http_transport" ]]; then
+    echo "| HTTP transport | ${http_transport} |"
+  fi
+  if [[ -n "$oci_stream_through_min_bytes" ]]; then
+    echo "| OCI stream-through min bytes | ${oci_stream_through_min_bytes} |"
+  fi
   if [[ -n "$oci_body_remote_fetches" ]]; then
     echo "| OCI remote body fetches | ${oci_body_remote_fetches} |"
   fi
@@ -972,7 +978,7 @@ JSON
     echo "| New OCI blob bytes | ${oci_new_blob_bytes} |"
   fi
   if [[ "$rolling_reseed" != "null" ]]; then
-    rolling_label="steady-state candidate"
+    rolling_label="continuous-commit update"
     if [[ "$rolling_reseed" == "true" ]]; then
       if [[ "$tiny_metadata_churn" == "true" ]]; then
         rolling_label="tiny metadata churn"

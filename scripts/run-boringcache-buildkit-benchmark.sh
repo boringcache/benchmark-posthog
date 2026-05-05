@@ -73,12 +73,22 @@ verify_promoted_oci_refs() {
   refs_csv="$(normalize_ref_csv "$cache_promotion_refs")"
   [[ -n "$refs_csv" ]] || return 0
 
-  local workspace="${BENCHMARK_WORKSPACE:?BENCHMARK_WORKSPACE must be set}"
+  local refs=()
+  IFS=',' read -ra refs <<< "$refs_csv"
   local check_log
   check_log="$(mktemp /tmp/boringcache-oci-promotion-check.XXXXXX.log)"
-  local attempt
+  local attempt ref failed_refs
   for attempt in $(seq 1 30); do
-    if boringcache check "$workspace" "$refs_csv" --no-platform --no-git --exact --fail-on-miss >"$check_log" 2>&1; then
+    : > "$check_log"
+    failed_refs=()
+    for ref in "${refs[@]}"; do
+      if curl -fsS -I "http://127.0.0.1:${proxy_port}/v2/cache/manifests/${ref}" >>"$check_log" 2>&1; then
+        continue
+      fi
+      failed_refs+=("$ref")
+    done
+
+    if [[ "${#failed_refs[@]}" -eq 0 ]]; then
       echo "Verified promoted OCI ref(s): ${refs_csv}"
       rm -f "$check_log"
       return 0
@@ -86,7 +96,8 @@ verify_promoted_oci_refs() {
     sleep 2
   done
 
-  echo "Promoted OCI ref(s) were not visible after save: ${refs_csv}" >&2
+  echo "Promoted OCI ref(s) were not readable from the registry proxy: ${failed_refs[*]}" >&2
+  echo "requested refs: ${refs_csv}" >&2
   cat "$check_log" >&2 || true
   rm -f "$check_log"
   exit 1
@@ -370,11 +381,11 @@ while true; do
       exit 1
     fi
     capture_proxy_status
-    # Stop proxy gracefully so it can flush pending uploads
     if [[ "$mode" =~ ^(seed-cache|full)$ ]]; then
+      verify_promoted_oci_refs
+      # Stop proxy gracefully so it can flush pending uploads.
       echo "Flushing proxy cache to backend..."
       flush_action_proxy
-      verify_promoted_oci_refs
     fi
     # Dump proxy log for diagnostics
     echo "=== Proxy log (${mode}, last 200 lines) ==="

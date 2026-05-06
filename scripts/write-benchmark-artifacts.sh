@@ -540,6 +540,9 @@ infer_default_launch_context() {
       *maven*|*spring*)
         mode="maven"
         ;;
+      *storybook*|*nx*)
+        mode="nx"
+        ;;
       *n8n*|*turbo*)
         mode="turbo"
         ;;
@@ -559,6 +562,9 @@ infer_default_launch_context() {
         ;;
       turbo)
         adapter="turborepo"
+        ;;
+      nx)
+        adapter="nx"
         ;;
       *)
         adapter="$mode"

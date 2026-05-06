@@ -523,7 +523,7 @@ infer_default_launch_context() {
     run_uid="gh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
   fi
 
-  if [[ -z "$mode" && "$strategy" == "boringcache" ]]; then
+  if [[ -z "$mode" ]]; then
     case "$benchmark" in
       *hugo*|*immich*|*mastodon*|*posthog*)
         mode="docker"
@@ -552,7 +552,7 @@ infer_default_launch_context() {
     esac
   fi
 
-  if [[ -z "$adapter" && "$strategy" == "boringcache" ]]; then
+  if [[ -z "$adapter" ]]; then
     case "$mode" in
       docker|buildkit)
         adapter="oci"

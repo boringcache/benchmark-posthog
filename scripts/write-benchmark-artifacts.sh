@@ -716,7 +716,7 @@ if [[ "$lane" == "rolling" && "$strategy" == "boringcache" ]]; then
       rolling_reseed="null"
       steady_state_candidate="false"
       rolling_reseed_kind="rolling_bootstrap_or_cache_evicted"
-      reseed_reason="rolling did not find a usable prior cache import (${cache_import_status}); this run bootstrapped or republished the rolling cache"
+      reseed_reason="rolling did not find a usable prior cache import (${cache_import_status}); this run populated the rolling cache"
     else
       rolling_reseed="false"
       steady_state_candidate="true"
@@ -743,26 +743,26 @@ if [[ "$strategy" == "boringcache" && "$lane" == "fresh" && -n "$warm1_seconds" 
 elif [[ "$strategy" == "boringcache" && "$lane" == "rolling" && -n "$cache_import_status" && "$cache_import_status" != "ok" ]]; then
   reporting_mode="investigation_only"
   reporting_reason="rolling_cache_import_not_ok"
-  reporting_note="Rolling BoringCache did not find a prior rolling-scope OCI import. This run bootstraps the next continuous-commit sample and is not comparable as a cache-hit sample."
+  reporting_note="Rolling cache import was unavailable, so this sample populated the rolling cache and is excluded from parity claims."
 fi
 
 lane_label() {
   case "$1" in
-    rolling) echo "Rolling historical" ;;
-    *) echo "Fresh isolated" ;;
+    rolling) echo "Rolling" ;;
+    *) echo "Fresh" ;;
   esac
 }
 
 first_build_label() {
   case "$1" in
-    rolling) echo "First build after upstream sync" ;;
+    rolling) echo "Commit build" ;;
     *) echo "Cold build" ;;
   esac
 }
 
 comparison_header_label() {
   case "$1" in
-    rolling) echo "vs First build" ;;
+    rolling) echo "vs Commit build" ;;
     *) echo "vs Cold" ;;
   esac
 }
@@ -983,7 +983,7 @@ JSON
       if [[ "$tiny_metadata_churn" == "true" ]]; then
         rolling_label="tiny metadata churn"
       else
-        rolling_label="reseed"
+        rolling_label="cache bootstrap"
       fi
     fi
     echo "| Rolling classification | ${rolling_label} |"

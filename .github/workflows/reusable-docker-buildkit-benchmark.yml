@@ -310,6 +310,7 @@ jobs:
           CACHE_SCOPE_FALLBACK: ${{ steps.scope.outputs.cache_scope_fallback }}
           BORINGCACHE_REGISTRY_PROXY_TAGS: ${{ steps.scope.outputs.registry_proxy_tags }}
           BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-seed-observability.jsonl
+          ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP: ${{ inputs.cache_lane == 'rolling' && 'true' || '' }}
           IMAGE_TAG: ${{ inputs.image_tag }}
           DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
           BENCHMARK_DOCKER_CONTEXT: ${{ inputs.docker_context }}
@@ -327,12 +328,12 @@ jobs:
             mkdir -p "$(dirname "$diagnostics_file")"
             if [[ "$CACHE_LANE" == "rolling" ]]; then
               if [[ "${BORINGCACHE_CACHE_IMPORT_READY:-}" != "true" ]] || [[ -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ]]; then
-                echo "Rolling BoringCache Docker import was not ready; refusing cold reseed sample." >&2
+                echo "Rolling BoringCache Docker import was not ready; continuing as a bootstrap/update sample." >&2
                 echo "import ready: ${BORINGCACHE_CACHE_IMPORT_READY:-}" >&2
                 echo "requested refs: ${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}" >&2
                 echo "used refs: ${BORINGCACHE_CACHE_USED_FROM_REFS:-}" >&2
                 echo "unreadable refs: ${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}" >&2
-                exit 1
+                echo "This run will publish the rolling-scope OCI alias for the next continuous-commit sample." >&2
               fi
             fi
             phase_start="${{ steps.seed_timing_start.outputs.started_at }}"

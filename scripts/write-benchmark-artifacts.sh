@@ -715,8 +715,8 @@ if [[ "$lane" == "rolling" && "$strategy" == "boringcache" ]]; then
     if [[ -n "$cache_import_status" && "$cache_import_status" != "ok" ]]; then
       rolling_reseed="null"
       steady_state_candidate="false"
-      rolling_reseed_kind="cache_import_not_ok"
-      reseed_reason="rolling cache import status was ${cache_import_status}"
+      rolling_reseed_kind="rolling_bootstrap_or_cache_evicted"
+      reseed_reason="rolling did not find a usable prior cache import (${cache_import_status}); this run bootstrapped or republished the rolling cache"
     else
       rolling_reseed="false"
       steady_state_candidate="true"
@@ -743,7 +743,7 @@ if [[ "$strategy" == "boringcache" && "$lane" == "fresh" && -n "$warm1_seconds" 
 elif [[ "$strategy" == "boringcache" && "$lane" == "rolling" && -n "$cache_import_status" && "$cache_import_status" != "ok" ]]; then
   reporting_mode="investigation_only"
   reporting_reason="rolling_cache_import_not_ok"
-  reporting_note="Rolling BoringCache seed completed without a usable cache import; treat this run as investigation-only."
+  reporting_note="Rolling BoringCache did not find a prior rolling-scope OCI import. This run bootstraps the next continuous-commit sample and is not comparable as a cache-hit sample."
 fi
 
 lane_label() {

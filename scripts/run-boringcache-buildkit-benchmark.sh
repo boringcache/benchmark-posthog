@@ -13,6 +13,7 @@ cache_requested_from_refs="${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}"
 cache_used_from_refs="${BORINGCACHE_CACHE_USED_FROM_REFS:-}"
 cache_unreadable_from_refs="${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}"
 cache_promotion_refs="${BORINGCACHE_DOCKER_PROMOTION_REFS:-}"
+allow_rolling_bootstrap="${ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP:-false}"
 start_proxy() { :; }
 stop_proxy() { :; }
 ensure_proxy_available() {
@@ -203,19 +204,27 @@ require_readable_cache_import() {
   cache_from_requested || return 0
 
   if ! cache_from_usable; then
-    echo "BoringCache Docker import had no usable refs; refusing invalid cache sample." >&2
+    echo "BoringCache Docker import had no usable refs." >&2
     echo "requested refs: ${cache_requested_from_refs}" >&2
     echo "used refs: ${cache_used_from_refs}" >&2
     echo "unreadable refs: ${cache_unreadable_from_refs}" >&2
+    if [[ "$mode" == "full" && "$allow_rolling_bootstrap" == "true" ]]; then
+      echo "Continuing without a readable import so this rolling run can publish the rolling-scope OCI alias." >&2
+      return 0
+    fi
     write_build_diagnostics
     exit 1
   fi
 
   if [[ "$cache_import_ready" != "true" ]]; then
-    echo "BoringCache Docker import was not ready; refusing invalid cache sample." >&2
+    echo "BoringCache Docker import was not ready." >&2
     echo "requested refs: ${cache_requested_from_refs}" >&2
     echo "used refs: ${cache_used_from_refs}" >&2
     echo "unreadable refs: ${cache_unreadable_from_refs}" >&2
+    if [[ "$mode" == "full" && "$allow_rolling_bootstrap" == "true" ]]; then
+      echo "Continuing with the usable import subset so this rolling run can refresh the rolling-scope OCI alias." >&2
+      return 0
+    fi
     write_build_diagnostics
     exit 1
   fi

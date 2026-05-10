@@ -746,7 +746,7 @@ if [[ "$strategy" == "boringcache" && "$lane" == "fresh" && -n "$warm1_seconds" 
   reporting_reason="fresh_warm_cache_import_not_ok"
   reporting_note="Fresh BoringCache warm reruns require a usable cache import; treat this run as invalid."
   validity_reason="fresh_warm_cache_import_not_ok"
-elif [[ "$strategy" == "boringcache" && "$lane" == "rolling" && -n "$cache_import_status" && "$cache_import_status" != "ok" ]]; then
+elif [[ "$lane" == "rolling" && -n "$cache_import_status" && "$cache_import_status" != "ok" ]]; then
   reporting_mode="investigation_only"
   reporting_reason="rolling_cache_import_not_ok"
   reporting_note="Rolling cache import was unavailable, so this sample populated the rolling cache and is excluded from parity claims."

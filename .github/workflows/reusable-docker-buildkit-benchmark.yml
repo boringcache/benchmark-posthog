@@ -34,7 +34,7 @@ on:
       benchmark_workspace:
         required: false
         type: string
-        default: boringcache/benchmarks
+        default: ""
       cli_ref:
         required: false
         type: string
@@ -64,7 +64,7 @@ permissions:
 env:
   PROJECT_REPO: ${{ inputs.project_repo }}
   BENCHMARK_ID: ${{ inputs.benchmark_id }}
-  BENCHMARK_WORKSPACE: ${{ inputs.benchmark_workspace }}
+  BENCHMARK_WORKSPACE: ${{ inputs.benchmark_workspace || github.repository }}
   CACHE_LANE: ${{ inputs.cache_lane }}
   BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY: ${{ inputs.blob_download_concurrency }}
   BORINGCACHE_BLOB_PREFETCH_CONCURRENCY: ${{ inputs.blob_prefetch_concurrency }}
@@ -133,7 +133,7 @@ jobs:
         with:
           setup: none
           mode: archive
-          workspace: ${{ inputs.benchmark_workspace }}
+          workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cli-platform: ${{ inputs.cli_platform }}
           cache-runtime: false
 
@@ -245,7 +245,7 @@ jobs:
           cache-runtime: false
           mode: docker
           docker-command: setup
-          workspace: ${{ inputs.benchmark_workspace }}
+          workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ steps.scope.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
           proxy-no-git: 'true'
@@ -504,7 +504,7 @@ jobs:
         with:
           setup: none
           mode: archive
-          workspace: ${{ inputs.benchmark_workspace }}
+          workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cli-platform: ${{ inputs.cli_platform }}
           cache-runtime: false
 
@@ -540,7 +540,7 @@ jobs:
           cache-runtime: false
           mode: docker
           docker-command: setup
-          workspace: ${{ inputs.benchmark_workspace }}
+          workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ needs.seed-cache.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
           proxy-no-git: 'true'
@@ -759,7 +759,7 @@ jobs:
         with:
           setup: none
           mode: archive
-          workspace: ${{ inputs.benchmark_workspace }}
+          workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cli-platform: ${{ inputs.cli_platform }}
           cache-runtime: false
 

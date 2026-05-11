@@ -66,7 +66,7 @@ jobs:
       docker_context: upstream
       image_tag: posthog-benchmark:latest
       cli_platform: linux-amd64
-      benchmark_workspace: boringcache/benchmarks
+      benchmark_workspace: ${{ github.repository }}
       cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
       blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
       blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}

@@ -5,7 +5,7 @@
 # Consolidates the four forks previously found across benchmark repos:
 #
 #   - 55-line variant (n8n, opentelemetry-java, spring-ai, storybook)
-#       no dedupe; tag-resolution defaults; soft about misses.
+#       no dedupe; default archive tag resolution; soft about misses.
 #
 #   - 71-line variant (hugo, immich, mastodon, posthog, zed)
 #       adds cache_entry_id-based dedupe so duplicate hits across tags
@@ -24,8 +24,11 @@
 #   - Default mode == 71-line variant (the dedupe is universally correct
 #     and was the most common fork). The 55-line callers gain dedupe.
 #     Storage totals can only decrease or stay equal — never inflate.
+#   - Set BORINGCACHE_EXACT_TAGS=<csv> to check proxy/native tags with
+#     `--no-platform --exact` while checking archive tags with default
+#     restore-style resolution.
 #   - Set BORINGCACHE_CHECK_STRICT=1 to enable `--no-platform --exact`
-#     and hard-fail on misses (grpc behavior).
+#     for every tag and hard-fail on misses (grpc behavior).
 #   - Set BORINGCACHE_STORAGE_MISSING_PATH=<file> to enable the soft
 #     warning + missing-tag-list + inspect-fallback flow (hugo-go).
 #     This implies strict resolution flags but does not hard-fail.
@@ -56,19 +59,66 @@ if [[ "${BORINGCACHE_CHECK_STRICT:-0}" == "1" ]]; then
   strict_mode=1
 fi
 
-check_args=(check "$workspace" "$tags_csv" --no-git --json)
-if (( strict_mode == 1 )); then
-  check_args=(check "$workspace" "$tags_csv" --no-git --no-platform --exact --json)
-fi
-
 tmp_file="$(mktemp)"
 stderr_file="$(mktemp)"
-trap 'rm -f "$tmp_file" "$stderr_file"' EXIT
+tmp_dir="$(mktemp -d)"
+trap 'rm -f "$tmp_file" "$stderr_file"; rm -rf "$tmp_dir"' EXIT
 
-if ! boringcache "${check_args[@]}" > "$tmp_file" 2> "$stderr_file"; then
-  echo "boringcache check failed while measuring remote storage for tags: ${tags_csv}" >&2
-  cat "$stderr_file" >&2
-  exit 1
+run_check() {
+  local output_file="$1"
+  shift
+
+  if ! boringcache "$@" > "$output_file" 2>> "$stderr_file"; then
+    echo "boringcache check failed while measuring remote storage for tags: ${tags_csv}" >&2
+    cat "$stderr_file" >&2
+    exit 1
+  fi
+}
+
+if (( strict_mode == 1 )); then
+  run_check "$tmp_file" check "$workspace" "$tags_csv" --no-git --no-platform --exact --json
+elif [[ -n "${BORINGCACHE_EXACT_TAGS:-}" ]]; then
+  exact_lookup=",${BORINGCACHE_EXACT_TAGS//[[:space:]]/},"
+  archive_tags=()
+  exact_tags=()
+
+  IFS=',' read -r -a tag_list <<< "$tags_csv"
+  for raw_tag in "${tag_list[@]}"; do
+    tag="${raw_tag//[[:space:]]/}"
+    [[ -n "$tag" ]] || continue
+
+    if [[ "$exact_lookup" == *",$tag,"* ]]; then
+      exact_tags+=("$tag")
+    else
+      archive_tags+=("$tag")
+    fi
+  done
+
+  check_files=()
+  if [[ ${#archive_tags[@]} -gt 0 ]]; then
+    archive_tags_csv="$(IFS=,; echo "${archive_tags[*]}")"
+    archive_json="${tmp_dir}/archive.json"
+    run_check "$archive_json" check "$workspace" "$archive_tags_csv" --json
+    check_files+=("$archive_json")
+  fi
+
+  if [[ ${#exact_tags[@]} -gt 0 ]]; then
+    exact_tags_csv="$(IFS=,; echo "${exact_tags[*]}")"
+    exact_json="${tmp_dir}/exact.json"
+    run_check "$exact_json" check "$workspace" "$exact_tags_csv" --no-git --no-platform --exact --json
+    check_files+=("$exact_json")
+  fi
+
+  jq -s '
+    def all_results: [.[].results[]?];
+    {
+      schema_version: (.[0].schema_version // 1),
+      workspace: (.[0].workspace // ""),
+      results: all_results
+    }
+  ' "${check_files[@]}" > "$tmp_file"
+else
+  run_check "$tmp_file" check "$workspace" "$tags_csv" --json
 fi
 
 if ! jq -e '.results | type == "array"' "$tmp_file" >/dev/null 2>&1; then

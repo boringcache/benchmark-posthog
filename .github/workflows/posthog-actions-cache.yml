@@ -49,7 +49,7 @@ jobs:
       dockerfile_path: upstream/Dockerfile
       docker_context: upstream
       image_tag: posthog-benchmark:latest
-      benchmark_workspace: boringcache/benchmarks
+      benchmark_workspace: ${{ github.repository }}
       free_disk_space: true
     secrets: inherit
     permissions:

@@ -1,4 +1,4 @@
-workspace = "boringcache/benchmarks"
+workspace = "boringcache/benchmark-posthog"
 
 # Docker BuildKit registry cache benchmark. The proxy is the only cache
 # surface (boringcache/one mode=docker exporting --cache-from / --cache-to

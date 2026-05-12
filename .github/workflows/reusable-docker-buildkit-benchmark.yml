@@ -72,7 +72,7 @@ env:
 
 jobs:
   seed-cache:
-    name: ${{ format('Docker Seed ({0}, {1})', inputs.strategy == 'actions-cache' && 'actions/cache' || 'BoringCache', inputs.cache_lane == 'rolling' && 'rolling' || 'fresh') }}
+    name: ${{ format('Docker {0} ({1}, {2})', inputs.cache_lane == 'rolling' && 'Commit Build' || 'Cold Build', inputs.strategy == 'actions-cache' && 'actions/cache' || 'BoringCache', inputs.cache_lane == 'rolling' && 'rolling' || 'fresh') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -290,7 +290,7 @@ jobs:
           echo "Cannot produce reliable AC benchmark results until cache writes are enabled." >&2
           exit 1
 
-      - name: ${{ inputs.cache_lane == 'rolling' && 'Run rolling seed-only build' || 'Run fresh seed build' }}
+      - name: ${{ inputs.cache_lane == 'rolling' && 'Run rolling commit build' || 'Run fresh cold build' }}
         id: cold_baseline_build
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
@@ -415,7 +415,7 @@ jobs:
               attempt=$((attempt + 1))
               if [[ "$attempt" -eq 2 ]]; then
                 selected_scope="$CACHE_SCOPE_FALLBACK"
-                echo "Retrying cold seed with fallback cache scope: ${selected_scope}"
+                echo "Retrying cold build with fallback cache scope: ${selected_scope}"
               fi
               sleep 5
             done
@@ -967,9 +967,9 @@ jobs:
             emit bytes_uploaded "$BC_BYTES"
 
             if [[ "$CACHE_LANE" == "rolling" ]]; then
-              emit hit_behavior_note "Rolling lane: one continuous-commit build imports the prior branch/default OCI cache, exports/promotes the updated cache, and records that first build only. Fresh lane owns the separate cold+warm parity check."
+              emit hit_behavior_note "Rolling lane: one continuous-commit build imports the prior branch/default OCI cache, exports/promotes the updated cache, and records that commit build only. Fresh lane owns the separate cold-build plus warm-rerun parity check."
             else
-              emit hit_behavior_note "Fresh lane: cold+seed starts from empty BC tags and empty Docker layer cache, uses --no-cache + cache-to via the BC registry proxy (mode=max), and records cold timing while priming the shared cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only, no helper mounted inside Docker RUN steps, and no synthetic mutations."
+              emit hit_behavior_note "Fresh lane: the cold build starts from empty BC tags and empty Docker layer cache, uses --no-cache + cache-to via the BC registry proxy (mode=max), and records cold timing while populating the shared cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only, no helper mounted inside Docker RUN steps, and no synthetic mutations."
             fi
           else
             emit cache_import_status ""
@@ -996,9 +996,9 @@ jobs:
             emit bytes_uploaded ""
 
             if [[ "$CACHE_LANE" == "rolling" ]]; then
-              emit hit_behavior_note "Rolling lane: one continuous-commit build imports the prior GitHub Actions cache, exports the updated cache, and records that first build only. Fresh lane owns the separate cold+warm parity check."
+              emit hit_behavior_note "Rolling lane: one continuous-commit build imports the prior GitHub Actions cache, exports the updated cache, and records that commit build only. Fresh lane owns the separate cold-build plus warm-rerun parity check."
             else
-              emit hit_behavior_note "Fresh lane: cold+seed runs the pinned base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while priming remote cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only and no synthetic mutations."
+              emit hit_behavior_note "Fresh lane: the cold build runs the pinned base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while populating remote cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only and no synthetic mutations."
             fi
           fi
 

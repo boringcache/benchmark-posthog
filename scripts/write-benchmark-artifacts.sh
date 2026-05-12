@@ -18,12 +18,12 @@
 #
 #   - 629-line variant (hugo, immich)
 #       adds Docker buildkit timings, OCI hydration / blob diagnostics,
-#       rolling cache-update diagnostics (rolling_reseed/steady_state_candidate),
+#       rolling cache-bootstrap/update diagnostics (legacy rolling_reseed/steady_state_candidate),
 #       fresh-warm cache-import-not-ok validity gating.
 #
 #   - 675-line variant (mastodon, posthog)
-#       adds tiny-metadata-churn distinction inside the rolling reseed
-#       classifier (rolling_reseed_kind, tiny_metadata_churn) plus
+#       adds tiny-metadata-churn distinction inside the rolling bootstrap
+#       classifier (legacy rolling_reseed_kind, tiny_metadata_churn) plus
 #       BENCHMARK_TINY_METADATA_CHURN_MAX_BLOBS / _MAX_BYTES knobs.
 #
 # Behavior preservation:
@@ -31,7 +31,7 @@
 #     default to empty and emit JSON null, leaving the consumer
 #     (publish-index.rb) to coerce nil with parse_number/dig.
 #   - Default values match the most permissive existing fork:
-#       reseed_new_blob_threshold defaults to 0
+#       legacy reseed_new_blob_threshold defaults to 0
 #       tiny_metadata_churn_max_blobs defaults to 1
 #       tiny_metadata_churn_max_bytes defaults to 65536
 #   - Markdown lines for fork-specific metrics are only emitted when
@@ -41,7 +41,7 @@
 #   - JSON shape is a strict superset: all blocks every fork emitted
 #     are emitted here. New fields are nullable and never required
 #     by the aggregator. Build-only/setup splits and Docker rolling
-#     first-build fields are emitted with nullable warm fields.
+#     commit-build fields are emitted with nullable warm fields.
 #
 set -euo pipefail
 

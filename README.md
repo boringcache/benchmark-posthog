@@ -28,12 +28,12 @@ Fresh runs use the scenario set:
 
 BoringCache uses the outer BuildKit registry/OCI cache path only. It does not call BoringCache inside Dockerfile `RUN` steps, and upstream Dockerfile cache mounts stay native to BuildKit.
 
-Rolling runs record only the first build after upstream sync against the stable rolling cache tags. They do not run a separate `warm1` follow-up.
+Rolling runs record the upstream commit build as-is after upstream sync against the stable rolling cache tags. They do not run a separate `warm1` follow-up.
 
 The story this benchmark is meant to show is:
 
 - speed on fresh cold and warm paths
-- first-build behavior after upstream sync in the rolling lane
+- commit-build behavior on normal upstream syncs in the rolling lane
 - storage footprint in each backend
 - whether the OCI registry cache behaves as a simple outer Docker cache backend
 - whether cache reuse stays understandable instead of turning into opaque blob growth

@@ -32,6 +32,9 @@
 #   - Set BORINGCACHE_STORAGE_MISSING_PATH=<file> to enable the soft
 #     warning + missing-tag-list + inspect-fallback flow (hugo-go).
 #     This implies strict resolution flags but does not hard-fail.
+#   - Set BORINGCACHE_STORAGE_BREAKDOWN_PATH=<file> to also write a JSON
+#     breakdown of hit entries by storage component. This keeps stdout
+#     backward-compatible: stdout remains only the total byte count.
 #
 # Positional args (unchanged):
 #   $1 = workspace
@@ -73,6 +76,153 @@ run_check() {
     cat "$stderr_file" >&2
     exit 1
   fi
+}
+
+to_num() {
+  local value="$1"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    echo "$value"
+  else
+    echo "0"
+  fi
+}
+
+component_type_for() {
+  local storage_mode="$1"
+  local tag="$2"
+  local primary_tag="$3"
+  local combined="${tag} ${primary_tag}"
+
+  case "$storage_mode" in
+    cas)
+      echo "remote_cas"
+      ;;
+    archive)
+      if [[ "$combined" == *"-mise-"* || "$combined" == *"runtime"* ]]; then
+        echo "tool_runtime_archive"
+      else
+        echo "dependency_archive"
+      fi
+      ;;
+    *)
+      echo "unknown"
+      ;;
+  esac
+}
+
+component_label_for() {
+  local component_type="$1"
+  local tag="$2"
+
+  case "$component_type" in
+    remote_cas)
+      echo "remote CAS"
+      ;;
+    tool_runtime_archive)
+      echo "tool runtime archive"
+      ;;
+    dependency_archive)
+      echo "dependency archive"
+      ;;
+    *)
+      echo "${tag:-unknown}"
+      ;;
+  esac
+}
+
+write_storage_breakdown() {
+  local output_path="${BORINGCACHE_STORAGE_BREAKDOWN_PATH:-}"
+  [[ -n "$output_path" ]] || return 0
+
+  local components_file
+  components_file="$(mktemp)"
+  local breakdown_stderr
+  breakdown_stderr="$(mktemp)"
+
+  declare -A seen_breakdown_entries=()
+
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+
+    local key tag requested_tag inspect_target inspect_json
+    key="$(jq -r '.cache_entry_id // .cacheEntryId // .manifest_root_digest // .manifestRootDigest // .requested_tag // .requestedTag // .tag // "unknown"' <<<"$row")"
+    if [[ -n "${seen_breakdown_entries[$key]+x}" ]]; then
+      continue
+    fi
+    seen_breakdown_entries[$key]=1
+
+    tag="$(jq -r '.tag // .requested_tag // .requestedTag // empty' <<<"$row")"
+    requested_tag="$(jq -r '.requested_tag // .requestedTag // .tag // empty' <<<"$row")"
+    [[ -n "$tag" ]] || continue
+    inspect_target="$(jq -r '.cache_entry_id // .cacheEntryId // empty' <<<"$row")"
+    inspect_target="${inspect_target:-$tag}"
+
+    inspect_json="$(boringcache inspect "$workspace" "$inspect_target" --json 2> "$breakdown_stderr" || true)"
+    if [[ -z "$inspect_json" ]]; then
+      echo "boringcache inspect failed while writing storage breakdown for tag: ${tag}" >&2
+      cat "$breakdown_stderr" >&2
+      rm -f "$components_file" "$breakdown_stderr"
+      exit 1
+    fi
+
+    local entry_id primary_tag storage_mode stored_size archive_size blob_total_size component_type component_label
+    entry_id="$(jq -r '.entry.id // empty' <<<"$inspect_json")"
+    primary_tag="$(jq -r '.entry.primary_tag // empty' <<<"$inspect_json")"
+    storage_mode="$(jq -r '.entry.storage_mode // "unknown"' <<<"$inspect_json")"
+    stored_size="$(jq -r '.entry.stored_size_bytes // .entry.compressed_size // .entry.blob_total_size_bytes // 0' <<<"$inspect_json")"
+    archive_size="$(jq -r '.entry.archive_size // .entry.compressed_size // 0' <<<"$inspect_json")"
+    blob_total_size="$(jq -r '.entry.blob_total_size_bytes // 0' <<<"$inspect_json")"
+    stored_size="$(to_num "$stored_size")"
+    archive_size="$(to_num "$archive_size")"
+    blob_total_size="$(to_num "$blob_total_size")"
+    component_type="$(component_type_for "$storage_mode" "$tag" "$primary_tag")"
+    component_label="$(component_label_for "$component_type" "$tag")"
+
+    jq -c -n \
+      --arg tag "$tag" \
+      --arg requested_tag "$requested_tag" \
+      --arg entry_id "$entry_id" \
+      --arg primary_tag "$primary_tag" \
+      --arg storage_mode "$storage_mode" \
+      --arg component_type "$component_type" \
+      --arg component_label "$component_label" \
+      --argjson bytes "$stored_size" \
+      --argjson archive_size_bytes "$archive_size" \
+      --argjson blob_total_size_bytes "$blob_total_size" \
+      '{
+        tag: $tag,
+        requested_tag: $requested_tag,
+        cache_entry_id: $entry_id,
+        primary_tag: (if $primary_tag == "" then null else $primary_tag end),
+        storage_mode: $storage_mode,
+        component_type: $component_type,
+        component_label: $component_label,
+        bytes: $bytes,
+        archive_size_bytes: $archive_size_bytes,
+        blob_total_size_bytes: $blob_total_size_bytes
+      }' >> "$components_file"
+  done < <(jq -c '.results[]? | select((.status // "") == "hit")' "$tmp_file")
+
+  mkdir -p "$(dirname "$output_path")"
+  jq -s --arg workspace "$workspace" --arg tags_csv "$tags_csv" '
+    def sum_type($type):
+      map(select(.component_type == $type) | .bytes) | add // 0;
+
+    {
+      workspace: $workspace,
+      tags: ($tags_csv | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))),
+      total_bytes: (map(.bytes) | add // 0),
+      summary: {
+        remote_cas_bytes: sum_type("remote_cas"),
+        dependency_archive_bytes: sum_type("dependency_archive"),
+        tool_runtime_archive_bytes: sum_type("tool_runtime_archive"),
+        unknown_bytes: sum_type("unknown")
+      },
+      components: .
+    }
+  ' "$components_file" > "$output_path"
+
+  rm -f "$components_file" "$breakdown_stderr"
 }
 
 if (( strict_mode == 1 )); then
@@ -155,15 +305,6 @@ if (( strict_mode == 1 )); then
 fi
 
 if (( soft_missing_mode == 1 )); then
-  to_num() {
-    local value="$1"
-    if [[ "$value" =~ ^[0-9]+$ ]]; then
-      echo "$value"
-    else
-      echo "0"
-    fi
-  }
-
   declare -A seen_entries=()
   total=0
 
@@ -240,4 +381,5 @@ if [[ -z "$total" || ! "$total" =~ ^[0-9]+$ ]]; then
   total=0
 fi
 
+write_storage_breakdown
 echo "$total"

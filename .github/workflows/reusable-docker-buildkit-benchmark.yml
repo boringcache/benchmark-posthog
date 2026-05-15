@@ -820,8 +820,11 @@ jobs:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
         run: |
           tags_csv="${{ needs.seed-cache.outputs.tags_csv }}"
-          bytes="$(.benchmark-config/scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
+          mkdir -p benchmark-storage
+          breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
+          bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" .benchmark-config/scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
           echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"
+          echo "breakdown_path=${breakdown_path}" >> "$GITHUB_OUTPUT"
 
       - name: Measure GHA cache storage usage
         if: inputs.strategy == 'actions-cache'
@@ -878,6 +881,7 @@ jobs:
           WARM1_STARTUP_OCI_BODY_COLD_BLOBS: ${{ steps.timings.outputs.warm1_startup_oci_body_cold_blobs }}
           WARM1_STARTUP_OCI_BODY_DURATION_MS: ${{ steps.timings.outputs.warm1_startup_oci_body_duration_ms }}
           BC_BYTES: ${{ steps.bc_cache_size.outputs.bytes }}
+          BC_STORAGE_BREAKDOWN_PATH: ${{ steps.bc_cache_size.outputs.breakdown_path }}
           AC_BYTES: ${{ steps.ac_cache_size.outputs.bytes }}
         run: |
           set -euo pipefail
@@ -964,6 +968,7 @@ jobs:
             require cache_storage_bytes "$BC_BYTES"
             emit cache_storage_bytes "$BC_BYTES"
             emit cache_storage_source "boringcache-check"
+            emit cache_storage_breakdown_json "$BC_STORAGE_BREAKDOWN_PATH"
             emit bytes_uploaded "$BC_BYTES"
 
             if [[ "$CACHE_LANE" == "rolling" ]]; then
@@ -993,6 +998,7 @@ jobs:
             require cache_storage_bytes "$AC_BYTES"
             emit cache_storage_bytes "$AC_BYTES"
             emit cache_storage_source "github-actions-cache-api"
+            emit cache_storage_breakdown_json ""
             emit bytes_uploaded ""
 
             if [[ "$CACHE_LANE" == "rolling" ]]; then
@@ -1020,6 +1026,7 @@ jobs:
             --docker-cache-export-seconds "${{ steps.normalize.outputs.docker_cache_export_seconds }}" \
             --cache-storage-bytes "${{ steps.normalize.outputs.cache_storage_bytes }}" \
             --cache-storage-source "${{ steps.normalize.outputs.cache_storage_source }}" \
+            --storage-breakdown-json "${{ steps.normalize.outputs.cache_storage_breakdown_json }}" \
             --bytes-uploaded "${{ steps.normalize.outputs.bytes_uploaded }}" \
             --oci-hydration-policy "${{ steps.normalize.outputs.oci_hydration_policy }}" \
             --oci-body-local-hits "${{ steps.normalize.outputs.oci_body_local_hits }}" \

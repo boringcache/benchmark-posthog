@@ -57,9 +57,11 @@ warm1_build_seconds=""
 cache_storage_bytes="0"
 cache_storage_source=""
 cache_storage_note=""
+cache_storage_breakdown_json=""
 bytes_uploaded=""
 bytes_downloaded=""
 hit_behavior_note=""
+tool_outcomes_json=""
 cli_version="${BENCHMARK_CLI_VERSION:-}"
 action_ref="${BENCHMARK_ACTION_REF:-}"
 action_sha="${BENCHMARK_ACTION_SHA:-}"
@@ -99,6 +101,16 @@ startup_oci_body_inserted=""
 startup_oci_body_failures=""
 startup_oci_body_cold_blobs=""
 startup_oci_body_duration_ms=""
+startup_prefetch_duration_ms="${BENCHMARK_STARTUP_PREFETCH_DURATION_MS:-${request_metrics_startup_prefetch_duration_ms:-}}"
+startup_prefetch_target_blobs="${BENCHMARK_STARTUP_PREFETCH_TARGET_BLOBS:-${request_metrics_startup_prefetch_target_blobs:-}}"
+startup_prefetch_target_bytes="${BENCHMARK_STARTUP_PREFETCH_TARGET_BYTES:-${request_metrics_startup_prefetch_target_bytes:-}}"
+startup_prefetch_concurrency="${BENCHMARK_STARTUP_PREFETCH_CONCURRENCY:-${request_metrics_startup_prefetch_concurrency:-}}"
+startup_prefetch_initial_concurrency="${BENCHMARK_STARTUP_PREFETCH_INITIAL_CONCURRENCY:-${request_metrics_startup_prefetch_initial_concurrency:-}}"
+startup_prefetch_final_concurrency="${BENCHMARK_STARTUP_PREFETCH_FINAL_CONCURRENCY:-${request_metrics_startup_prefetch_final_concurrency:-}}"
+startup_prefetch_max_observed_concurrency="${BENCHMARK_STARTUP_PREFETCH_MAX_OBSERVED_CONCURRENCY:-${request_metrics_startup_prefetch_max_observed_concurrency:-}}"
+startup_prefetch_concurrency_reason="${BENCHMARK_STARTUP_PREFETCH_CONCURRENCY_REASON:-${request_metrics_startup_prefetch_concurrency_reason:-}}"
+startup_prefetch_retries="${BENCHMARK_STARTUP_PREFETCH_RETRIES:-${request_metrics_startup_prefetch_retries:-}}"
+startup_prefetch_failures="${BENCHMARK_STARTUP_PREFETCH_FAILURES:-${request_metrics_startup_prefetch_failures:-}}"
 oci_new_blob_count=""
 oci_new_blob_bytes=""
 oci_upload_requested_blobs=""
@@ -158,6 +170,10 @@ while [[ $# -gt 0 ]]; do
       cache_storage_note="$2"
       shift 2
       ;;
+    --storage-breakdown-json)
+      cache_storage_breakdown_json="$2"
+      shift 2
+      ;;
     --bytes-uploaded)
       bytes_uploaded="$2"
       shift 2
@@ -168,6 +184,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --hit-behavior-note)
       hit_behavior_note="$2"
+      shift 2
+      ;;
+    --tool-outcomes-json)
+      tool_outcomes_json="$2"
       shift 2
       ;;
     --cli-version)
@@ -329,6 +349,46 @@ while [[ $# -gt 0 ]]; do
       startup_oci_body_duration_ms="$2"
       shift 2
       ;;
+    --startup-prefetch-duration-ms)
+      startup_prefetch_duration_ms="$2"
+      shift 2
+      ;;
+    --startup-prefetch-target-blobs)
+      startup_prefetch_target_blobs="$2"
+      shift 2
+      ;;
+    --startup-prefetch-target-bytes)
+      startup_prefetch_target_bytes="$2"
+      shift 2
+      ;;
+    --startup-prefetch-concurrency)
+      startup_prefetch_concurrency="$2"
+      shift 2
+      ;;
+    --startup-prefetch-initial-concurrency)
+      startup_prefetch_initial_concurrency="$2"
+      shift 2
+      ;;
+    --startup-prefetch-final-concurrency)
+      startup_prefetch_final_concurrency="$2"
+      shift 2
+      ;;
+    --startup-prefetch-max-observed-concurrency)
+      startup_prefetch_max_observed_concurrency="$2"
+      shift 2
+      ;;
+    --startup-prefetch-concurrency-reason)
+      startup_prefetch_concurrency_reason="$2"
+      shift 2
+      ;;
+    --startup-prefetch-retries)
+      startup_prefetch_retries="$2"
+      shift 2
+      ;;
+    --startup-prefetch-failures)
+      startup_prefetch_failures="$2"
+      shift 2
+      ;;
     --oci-new-blob-count)
       oci_new_blob_count="$2"
       shift 2
@@ -434,6 +494,22 @@ json_array_from_csv_or_null() {
   else
     jq -Rn --arg value "$v" '$value | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))'
   fi
+}
+
+json_payload_from_optional_file() {
+  local label="$1"
+  local path="$2"
+  if [[ -z "$path" ]]; then
+    echo "null"
+    return
+  fi
+
+  if [[ ! -f "$path" ]]; then
+    echo "Missing ${label} JSON: $path" >&2
+    exit 1
+  fi
+
+  jq -c '.' "$path"
 }
 
 sanitize_uint() {
@@ -644,6 +720,16 @@ startup_oci_body_inserted="$(sanitize_uint "$startup_oci_body_inserted")"
 startup_oci_body_failures="$(sanitize_uint "$startup_oci_body_failures")"
 startup_oci_body_cold_blobs="$(sanitize_uint "$startup_oci_body_cold_blobs")"
 startup_oci_body_duration_ms="$(sanitize_uint "$startup_oci_body_duration_ms")"
+startup_prefetch_duration_ms="$(sanitize_uint "$startup_prefetch_duration_ms")"
+startup_prefetch_target_blobs="$(sanitize_uint "$startup_prefetch_target_blobs")"
+startup_prefetch_target_bytes="$(sanitize_uint "$startup_prefetch_target_bytes")"
+startup_prefetch_concurrency="$(sanitize_uint "$startup_prefetch_concurrency")"
+startup_prefetch_initial_concurrency="$(sanitize_uint "$startup_prefetch_initial_concurrency")"
+startup_prefetch_final_concurrency="$(sanitize_uint "$startup_prefetch_final_concurrency")"
+startup_prefetch_max_observed_concurrency="$(sanitize_uint "$startup_prefetch_max_observed_concurrency")"
+startup_prefetch_concurrency_reason="$(sanitize_token "$startup_prefetch_concurrency_reason")"
+startup_prefetch_retries="$(sanitize_uint "$startup_prefetch_retries")"
+startup_prefetch_failures="$(sanitize_uint "$startup_prefetch_failures")"
 oci_new_blob_count="$(sanitize_uint "$oci_new_blob_count")"
 oci_new_blob_bytes="$(sanitize_uint "$oci_new_blob_bytes")"
 oci_upload_requested_blobs="$(sanitize_uint "$oci_upload_requested_blobs")"
@@ -668,6 +754,8 @@ if [[ -n "$action_timings_json" ]]; then
 fi
 session_summary_payload="$(session_summary_payload_from_inputs)"
 launch_proof_paths_payload="$(launch_proof_paths_payload_from_inputs)"
+storage_breakdown_payload="$(json_payload_from_optional_file "storage breakdown" "$cache_storage_breakdown_json")"
+tool_outcomes_payload="$(json_payload_from_optional_file "tool outcomes" "$tool_outcomes_json")"
 
 warm_count=0
 warm_total=0
@@ -834,11 +922,24 @@ cat > "$json_path" <<JSON
     "storage_bytes": $cache_storage_bytes,
     "storage_mib": $cache_storage_mib,
     "storage_source": "$cache_storage_source",
-    "storage_note": $(json_string_or_null "$cache_storage_note")
+    "storage_note": $(json_string_or_null "$cache_storage_note"),
+    "storage_breakdown": $storage_breakdown_payload
   },
   "docker_cache": {
     "import_seconds": $(json_num_or_null "$docker_cache_import_seconds"),
     "export_seconds": $(json_num_or_null "$docker_cache_export_seconds")
+  },
+  "startup_prefetch": {
+    "duration_ms": $(json_num_or_null "$startup_prefetch_duration_ms"),
+    "target_blobs": $(json_num_or_null "$startup_prefetch_target_blobs"),
+    "target_bytes": $(json_num_or_null "$startup_prefetch_target_bytes"),
+    "concurrency": $(json_num_or_null "$startup_prefetch_concurrency"),
+    "initial_concurrency": $(json_num_or_null "$startup_prefetch_initial_concurrency"),
+    "final_concurrency": $(json_num_or_null "$startup_prefetch_final_concurrency"),
+    "max_observed_concurrency": $(json_num_or_null "$startup_prefetch_max_observed_concurrency"),
+    "concurrency_reason": $(json_string_or_null "$startup_prefetch_concurrency_reason"),
+    "retries": $(json_num_or_null "$startup_prefetch_retries"),
+    "failures": $(json_num_or_null "$startup_prefetch_failures")
   },
   "oci": {
     "hydration_policy": $(json_string_or_null "$oci_hydration_policy"),
@@ -882,7 +983,8 @@ cat > "$json_path" <<JSON
   "hit_behavior": {
     "warm_rerun_succeeded": $warm_rerun_succeeded,
     "note": $(json_string_or_null "$hit_behavior_note")
-  }
+  },
+  "tool_outcomes": $tool_outcomes_payload
 }
 JSON
 
@@ -948,6 +1050,42 @@ JSON
     if [[ -n "$cache_storage_note" ]]; then
       echo "| Storage note | ${cache_storage_note} |"
     fi
+    if [[ "$storage_breakdown_payload" != "null" ]]; then
+      remote_cas_bytes="$(jq -r '.summary.remote_cas_bytes // empty' <<< "$storage_breakdown_payload")"
+      dependency_archive_bytes="$(jq -r '.summary.dependency_archive_bytes // empty' <<< "$storage_breakdown_payload")"
+      tool_runtime_archive_bytes="$(jq -r '.summary.tool_runtime_archive_bytes // empty' <<< "$storage_breakdown_payload")"
+      if [[ -n "$remote_cas_bytes" ]]; then
+        remote_cas_mib="$(awk -v bytes="$remote_cas_bytes" 'BEGIN { printf "%.2f", bytes / 1048576 }')"
+        echo "| Remote CAS storage | ${remote_cas_mib} MiB |"
+      fi
+      if [[ -n "$dependency_archive_bytes" ]]; then
+        dependency_archive_mib="$(awk -v bytes="$dependency_archive_bytes" 'BEGIN { printf "%.2f", bytes / 1048576 }')"
+        echo "| Dependency archive storage | ${dependency_archive_mib} MiB |"
+      fi
+      if [[ -n "$tool_runtime_archive_bytes" ]]; then
+        tool_runtime_archive_mib="$(awk -v bytes="$tool_runtime_archive_bytes" 'BEGIN { printf "%.2f", bytes / 1048576 }')"
+        echo "| Tool runtime archive storage | ${tool_runtime_archive_mib} MiB |"
+      fi
+    fi
+  fi
+
+  if [[ "$tool_outcomes_payload" != "null" ]]; then
+    gradle_warm_executed="$(jq -r '.gradle.warm1.executed_tasks // empty' <<< "$tool_outcomes_payload")"
+    gradle_warm_from_cache="$(jq -r '.gradle.warm1.from_cache_tasks // empty' <<< "$tool_outcomes_payload")"
+    gradle_warm_up_to_date="$(jq -r '.gradle.warm1.up_to_date_tasks // empty' <<< "$tool_outcomes_payload")"
+    gradle_warnings="$(jq -r '(.warnings // []) | join("; ")' <<< "$tool_outcomes_payload")"
+    if [[ -n "$gradle_warm_executed" ]]; then
+      echo "| Gradle warm executed tasks | ${gradle_warm_executed} |"
+    fi
+    if [[ -n "$gradle_warm_from_cache" ]]; then
+      echo "| Gradle warm from-cache tasks | ${gradle_warm_from_cache} |"
+    fi
+    if [[ -n "$gradle_warm_up_to_date" ]]; then
+      echo "| Gradle warm up-to-date tasks | ${gradle_warm_up_to_date} |"
+    fi
+    if [[ -n "$gradle_warnings" ]]; then
+      echo "| Tool outcome warnings | ${gradle_warnings} |"
+    fi
   fi
 
   if [[ -n "$docker_cache_import_seconds" ]]; then
@@ -955,6 +1093,21 @@ JSON
   fi
   if [[ -n "$docker_cache_export_seconds" ]]; then
     echo "| Docker cache export | ${docker_cache_export_seconds}s |"
+  fi
+  if [[ -n "$startup_prefetch_duration_ms" ]]; then
+    echo "| Startup prefetch | ${startup_prefetch_duration_ms}ms |"
+  fi
+  if [[ -n "$startup_prefetch_concurrency" ]]; then
+    echo "| Startup prefetch concurrency | ${startup_prefetch_max_observed_concurrency:-?}/${startup_prefetch_concurrency} |"
+  fi
+  if [[ -n "$startup_prefetch_concurrency_reason" ]]; then
+    echo "| Startup prefetch reason | ${startup_prefetch_concurrency_reason} |"
+  fi
+  if [[ -n "$startup_prefetch_retries" ]]; then
+    echo "| Startup prefetch retries | ${startup_prefetch_retries} |"
+  fi
+  if [[ -n "$startup_prefetch_failures" ]]; then
+    echo "| Startup prefetch failures | ${startup_prefetch_failures} |"
   fi
   if [[ -n "$oci_hydration_policy" ]]; then
     echo "| OCI hydration | ${oci_hydration_policy} |"

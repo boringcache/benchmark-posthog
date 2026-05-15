@@ -71,18 +71,21 @@ action_timings_json=""
 workspace="${BENCHMARK_WORKSPACE:-${BORINGCACHE_WORKSPACE:-}}"
 cache_tag="${BENCHMARK_CACHE_TAG:-${CACHE_SCOPE:-}}"
 run_uid="${BENCHMARK_RUN_UID:-}"
+paired_run_id="${BENCHMARK_PAIRED_RUN_ID:-}"
 mode="${BENCHMARK_MODE:-}"
 adapter="${BENCHMARK_ADAPTER:-}"
 restore_result="${BENCHMARK_RESTORE_RESULT:-}"
 save_result="${BENCHMARK_SAVE_RESULT:-}"
 publish_status="${BENCHMARK_PUBLISH_STATUS:-}"
 reporting_url="${BENCHMARK_REPORTING_URL:-}"
+prior_cache_state="${BENCHMARK_PRIOR_CACHE_STATE:-}"
 docker_cache_from_refs="${BENCHMARK_DOCKER_CACHE_FROM_REFS:-${BORINGCACHE_CACHE_USED_FROM_REFS:-}}"
 docker_cache_import_ready="${BENCHMARK_DOCKER_CACHE_IMPORT_READY:-${BORINGCACHE_CACHE_IMPORT_READY:-}}"
 http_transport="${BENCHMARK_HTTP_TRANSPORT:-}"
 http2_enabled="${BENCHMARK_HTTP2_ENABLED:-}"
 oci_stream_through_min_bytes="${BENCHMARK_OCI_STREAM_THROUGH_MIN_BYTES:-}"
 cache_session_summary_json="${BENCHMARK_CACHE_SESSION_SUMMARY_JSON:-}"
+issue_candidates_json="${BENCHMARK_ISSUE_CANDIDATES_JSON:-}"
 observability_jsonl="${BENCHMARK_OBSERVABILITY_JSONL:-${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}}"
 launch_proof_paths="${BENCHMARK_LAUNCH_PROOF_PATHS:-}"
 launch_proof_json="${BENCHMARK_LAUNCH_PROOF_JSON:-}"
@@ -222,6 +225,10 @@ while [[ $# -gt 0 ]]; do
       run_uid="$2"
       shift 2
       ;;
+    --paired-run-id)
+      paired_run_id="$2"
+      shift 2
+      ;;
     --mode)
       mode="$2"
       shift 2
@@ -246,6 +253,10 @@ while [[ $# -gt 0 ]]; do
       reporting_url="$2"
       shift 2
       ;;
+    --prior-cache-state)
+      prior_cache_state="$2"
+      shift 2
+      ;;
     --docker-cache-from-refs)
       docker_cache_from_refs="$2"
       shift 2
@@ -256,6 +267,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cache-session-summary-json)
       cache_session_summary_json="$2"
+      shift 2
+      ;;
+    --issue-candidates-json)
+      issue_candidates_json="$2"
       shift 2
       ;;
     --observability-jsonl)
@@ -512,6 +527,17 @@ json_payload_from_optional_file() {
   jq -c '.' "$path"
 }
 
+number_from_payload() {
+  local payload="$1"
+  local query="$2"
+  if [[ "$payload" == "null" ]]; then
+    echo ""
+    return
+  fi
+
+  jq -r "def number_or_empty: if type == \"number\" then . elif type == \"string\" then (tonumber? // empty) else empty end; (${query}) | number_or_empty" <<< "$payload"
+}
+
 sanitize_uint() {
   local v="$1"
   if [[ -n "$v" && "$v" =~ ^[0-9]+$ ]]; then
@@ -671,6 +697,51 @@ session_summary_payload_from_inputs() {
   echo "null"
 }
 
+issue_candidates_payload_from_inputs() {
+  if [[ -n "$issue_candidates_json" ]]; then
+    if [[ ! -f "$issue_candidates_json" ]]; then
+      echo "Missing issue candidates JSON: $issue_candidates_json" >&2
+      exit 1
+    fi
+    jq -c 'if type == "array" then . elif type == "object" then (.issue_candidates // .candidates // []) else [] end' "$issue_candidates_json"
+    return
+  fi
+
+  if [[ "$session_summary_payload" != "null" ]]; then
+    jq -c '(.classification.issue_candidates // .review.issue_candidates // .issue_candidates // []) | if type == "array" then . else [] end' <<< "$session_summary_payload"
+    return
+  fi
+
+  echo "[]"
+}
+
+cache_read_rollup_payload_from_summary() {
+  if [[ "$session_summary_payload" == "null" ]]; then
+    echo '{"hits":null,"misses":null,"hit_rate":null}'
+    return
+  fi
+
+  jq -c '
+    def number_or_null:
+      if type == "number" then .
+      elif type == "string" then (try tonumber catch null)
+      else null
+      end;
+    ((.tool.cache_read_hit_count // .metrics.hit_count // .cache_read_hit_count) | number_or_null) as $hits |
+    ((.tool.cache_read_miss_count // .metrics.miss_count // .cache_read_miss_count) | number_or_null) as $misses |
+    {
+      hits: $hits,
+      misses: $misses,
+      hit_rate: (
+        if ($hits != null and $misses != null and ($hits + $misses) > 0)
+        then ((($hits * 1000) / ($hits + $misses) | round) / 10)
+        else null
+        end
+      )
+    }
+  ' <<< "$session_summary_payload"
+}
+
 launch_proof_paths_payload_from_inputs() {
   if [[ -n "$launch_proof_json" ]]; then
     if [[ ! -f "$launch_proof_json" ]]; then
@@ -702,6 +773,8 @@ if [[ -n "$warm1_build_seconds" ]] && ! [[ "$warm1_build_seconds" =~ ^[0-9]+(\.[
   warm1_build_seconds=""
 fi
 cache_import_status="$(sanitize_token "$cache_import_status")"
+paired_run_id="$(sanitize_token "$paired_run_id")"
+prior_cache_state="$(sanitize_token "$prior_cache_state")"
 docker_cache_import_ready="$(sanitize_token "$docker_cache_import_ready")"
 
 if [[ -n "$docker_cache_import_seconds" ]] && ! [[ "$docker_cache_import_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
@@ -753,6 +826,8 @@ if [[ -n "$action_timings_json" ]]; then
   action_timings_payload="$(jq -c '.' "$action_timings_json")"
 fi
 session_summary_payload="$(session_summary_payload_from_inputs)"
+issue_candidates_payload="$(issue_candidates_payload_from_inputs)"
+cache_read_rollup_payload="$(cache_read_rollup_payload_from_summary)"
 launch_proof_paths_payload="$(launch_proof_paths_payload_from_inputs)"
 storage_breakdown_payload="$(json_payload_from_optional_file "storage breakdown" "$cache_storage_breakdown_json")"
 tool_outcomes_payload="$(json_payload_from_optional_file "tool outcomes" "$tool_outcomes_json")"
@@ -793,6 +868,154 @@ if [[ "$lane" == "rolling" ]]; then
   rolling_first_build_seconds="$cold_seconds"
   rolling_warm_seconds="$warm1_seconds"
 fi
+
+slow_build_seconds="${cold_build_seconds:-$cold_seconds}"
+slow_setup_seconds="$cold_setup_seconds"
+slow_post_cleanup_seconds="$(number_from_payload "$action_timings_payload" '.phases.seed.archive_save.post_step_non_save_seconds // .seed.archive_save.post_step_non_save_seconds')"
+slow_cache_restore_seconds="$docker_cache_import_seconds"
+if [[ -z "$slow_cache_restore_seconds" ]]; then
+  slow_cache_restore_seconds="$(number_from_payload "$action_timings_payload" '.phases.seed.archive_restore.total_seconds // .seed.archive_restore.total_seconds')"
+fi
+slow_cache_save_export_seconds="$docker_cache_export_seconds"
+if [[ -z "$slow_cache_save_export_seconds" ]]; then
+  slow_cache_save_export_seconds="$(number_from_payload "$action_timings_payload" '.phases.seed.archive_save.total_seconds // .seed.archive_save.total_seconds')"
+fi
+slow_hit_count="$(jq -r '.hits // empty' <<< "$cache_read_rollup_payload")"
+slow_miss_count="$(jq -r '.misses // empty' <<< "$cache_read_rollup_payload")"
+slow_hit_rate="$(jq -r '.hit_rate // empty' <<< "$cache_read_rollup_payload")"
+slow_new_blob_bytes="$oci_new_blob_bytes"
+slow_prior_cache_state="$prior_cache_state"
+if [[ -z "$slow_prior_cache_state" ]]; then
+  if [[ -n "$cache_import_status" && "$cache_import_status" == "ok" ]]; then
+    slow_prior_cache_state="usable_import"
+  elif [[ -n "$cache_import_status" ]]; then
+    slow_prior_cache_state="unusable_import"
+  elif [[ "$lane" == "fresh" ]]; then
+    slow_prior_cache_state="not_expected"
+  else
+    slow_prior_cache_state="unknown"
+  fi
+fi
+
+slow_hypotheses_payload="$(jq -n -c \
+  --arg import_status "$cache_import_status" \
+  --arg prior_cache_state "$slow_prior_cache_state" \
+  --argjson build "$(json_num_or_null "$slow_build_seconds")" \
+  --argjson setup "$(json_num_or_null "$slow_setup_seconds")" \
+  --argjson post_cleanup "$(json_num_or_null "$slow_post_cleanup_seconds")" \
+  --argjson cache_restore "$(json_num_or_null "$slow_cache_restore_seconds")" \
+  --argjson cache_save_export "$(json_num_or_null "$slow_cache_save_export_seconds")" \
+  --argjson hit_rate "$(json_num_or_null "$slow_hit_rate")" \
+  --argjson new_blob_bytes "$(json_num_or_null "$slow_new_blob_bytes")" \
+  --argjson issue_candidates "$issue_candidates_payload" \
+  '
+  def dominates($value; $build):
+    $value != null and (($value >= 60) or ($build != null and $build > 0 and (($value / $build) >= 0.25)));
+  [
+    if ($import_status != "" and $import_status != "ok") then
+      {
+        "id": "prior_cache_unusable",
+        "confidence": "high",
+        "summary": "Prior cache import was not usable for this run.",
+        "evidence": {"cache_import_status": $import_status, "prior_cache_state": $prior_cache_state}
+      }
+    else empty end,
+    if dominates($setup; $build) then
+      {
+        "id": "setup_overhead",
+        "confidence": "medium",
+        "summary": "Setup or restore overhead is large relative to build time.",
+        "evidence": {"setup_seconds": $setup, "build_seconds": $build}
+      }
+    else empty end,
+    if dominates($cache_restore; $build) then
+      {
+        "id": "cache_restore_overhead",
+        "confidence": "medium",
+        "summary": "Cache restore/import time is a likely slow-build contributor.",
+        "evidence": {"cache_restore_seconds": $cache_restore, "build_seconds": $build}
+      }
+    else empty end,
+    if dominates($cache_save_export; $build) then
+      {
+        "id": "cache_save_export_overhead",
+        "confidence": "high",
+        "summary": "Cache save/export time is a likely slow-build contributor.",
+        "evidence": {"cache_save_export_seconds": $cache_save_export, "build_seconds": $build}
+      }
+    else empty end,
+    if dominates($post_cleanup; $build) then
+      {
+        "id": "post_cleanup_overhead",
+        "confidence": "medium",
+        "summary": "Post-step cleanup outside cache save is a likely slow-build contributor.",
+        "evidence": {"post_cleanup_seconds": $post_cleanup, "build_seconds": $build}
+      }
+    else empty end,
+    if ($hit_rate != null and $hit_rate < 80) then
+      {
+        "id": "partial_cache_reuse",
+        "confidence": "medium",
+        "summary": "Hit rate is below the benchmark reuse floor.",
+        "evidence": {"hit_rate": $hit_rate}
+      }
+    else empty end,
+    if ($new_blob_bytes != null and $new_blob_bytes >= 1073741824) then
+      {
+        "id": "large_cache_update",
+        "confidence": "medium",
+        "summary": "The run exported more than 1 GiB of new cache blobs.",
+        "evidence": {"new_blob_bytes": $new_blob_bytes}
+      }
+    else empty end,
+    if (($issue_candidates | length) > 0) then
+      {
+        "id": "mcp_issue_candidate_present",
+        "confidence": "high",
+        "summary": "Review telemetry already emitted at least one issue candidate.",
+        "evidence": {"candidate_count": ($issue_candidates | length), "first_kind": ($issue_candidates[0].kind // null)}
+      }
+    else empty end
+  ]')"
+slow_reason_payload="$(jq -n -c \
+  --arg schema "benchmark_slow_reason.v1" \
+  --arg benchmark "$benchmark" \
+  --arg strategy "$strategy" \
+  --arg lane "$lane" \
+  --arg run_uid "$run_uid" \
+  --arg paired_run_id "$paired_run_id" \
+  --arg prior_cache_state "$slow_prior_cache_state" \
+  --argjson build "$(json_num_or_null "$slow_build_seconds")" \
+  --argjson setup "$(json_num_or_null "$slow_setup_seconds")" \
+  --argjson post_cleanup "$(json_num_or_null "$slow_post_cleanup_seconds")" \
+  --argjson cache_restore "$(json_num_or_null "$slow_cache_restore_seconds")" \
+  --argjson cache_save_export "$(json_num_or_null "$slow_cache_save_export_seconds")" \
+  --argjson hit_count "$(json_num_or_null "$slow_hit_count")" \
+  --argjson miss_count "$(json_num_or_null "$slow_miss_count")" \
+  --argjson hit_rate "$(json_num_or_null "$slow_hit_rate")" \
+  --argjson new_blob_bytes "$(json_num_or_null "$slow_new_blob_bytes")" \
+  --argjson issue_candidates "$issue_candidates_payload" \
+  --argjson hypotheses "$slow_hypotheses_payload" \
+  '{
+    "schema_version": $schema,
+    "benchmark": $benchmark,
+    "strategy": $strategy,
+    "lane": $lane,
+    "run_uid": (if $run_uid == "" then null else $run_uid end),
+    "paired_run_id": (if $paired_run_id == "" then null else $paired_run_id end),
+    "build_seconds": $build,
+    "setup_seconds": $setup,
+    "post_cleanup_seconds": $post_cleanup,
+    "cache_restore_seconds": $cache_restore,
+    "cache_save_export_seconds": $cache_save_export,
+    "hit_count": $hit_count,
+    "miss_count": $miss_count,
+    "hit_rate": $hit_rate,
+    "prior_cache_state": $prior_cache_state,
+    "new_blob_bytes": $new_blob_bytes,
+    "issue_candidates": $issue_candidates,
+    "hypotheses": $hypotheses
+  }')"
 sample_valid=true
 reporting_mode="comparative"
 reporting_reason=""
@@ -903,6 +1126,7 @@ cat > "$json_path" <<JSON
   "session_summary": $session_summary_payload,
   "reporting_url": $(json_string_or_null "$reporting_url"),
   "launch_proof_paths": $launch_proof_paths_payload,
+  "slow_reason": $slow_reason_payload,
   "generated_at": "$generated_at",
   "runs": {
     "cold_seconds": $(json_num_or_null "$cold_seconds"),
@@ -1042,6 +1266,30 @@ JSON
   fi
   if [[ -n "$cache_import_status" ]]; then
     echo "| Cache import status | ${cache_import_status} |"
+  fi
+  echo "| Slow reason build | ${slow_build_seconds}s |"
+  if [[ -n "$slow_setup_seconds" ]]; then
+    echo "| Slow reason setup | ${slow_setup_seconds}s |"
+  fi
+  if [[ -n "$slow_cache_restore_seconds" ]]; then
+    echo "| Slow reason cache restore | ${slow_cache_restore_seconds}s |"
+  fi
+  if [[ -n "$slow_cache_save_export_seconds" ]]; then
+    echo "| Slow reason cache save/export | ${slow_cache_save_export_seconds}s |"
+  fi
+  if [[ -n "$slow_post_cleanup_seconds" ]]; then
+    echo "| Slow reason post cleanup | ${slow_post_cleanup_seconds}s |"
+  fi
+  if [[ -n "$slow_hit_rate" ]]; then
+    echo "| Slow reason hit rate | ${slow_hit_rate}% |"
+  fi
+  echo "| Slow reason prior cache | ${slow_prior_cache_state} |"
+  if [[ -n "$slow_new_blob_bytes" ]]; then
+    echo "| Slow reason new blob bytes | ${slow_new_blob_bytes} |"
+  fi
+  slow_hypothesis_ids="$(jq -r 'map(.id) | join(", ")' <<< "$slow_hypotheses_payload")"
+  if [[ -n "$slow_hypothesis_ids" ]]; then
+    echo "| Slow reason hypotheses | ${slow_hypothesis_ids} |"
   fi
 
   if [[ "$cache_storage_bytes" != "0" ]]; then

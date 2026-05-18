@@ -1,6 +1,6 @@
 name: "PostHog - Actions Cache"
 run-name: >-
-  ${{ format('{0} | {1}', github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'AC Rolling' || 'AC Fresh', github.event_name == 'push' && github.event.head_commit.message || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name)) }}
+  ${{ format('{0} | {1}', github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'AC Rolling' || 'AC Fresh', github.event_name == 'schedule' && 'Weekly fresh' || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name)) }}
 
 on:
   workflow_dispatch:
@@ -13,12 +13,8 @@ on:
         options:
           - fresh
           - rolling
-  push:
-    branches:
-      - main
-    paths:
-      - ".gitmodules"
-      - "upstream"
+  schedule:
+    - cron: "0 3 * * 3"
   pull_request:
     paths:
       - ".gitmodules"

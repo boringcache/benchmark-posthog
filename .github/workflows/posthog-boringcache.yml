@@ -1,6 +1,6 @@
 name: "PostHog - BoringCache"
 run-name: >-
-  ${{ format('{0} | {1}', github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'BC Rolling' || 'BC Fresh', github.event_name == 'schedule' && 'Weekly fresh' || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name)) }}
+  ${{ format('{0} | {1}', github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'BoringCache Rolling' || 'BoringCache Fresh', github.event_name == 'schedule' && 'Weekly fresh' || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name)) }}
 
 on:
   workflow_dispatch:

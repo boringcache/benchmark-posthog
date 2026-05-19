@@ -52,7 +52,7 @@ on:
         type: string
         default: ''
       free_disk_space:
-        description: 'Reclaim runner disk before the Docker build. Required for very large images (PostHog) that exceed the default GHA hosted-runner free space mid-build.'
+        description: 'Reclaim runner disk before the Docker build. Required for very large images (PostHog) that exceed the default GitHub Actions hosted-runner free space mid-build.'
         required: false
         type: boolean
         default: false
@@ -72,7 +72,7 @@ env:
 
 jobs:
   seed-cache:
-    name: ${{ format('Docker {0} ({1}, {2})', inputs.cache_lane == 'rolling' && 'Commit Build' || 'Cold Build', inputs.strategy == 'actions-cache' && 'actions/cache' || 'BoringCache', inputs.cache_lane == 'rolling' && 'rolling' || 'fresh') }}
+    name: ${{ format('Docker {0} ({1}, {2})', inputs.cache_lane == 'rolling' && 'Commit Build' || 'Cold Build', inputs.strategy == 'actions-cache' && 'GitHub Actions Cache' || 'BoringCache', inputs.cache_lane == 'rolling' && 'rolling' || 'fresh') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -266,14 +266,14 @@ jobs:
         if: inputs.strategy == 'actions-cache'
         uses: crazy-max/ghaction-github-runtime@v4
 
-      - name: Prepare AC write probe
+      - name: Prepare GitHub Actions Cache write probe
         if: inputs.strategy == 'actions-cache'
         run: |
           set -euo pipefail
           mkdir -p .bench-cache-probe
           printf '%s\n' "probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(date +%s)" > .bench-cache-probe/probe.txt
 
-      - name: Verify Actions Cache write access
+      - name: Verify GitHub Actions Cache write access
         if: inputs.strategy == 'actions-cache'
         id: cache_write_probe
         continue-on-error: true
@@ -283,11 +283,11 @@ jobs:
             .bench-cache-probe
           key: ac-${{ inputs.benchmark_id }}-write-probe-r${{ github.run_id }}-a${{ github.run_attempt }}
 
-      - name: Fail early if Actions Cache is read-only
+      - name: Fail early if GitHub Actions Cache is read-only
         if: inputs.strategy == 'actions-cache' && steps.cache_write_probe.outcome != 'success'
         run: |
-          echo "Actions Cache write probe failed (likely read-only budget/spending cap)." >&2
-          echo "Cannot produce reliable AC benchmark results until cache writes are enabled." >&2
+          echo "GitHub Actions Cache write probe failed (likely read-only budget/spending cap)." >&2
+          echo "Cannot produce reliable GitHub Actions Cache benchmark results until cache writes are enabled." >&2
           exit 1
 
       - name: ${{ inputs.cache_lane == 'rolling' && 'Run rolling commit build' || 'Run fresh cold build' }}
@@ -463,7 +463,7 @@ jobs:
           if-no-files-found: ignore
 
   scenario-builds:
-    name: ${{ format('Warm rerun ({0})', inputs.strategy == 'actions-cache' && 'GHA cache' || 'BoringCache') }}
+    name: ${{ format('Warm rerun ({0})', inputs.strategy == 'actions-cache' && 'GitHub Actions Cache' || 'BoringCache') }}
     needs: seed-cache
     if: ${{ inputs.cache_lane != 'rolling' }}
     runs-on: ubuntu-latest
@@ -826,7 +826,7 @@ jobs:
           echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"
           echo "breakdown_path=${breakdown_path}" >> "$GITHUB_OUTPUT"
 
-      - name: Measure GHA cache storage usage
+      - name: Measure GitHub Actions Cache storage usage
         if: inputs.strategy == 'actions-cache'
         id: ac_cache_size
         env:
@@ -974,7 +974,7 @@ jobs:
             if [[ "$CACHE_LANE" == "rolling" ]]; then
               emit hit_behavior_note "Rolling lane: one continuous-commit build imports the prior branch/default OCI cache, exports/promotes the updated cache, and records that commit build only. Fresh lane owns the separate cold-build plus warm-rerun parity check."
             else
-              emit hit_behavior_note "Fresh lane: the cold build starts from empty BC tags and empty Docker layer cache, uses --no-cache + cache-to via the BC registry proxy (mode=max), and records cold timing while populating the shared cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only, no helper mounted inside Docker RUN steps, and no synthetic mutations."
+              emit hit_behavior_note "Fresh lane: the cold build starts from empty BoringCache tags and empty Docker layer cache, uses --no-cache + cache-to via the BoringCache registry proxy (mode=max), and records cold timing while populating the shared cache. Warm1 rebuilds the same pinned base tree on a fresh runner with cache-from only, no helper mounted inside Docker RUN steps, and no synthetic mutations."
             fi
           else
             emit cache_import_status ""
@@ -1059,17 +1059,17 @@ jobs:
       - name: Publish summary
         run: cat "${{ steps.artifact_files.outputs.md_path }}" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Storage comparison with GHA cache
+      - name: Storage comparison with GitHub Actions Cache
         if: inputs.strategy == 'boringcache' && always() && steps.bc_cache_size.outputs.bytes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           bc_bytes="${{ steps.bc_cache_size.outputs.bytes }}"
 
-          # Query GHA cache usage for this repo
+          # Query GitHub Actions Cache usage for this repo
           gha_bytes="$(gh api "repos/${GITHUB_REPOSITORY}/actions/cache/usage" --jq '.active_caches_size_in_bytes' 2>/dev/null)" || {
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "_Storage comparison skipped (GHA API unreachable)_" >> "$GITHUB_STEP_SUMMARY"
+            echo "_Storage comparison skipped (GitHub Actions Cache API unreachable)_" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           }
 

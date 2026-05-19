@@ -311,7 +311,7 @@ while true; do
   elif [[ "$mode" == "seed-cache" ]]; then
     # --no-cache is required for type=registry export: without it, buildx
     # sees cached layers from the builder and skips pushing blobs to the
-    # registry proxy, so the proxy never uploads to BC backend.
+    # registry proxy, so the proxy never uploads to BoringCache backend.
     cache_args=(--no-cache)
     [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
   elif [[ "$mode" == "partial-warm" ]]; then

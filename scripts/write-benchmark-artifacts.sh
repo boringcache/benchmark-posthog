@@ -725,11 +725,18 @@ session_summary_payload_from_inputs() {
             def wanted:
               [$run_uid, $provider_run_uid, $display_run_uid]
               | map(select(length > 0));
+            def wanted_run($candidate):
+              ($candidate | length) > 0
+              and (
+                (wanted | index($candidate))
+                or (($provider_run_uid | length) > 0 and ($candidate | endswith(":" + $provider_run_uid)))
+                or (($display_run_uid | length) > 0 and ($candidate | endswith(":" + $display_run_uid)))
+              );
             (.sessions // [])
             | map(select(
-                ((.run_uid // "") as $candidate | wanted | index($candidate))
-                or ((.run_identity.uid // "") as $candidate | wanted | index($candidate))
-                or ((.run_identity.provider_run_uid // "") as $candidate | wanted | index($candidate))
+                ((.run_uid // "") as $candidate | wanted_run($candidate))
+                or ((.run_identity.uid // "") as $candidate | wanted_run($candidate))
+                or ((.run_identity.provider_run_uid // "") as $candidate | wanted_run($candidate))
               ))
             | first // empty
           ' <<< "$response" 2>/dev/null || true

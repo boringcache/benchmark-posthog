@@ -14,6 +14,7 @@ on:
           - standard
           - gha4
           - gha16
+          - depot4
       runner_label:
         description: "GitHub runner label to use for the Docker build job"
         required: true

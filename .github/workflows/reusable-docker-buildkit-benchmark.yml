@@ -13,6 +13,21 @@ on:
       benchmark_id:
         required: true
         type: string
+      cache_id:
+        description: 'Cache namespace used for cache keys/tags. Defaults to benchmark_id; investigation workflows can set a stable cache_id while using a distinct benchmark_id for artifacts.'
+        required: false
+        type: string
+        default: ''
+      runner_label:
+        description: 'GitHub Actions runner label for Docker build jobs.'
+        required: false
+        type: string
+        default: ubuntu-latest
+      cache_scope_suffix:
+        description: 'Optional suffix appended to rolling cache scopes for investigation lanes.'
+        required: false
+        type: string
+        default: ''
       project_repo:
         required: true
         type: string
@@ -64,8 +79,10 @@ permissions:
 env:
   PROJECT_REPO: ${{ inputs.project_repo }}
   BENCHMARK_ID: ${{ inputs.benchmark_id }}
+  CACHE_ID: ${{ inputs.cache_id || inputs.benchmark_id }}
   BENCHMARK_WORKSPACE: ${{ inputs.benchmark_workspace || github.repository }}
   CACHE_LANE: ${{ inputs.cache_lane }}
+  CACHE_SCOPE_SUFFIX: ${{ inputs.cache_scope_suffix }}
   BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY: ${{ inputs.blob_download_concurrency }}
   BORINGCACHE_BLOB_PREFETCH_CONCURRENCY: ${{ inputs.blob_prefetch_concurrency }}
   BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES: ${{ inputs.oci_stream_through_min_bytes }}
@@ -73,7 +90,7 @@ env:
 jobs:
   seed-cache:
     name: ${{ format('Docker {0} ({1}, {2})', inputs.cache_lane == 'rolling' && 'Commit Build' || 'Cold Build', inputs.strategy == 'actions-cache' && 'GitHub Actions Cache' || 'BoringCache', inputs.cache_lane == 'rolling' && 'rolling' || 'fresh') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 180
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -210,25 +227,25 @@ jobs:
           echo "scope_started_at=${scope_started_at}" >> "$GITHUB_OUTPUT"
 
           if [[ "$CACHE_LANE" == "rolling" ]]; then
-            run_suffix="rolling-${ref_slug}"
+            run_suffix="rolling-${ref_slug}${CACHE_SCOPE_SUFFIX}"
           else
             run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
           fi
 
           if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
-            cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
-            tags_csv="${cache_scope}"
+            cache_scope="${CACHE_ID}-run-${run_suffix}"
             registry_proxy_tags="${cache_scope}"
+            tags_csv="${cache_scope}"
             echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
             echo "registry_proxy_tags=${registry_proxy_tags}" >> "$GITHUB_OUTPUT"
             echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
           else
             if [[ "$CACHE_LANE" == "rolling" ]]; then
-              cache_scope_primary="${BENCHMARK_ID}-rolling-${ref_slug}"
-              cache_scope_fallback="${BENCHMARK_ID}-rolling-${ref_slug}-fallback"
+              cache_scope_primary="${CACHE_ID}-rolling-${ref_slug}${CACHE_SCOPE_SUFFIX}"
+              cache_scope_fallback="${CACHE_ID}-rolling-${ref_slug}${CACHE_SCOPE_SUFFIX}-fallback"
             else
-              cache_scope_primary="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}-s1"
-              cache_scope_fallback="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}-s2"
+              cache_scope_primary="${CACHE_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}-s1"
+              cache_scope_fallback="${CACHE_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}-s2"
             fi
             echo "cache_scope_primary=${cache_scope_primary}" >> "$GITHUB_OUTPUT"
             echo "cache_scope_fallback=${cache_scope_fallback}" >> "$GITHUB_OUTPUT"
@@ -479,7 +496,7 @@ jobs:
     name: ${{ format('Warm rerun ({0})', inputs.strategy == 'actions-cache' && 'GitHub Actions Cache' || 'BoringCache') }}
     needs: seed-cache
     if: ${{ inputs.cache_lane != 'rolling' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 180
     env:
       BORINGCACHE_SAVE_TOKEN: ''
@@ -531,11 +548,11 @@ jobs:
           ref_slug="${ref_slug%-}"
           ref_slug="${ref_slug:-main}"
           if [[ "$CACHE_LANE" == "rolling" ]]; then
-            run_suffix="rolling-${ref_slug}"
+            run_suffix="rolling-${ref_slug}${CACHE_SCOPE_SUFFIX}"
           else
             run_suffix="r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
           fi
-          cache_scope="${BENCHMARK_ID}-run-${run_suffix}"
+          cache_scope="${CACHE_ID}-run-${run_suffix}"
           tags_csv="${cache_scope}"
           registry_proxy_tags="${cache_scope}"
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"

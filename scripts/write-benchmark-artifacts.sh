@@ -694,6 +694,43 @@ session_summary_payload_from_inputs() {
     fi
   fi
 
+  local token="${BORINGCACHE_RESTORE_TOKEN:-${BORINGCACHE_API_TOKEN:-}}"
+  local run_identity="${run_uid:-${GITHUB_RUN_ID:-}}"
+  if [[ "$strategy" == "boringcache" && -n "$workspace" && -n "$token" && -n "$run_identity" ]]; then
+    local namespace_slug="${workspace%%/*}"
+    local workspace_slug="${workspace#*/}"
+    if [[ -n "$namespace_slug" && -n "$workspace_slug" && "$namespace_slug" != "$workspace_slug" ]] && command -v curl >/dev/null 2>&1; then
+      local api_base="${api_url%/}"
+      local sessions_url
+      if [[ "$api_base" == */v2 ]]; then
+        sessions_url="${api_base}/workspaces/${namespace_slug}/${workspace_slug}/sessions?period=24h&limit=100"
+      else
+        sessions_url="${api_base}/v2/workspaces/${namespace_slug}/${workspace_slug}/sessions?period=24h&limit=100"
+      fi
+
+      local response
+      response="$(curl -fsS -H "Authorization: Bearer ${token}" "$sessions_url" 2>/dev/null || true)"
+      if [[ -n "$response" ]]; then
+        local summary
+        summary="$(
+          jq -c --arg run_uid "$run_identity" '
+            (.sessions // [])
+            | map(select(
+                (.run_uid // "") == $run_uid
+                or (.run_identity.uid // "") == $run_uid
+                or (.run_identity.provider_run_uid // "") == $run_uid
+              ))
+            | first // empty
+          ' <<< "$response" 2>/dev/null || true
+        )"
+        if [[ -n "$summary" ]]; then
+          printf '%s\n' "$summary"
+          return
+        fi
+      fi
+    fi
+  fi
+
   echo "null"
 }
 
@@ -727,8 +764,8 @@ cache_read_rollup_payload_from_summary() {
       elif type == "string" then (try tonumber catch null)
       else null
       end;
-    (((if (.tool | type) == "object" then .tool.cache_read_hit_count else null end) // .metrics.total_hits // .metrics.hit_count // .cache_read_hit_count) | number_or_null) as $hits |
-    (((if (.tool | type) == "object" then .tool.cache_read_miss_count else null end) // .metrics.total_misses // .metrics.miss_count // .cache_read_miss_count) | number_or_null) as $misses |
+    (((if (.tool | type) == "object" then .tool.cache_read_hit_count else null end) // .metrics.total_hits // .metrics.hit_count // .hit_count // .classification.cache_temperature.hits // .classification.bottleneck.evidence.hits // .cache_read_hit_count) | number_or_null) as $hits |
+    (((if (.tool | type) == "object" then .tool.cache_read_miss_count else null end) // .metrics.total_misses // .metrics.miss_count // .miss_count // .classification.cache_temperature.misses // .classification.bottleneck.evidence.misses // .cache_read_miss_count) | number_or_null) as $misses |
     {
       hits: $hits,
       misses: $misses,
@@ -763,6 +800,13 @@ cache_review_payload_from_summary() {
       elif (.tool | type) == "object" then (.tool.tool // .tool.name // .tool.adapter // .adapter // null)
       else (.adapter // null)
       end;
+    def cache_target:
+      .cache_target // .target // (
+        if (.workspace // null) != null or (.tag // null) != null or (.mode // null) != null
+        then {workspace: (.workspace // null), tag: (.tag // null), mode: (.mode // null)}
+        else null
+        end
+      );
     def issue_candidates:
       (.classification.issue_candidates // .review.issue_candidates // .issue_candidates // [])
       | array_or_empty
@@ -776,18 +820,30 @@ cache_review_payload_from_summary() {
           "suggested_action": (.suggested_action // null)
         })
       | .[:5];
-    (((if (.tool | type) == "object" then .tool.cache_read_hit_count else null end) // .metrics.total_hits // .metrics.hit_count // .cache_read_hit_count) | number_or_null) as $hits |
-    (((if (.tool | type) == "object" then .tool.cache_read_miss_count else null end) // .metrics.total_misses // .metrics.miss_count // .cache_read_miss_count) | number_or_null) as $misses |
+    (((if (.tool | type) == "object" then .tool.cache_read_hit_count else null end) // .metrics.total_hits // .metrics.hit_count // .hit_count // .classification.cache_temperature.hits // .classification.bottleneck.evidence.hits // .cache_read_hit_count) | number_or_null) as $hits |
+    (((if (.tool | type) == "object" then .tool.cache_read_miss_count else null end) // .metrics.total_misses // .metrics.miss_count // .miss_count // .classification.cache_temperature.misses // .classification.bottleneck.evidence.misses // .cache_read_miss_count) | number_or_null) as $misses |
+    ((.metrics.hit_rate // .hit_rate // .classification.cache_temperature.hit_rate // .classification.bottleneck.evidence.hit_rate) | number_or_null) as $reported_hit_rate |
+    ((.metrics.duration_seconds // .duration_seconds) | number_or_null) as $duration_seconds |
+    ((.duration_ms // null) | number_or_null) as $duration_ms |
+    ((.oci.oci_engine_publish_total_duration_ms // .buildkit.export_duration_ms // null) | number_or_null) as $publish_ms |
+    ((.startup_prefetch.startup_prefetch_oci_duration_ms // .startup_prefetch.duration_ms // null) | number_or_null) as $startup_ms |
+    (.review.primary_bottleneck // .classification.primary_bottleneck // .classification.bottleneck.primary_bottleneck // .classification.bottleneck.state // null) as $primary_bottleneck |
     {
       "schema_version": "benchmark_cache_review.v1",
-      "summary_schema": (.summary_schema // .schema_version // "cache_session_summary.v2"),
-      "summary_session_id": (.summary_session_id // .identity.summary_session_id // null),
+      "summary_schema": (.summary_schema // .schema // .schema_version // "cache_session_summary.v2"),
+      "summary_session_id": (.summary_session_id // .session_id // .identity.summary_session_id // null),
       "tool": tool_name,
-      "cache_target": (.cache_target // .target // null),
+      "cache_target": cache_target,
       "project_hints": ((.project_hints // []) | array_or_empty),
       "phase_hints": ((.phase_hints // []) | array_or_empty),
-      "primary_bottleneck": (.review.primary_bottleneck // .classification.primary_bottleneck // .classification.bottleneck // null),
-      "diagnostic_classification": (.review.diagnostic.classification // .classification.primary_bottleneck // .classification.bottleneck // null),
+      "primary_bottleneck": $primary_bottleneck,
+      "diagnostic_classification": (.review.diagnostic.classification // .classification.bottleneck.state // .classification.cache_temperature.state // null),
+      "reason_codes": ([
+        if ($startup_ms != null and $startup_ms >= 3000) then "setup_overhead" else empty end,
+        if ($misses != null and $misses > 0) then "cache_miss_quality" else empty end,
+        if ($publish_ms != null and $publish_ms >= 5000) then "save_export" else empty end,
+        if (($primary_bottleneck // "") == "cache_side_clear" and (($misses // 0) == 0) and (((.error_count // .classification.cache_temperature.errors // .classification.bottleneck.evidence.errors // 0) | number_or_null) == 0)) then "native_tool_work" else empty end
+      ] | unique),
       "diagnostic_label": (.review.diagnostic.label // null),
       "customer_state": (.review.customer_state // .review.state // null),
       "customer_summary": (.review.customer_summary // .review.summary // null),
@@ -804,13 +860,13 @@ cache_review_payload_from_summary() {
       "hit_rate": (
         if ($hits != null and $misses != null and ($hits + $misses) > 0)
         then ((($hits * 1000) / ($hits + $misses) | round) / 10)
-        else ((.metrics.hit_rate // .hit_rate) | number_or_null)
+        else $reported_hit_rate
         end
       ),
-      "error_count": ((.metrics.total_errors // .metrics.error_count // (if (.tool | type) == "object" then .tool.error_count else null end) // .error_count) | number_or_null),
-      "bytes_read": ((.metrics.total_bytes_read // .metrics.bytes_read // (if (.tool | type) == "object" then .tool.cache_read_bytes else null end) // .bytes_read) | number_or_null),
-      "bytes_written": ((.metrics.total_bytes_written // .metrics.bytes_written // (if (.tool | type) == "object" then .tool.cache_write_bytes else null end) // .bytes_written) | number_or_null),
-      "duration_seconds": ((.metrics.duration_seconds // .duration_seconds) | number_or_null),
+      "error_count": ((.metrics.total_errors // .metrics.error_count // (if (.tool | type) == "object" then .tool.error_count else null end) // .error_count // .classification.cache_temperature.errors // .classification.bottleneck.evidence.errors) | number_or_null),
+      "bytes_read": ((.metrics.total_bytes_read // .metrics.bytes_read // (if (.tool | type) == "object" then .tool.cache_read_bytes else null end) // .bytes_read // .storage.oci_engine_storage_get_bytes // .storage.bytes // .oci.oci_engine_blob_served_bytes) | number_or_null),
+      "bytes_written": ((.metrics.total_bytes_written // .metrics.bytes_written // (if (.tool | type) == "object" then .tool.cache_write_bytes else null end) // .bytes_written // .oci.oci_engine_borrowed_upload_session_bytes) | number_or_null),
+      "duration_seconds": ($duration_seconds // (if $duration_ms != null then ($duration_ms / 1000) else null end)),
       "issue_candidates": issue_candidates
     }
   ' <<< "$session_summary_payload"

@@ -23,6 +23,14 @@ on:
         options:
           - token
           - oidc
+      cache_backend:
+        description: "Depot cache only, or also export/import an external GitHub Actions cache."
+        required: true
+        type: choice
+        default: depot
+        options:
+          - depot
+          - gha
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -40,6 +48,7 @@ jobs:
     timeout-minutes: 120
     env:
       DEPOT_PROJECT_ID: ${{ inputs.project_id || vars.DEPOT_PROJECT_ID }}
+      DEPOT_CACHE_SCOPE: ${{ format('posthog-depot-builder-{0}', github.ref_name) }}
     steps:
       - name: Validate Depot project
         run: |
@@ -76,7 +85,7 @@ jobs:
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Build Docker image with Depot (OIDC)
-        if: inputs.auth_mode == 'oidc'
+        if: inputs.auth_mode == 'oidc' && inputs.cache_backend == 'depot'
         id: depot_build_oidc
         uses: depot/build-push-action@v1
         with:
@@ -88,7 +97,7 @@ jobs:
           buildx-fallback: false
 
       - name: Build Docker image with Depot (token)
-        if: inputs.auth_mode == 'token'
+        if: inputs.auth_mode == 'token' && inputs.cache_backend == 'depot'
         id: depot_build_token
         uses: depot/build-push-action@v1
         with:
@@ -100,16 +109,46 @@ jobs:
           provenance: false
           buildx-fallback: false
 
+      - name: Build Docker image with Depot and GHA cache export (OIDC)
+        if: inputs.auth_mode == 'oidc' && inputs.cache_backend == 'gha'
+        id: depot_build_oidc_gha
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ env.DEPOT_PROJECT_ID }}
+          context: upstream
+          file: upstream/Dockerfile
+          push: false
+          provenance: false
+          buildx-fallback: false
+          cache-from: type=gha,scope=${{ env.DEPOT_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.DEPOT_CACHE_SCOPE }}
+
+      - name: Build Docker image with Depot and GHA cache export (token)
+        if: inputs.auth_mode == 'token' && inputs.cache_backend == 'gha'
+        id: depot_build_token_gha
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ env.DEPOT_PROJECT_ID }}
+          token: ${{ secrets.DEPOT_TOKEN }}
+          context: upstream
+          file: upstream/Dockerfile
+          push: false
+          provenance: false
+          buildx-fallback: false
+          cache-from: type=gha,scope=${{ env.DEPOT_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.DEPOT_CACHE_SCOPE }}
+
       - name: Write investigation artifact
         if: always()
         env:
           STARTED_AT: ${{ steps.timing_start.outputs.started_at }}
           UPSTREAM_REF: ${{ steps.upstream.outputs.sha }}
           AUTH_MODE: ${{ inputs.auth_mode }}
-          BUILD_ID: ${{ steps.depot_build_token.outputs['build-id'] || steps.depot_build_oidc.outputs['build-id'] }}
-          PROJECT_ID: ${{ steps.depot_build_token.outputs['project-id'] || steps.depot_build_oidc.outputs['project-id'] }}
-          IMAGE_ID: ${{ steps.depot_build_token.outputs.imageid || steps.depot_build_oidc.outputs.imageid }}
-          DIGEST: ${{ steps.depot_build_token.outputs.digest || steps.depot_build_oidc.outputs.digest }}
+          CACHE_BACKEND: ${{ inputs.cache_backend }}
+          BUILD_ID: ${{ steps.depot_build_token.outputs['build-id'] || steps.depot_build_oidc.outputs['build-id'] || steps.depot_build_token_gha.outputs['build-id'] || steps.depot_build_oidc_gha.outputs['build-id'] }}
+          PROJECT_ID: ${{ steps.depot_build_token.outputs['project-id'] || steps.depot_build_oidc.outputs['project-id'] || steps.depot_build_token_gha.outputs['project-id'] || steps.depot_build_oidc_gha.outputs['project-id'] }}
+          IMAGE_ID: ${{ steps.depot_build_token.outputs.imageid || steps.depot_build_oidc.outputs.imageid || steps.depot_build_token_gha.outputs.imageid || steps.depot_build_oidc_gha.outputs.imageid }}
+          DIGEST: ${{ steps.depot_build_token.outputs.digest || steps.depot_build_oidc.outputs.digest || steps.depot_build_token_gha.outputs.digest || steps.depot_build_oidc_gha.outputs.digest }}
         run: |
           set -euo pipefail
           ended_at="$(date +%s)"
@@ -122,6 +161,8 @@ jobs:
             --arg strategy "depot-builder" \
             --arg runner_label "${RUNNER_NAME:-${{ inputs.runner_label }}}" \
             --arg auth_mode "${AUTH_MODE}" \
+            --arg cache_backend "${CACHE_BACKEND}" \
+            --arg cache_scope "${DEPOT_CACHE_SCOPE}" \
             --arg depot_project_id "${PROJECT_ID:-${DEPOT_PROJECT_ID}}" \
             --arg depot_build_id "${BUILD_ID}" \
             --arg image_id "${IMAGE_ID}" \
@@ -133,6 +174,8 @@ jobs:
               runner_label: $runner_label,
               depot: {
                 auth_mode: $auth_mode,
+                cache_backend: $cache_backend,
+                cache_scope: $cache_scope,
                 project_id: $depot_project_id,
                 build_id: $depot_build_id,
                 image_id: $image_id,
@@ -149,6 +192,8 @@ jobs:
             echo "- Depot build seconds: \`${build_seconds}\`"
             echo "- Depot project: \`${PROJECT_ID:-${DEPOT_PROJECT_ID}}\`"
             echo "- Depot build id: \`${BUILD_ID:-unknown}\`"
+            echo "- cache backend: \`${CACHE_BACKEND}\`"
+            echo "- cache scope: \`${DEPOT_CACHE_SCOPE}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload investigation artifact

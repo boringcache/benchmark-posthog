@@ -19,6 +19,11 @@ on:
         required: true
         type: string
         default: ubuntu-latest-m
+      free_disk_space:
+        description: "Reclaim hosted runner disk before building. Keep enabled for standard runners; larger runners can usually skip it."
+        required: true
+        type: boolean
+        default: true
       seed_from_cache_tag:
         description: "Optional source cache tag to copy into this lane before measuring. Use blank to restore only this lane tag."
         required: false
@@ -205,7 +210,7 @@ jobs:
       blob_download_concurrency: ${{ inputs.blob_download_concurrency }}
       blob_prefetch_concurrency: ${{ inputs.blob_prefetch_concurrency }}
       oci_stream_through_min_bytes: ${{ inputs.oci_stream_through_min_bytes }}
-      free_disk_space: true
+      free_disk_space: ${{ inputs.free_disk_space }}
     secrets: inherit
     permissions:
       contents: read

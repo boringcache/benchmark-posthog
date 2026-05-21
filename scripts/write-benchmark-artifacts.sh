@@ -696,6 +696,11 @@ session_summary_payload_from_inputs() {
 
   local token="${BORINGCACHE_RESTORE_TOKEN:-${BORINGCACHE_API_TOKEN:-}}"
   local run_identity="${run_uid:-${GITHUB_RUN_ID:-}}"
+  local provider_run_identity="${GITHUB_RUN_ID:-}"
+  local display_run_identity=""
+  if [[ "$run_identity" =~ ^gh-([0-9]+)-[0-9]+$ ]]; then
+    display_run_identity="${BASH_REMATCH[1]}"
+  fi
   if [[ "$strategy" == "boringcache" && -n "$workspace" && -n "$token" && -n "$run_identity" ]]; then
     local namespace_slug="${workspace%%/*}"
     local workspace_slug="${workspace#*/}"
@@ -713,12 +718,18 @@ session_summary_payload_from_inputs() {
       if [[ -n "$response" ]]; then
         local summary
         summary="$(
-          jq -c --arg run_uid "$run_identity" '
+          jq -c \
+            --arg run_uid "$run_identity" \
+            --arg provider_run_uid "$provider_run_identity" \
+            --arg display_run_uid "$display_run_identity" '
+            def wanted:
+              [$run_uid, $provider_run_uid, $display_run_uid]
+              | map(select(length > 0));
             (.sessions // [])
             | map(select(
-                (.run_uid // "") == $run_uid
-                or (.run_identity.uid // "") == $run_uid
-                or (.run_identity.provider_run_uid // "") == $run_uid
+                ((.run_uid // "") as $candidate | wanted | index($candidate))
+                or ((.run_identity.uid // "") as $candidate | wanted | index($candidate))
+                or ((.run_identity.provider_run_uid // "") as $candidate | wanted | index($candidate))
               ))
             | first // empty
           ' <<< "$response" 2>/dev/null || true

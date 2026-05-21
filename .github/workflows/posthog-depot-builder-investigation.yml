@@ -15,6 +15,14 @@ on:
         required: false
         type: string
         default: ''
+      auth_mode:
+        description: "Depot auth mode. OIDC is preferred; token uses secrets.DEPOT_TOKEN."
+        required: true
+        type: choice
+        default: token
+        options:
+          - token
+          - oidc
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -67,11 +75,25 @@ jobs:
         id: timing_start
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
-      - name: Build Docker image with Depot
-        id: depot_build
+      - name: Build Docker image with Depot (OIDC)
+        if: inputs.auth_mode == 'oidc'
+        id: depot_build_oidc
         uses: depot/build-push-action@v1
         with:
           project: ${{ env.DEPOT_PROJECT_ID }}
+          context: upstream
+          file: upstream/Dockerfile
+          push: false
+          provenance: false
+          buildx-fallback: false
+
+      - name: Build Docker image with Depot (token)
+        if: inputs.auth_mode == 'token'
+        id: depot_build_token
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ env.DEPOT_PROJECT_ID }}
+          token: ${{ secrets.DEPOT_TOKEN }}
           context: upstream
           file: upstream/Dockerfile
           push: false
@@ -83,10 +105,11 @@ jobs:
         env:
           STARTED_AT: ${{ steps.timing_start.outputs.started_at }}
           UPSTREAM_REF: ${{ steps.upstream.outputs.sha }}
-          BUILD_ID: ${{ steps.depot_build.outputs['build-id'] }}
-          PROJECT_ID: ${{ steps.depot_build.outputs['project-id'] }}
-          IMAGE_ID: ${{ steps.depot_build.outputs.imageid }}
-          DIGEST: ${{ steps.depot_build.outputs.digest }}
+          AUTH_MODE: ${{ inputs.auth_mode }}
+          BUILD_ID: ${{ steps.depot_build_token.outputs['build-id'] || steps.depot_build_oidc.outputs['build-id'] }}
+          PROJECT_ID: ${{ steps.depot_build_token.outputs['project-id'] || steps.depot_build_oidc.outputs['project-id'] }}
+          IMAGE_ID: ${{ steps.depot_build_token.outputs.imageid || steps.depot_build_oidc.outputs.imageid }}
+          DIGEST: ${{ steps.depot_build_token.outputs.digest || steps.depot_build_oidc.outputs.digest }}
         run: |
           set -euo pipefail
           ended_at="$(date +%s)"
@@ -98,6 +121,7 @@ jobs:
             --arg project_ref "${UPSTREAM_REF}" \
             --arg strategy "depot-builder" \
             --arg runner_label "${RUNNER_NAME:-${{ inputs.runner_label }}}" \
+            --arg auth_mode "${AUTH_MODE}" \
             --arg depot_project_id "${PROJECT_ID:-${DEPOT_PROJECT_ID}}" \
             --arg depot_build_id "${BUILD_ID}" \
             --arg image_id "${IMAGE_ID}" \
@@ -108,6 +132,7 @@ jobs:
               strategy: $strategy,
               runner_label: $runner_label,
               depot: {
+                auth_mode: $auth_mode,
                 project_id: $depot_project_id,
                 build_id: $depot_build_id,
                 image_id: $image_id,

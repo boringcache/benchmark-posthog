@@ -713,39 +713,46 @@ session_summary_payload_from_inputs() {
         sessions_url="${api_base}/v2/workspaces/${namespace_slug}/${workspace_slug}/sessions?period=24h&limit=100"
       fi
 
-      local response
-      response="$(curl -fsS -H "Authorization: Bearer ${token}" "$sessions_url" 2>/dev/null || true)"
-      if [[ -n "$response" ]]; then
-        local summary
-        summary="$(
-          jq -c \
-            --arg run_uid "$run_identity" \
-            --arg provider_run_uid "$provider_run_identity" \
-            --arg display_run_uid "$display_run_identity" '
-            def wanted:
-              [$run_uid, $provider_run_uid, $display_run_uid]
-              | map(select(length > 0));
-            def wanted_run($candidate):
-              ($candidate | length) > 0
-              and (
-                (wanted | index($candidate))
-                or (($provider_run_uid | length) > 0 and ($candidate | endswith(":" + $provider_run_uid)))
-                or (($display_run_uid | length) > 0 and ($candidate | endswith(":" + $display_run_uid)))
-              );
-            (.sessions // [])
-            | map(select(
-                ((.run_uid // "") as $candidate | wanted_run($candidate))
-                or ((.run_identity.uid // "") as $candidate | wanted_run($candidate))
-                or ((.run_identity.provider_run_uid // "") as $candidate | wanted_run($candidate))
-              ))
-            | first // empty
-          ' <<< "$response" 2>/dev/null || true
-        )"
-        if [[ -n "$summary" ]]; then
-          printf '%s\n' "$summary"
-          return
+      local attempt
+      for attempt in 1 2 3 4 5 6 7 8; do
+        local response
+        response="$(curl -fsS -H "Authorization: Bearer ${token}" "$sessions_url" 2>/dev/null || true)"
+        if [[ -n "$response" ]]; then
+          local summary
+          summary="$(
+            jq -c \
+              --arg run_uid "$run_identity" \
+              --arg provider_run_uid "$provider_run_identity" \
+              --arg display_run_uid "$display_run_identity" '
+              def wanted:
+                [$run_uid, $provider_run_uid, $display_run_uid]
+                | map(select(length > 0));
+              def wanted_run($candidate):
+                ($candidate | length) > 0
+                and (
+                  (wanted | index($candidate))
+                  or (($provider_run_uid | length) > 0 and ($candidate | endswith(":" + $provider_run_uid)))
+                  or (($display_run_uid | length) > 0 and ($candidate | endswith(":" + $display_run_uid)))
+                );
+              (.sessions // [])
+              | map(select(
+                  ((.run_uid // "") as $candidate | wanted_run($candidate))
+                  or ((.run_identity.uid // "") as $candidate | wanted_run($candidate))
+                  or ((.run_identity.provider_run_uid // "") as $candidate | wanted_run($candidate))
+                ))
+              | first // empty
+            ' <<< "$response" 2>/dev/null || true
+          )"
+          if [[ -n "$summary" ]]; then
+            printf '%s\n' "$summary"
+            return
+          fi
         fi
-      fi
+
+        if [[ "$attempt" -lt 8 ]]; then
+          sleep 2
+        fi
+      done
     fi
   fi
 

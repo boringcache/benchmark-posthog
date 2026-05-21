@@ -1,0 +1,135 @@
+name: "PostHog - Depot Builder Investigation"
+run-name: >-
+  ${{ format('Depot Builder Investigation | {0}', github.ref_name) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: "GitHub runner label that launches the Depot remote build"
+        required: true
+        type: string
+        default: ubuntu-latest
+      project_id:
+        description: "Depot project ID. Defaults to vars.DEPOT_PROJECT_ID."
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  actions: write
+
+jobs:
+  depot-build:
+    name: Docker Build (Depot builder)
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 120
+    env:
+      DEPOT_PROJECT_ID: ${{ inputs.project_id || vars.DEPOT_PROJECT_ID }}
+    steps:
+      - name: Validate Depot project
+        run: |
+          set -euo pipefail
+          if [[ -z "${DEPOT_PROJECT_ID}" ]]; then
+            echo "DEPOT_PROJECT_ID is required. Set the repository variable or pass project_id." >&2
+            exit 1
+          fi
+
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Checkout pinned upstream submodule shallowly
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+
+      - name: Prepare base benchmark source tree
+        run: ./scripts/prepare-source.sh base
+
+      - name: Set up Depot CLI
+        uses: depot/setup-action@v1
+
+      - name: Capture upstream ref
+        id: upstream
+        run: echo "sha=$(git rev-parse HEAD:upstream)" >> "$GITHUB_OUTPUT"
+
+      - name: Start build timing
+        id: timing_start
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image with Depot
+        id: depot_build
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ env.DEPOT_PROJECT_ID }}
+          context: upstream
+          file: upstream/Dockerfile
+          push: false
+          provenance: false
+          buildx-fallback: false
+
+      - name: Write investigation artifact
+        if: always()
+        env:
+          STARTED_AT: ${{ steps.timing_start.outputs.started_at }}
+          UPSTREAM_REF: ${{ steps.upstream.outputs.sha }}
+          BUILD_ID: ${{ steps.depot_build.outputs['build-id'] }}
+          PROJECT_ID: ${{ steps.depot_build.outputs['project-id'] }}
+          IMAGE_ID: ${{ steps.depot_build.outputs.imageid }}
+          DIGEST: ${{ steps.depot_build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          ended_at="$(date +%s)"
+          started_at="${STARTED_AT:-$ended_at}"
+          build_seconds="$((ended_at - started_at))"
+          mkdir -p benchmark-depot-builder
+          jq -n \
+            --arg project_repo "PostHog/posthog" \
+            --arg project_ref "${UPSTREAM_REF}" \
+            --arg strategy "depot-builder" \
+            --arg runner_label "${RUNNER_NAME:-${{ inputs.runner_label }}}" \
+            --arg depot_project_id "${PROJECT_ID:-${DEPOT_PROJECT_ID}}" \
+            --arg depot_build_id "${BUILD_ID}" \
+            --arg image_id "${IMAGE_ID}" \
+            --arg digest "${DIGEST}" \
+            --argjson build_seconds "${build_seconds}" \
+            '{
+              project: {repo: $project_repo, ref: $project_ref},
+              strategy: $strategy,
+              runner_label: $runner_label,
+              depot: {
+                project_id: $depot_project_id,
+                build_id: $depot_build_id,
+                image_id: $image_id,
+                digest: $digest
+              },
+              runs: {
+                depot_build_seconds: $build_seconds
+              }
+            }' > benchmark-depot-builder/posthog-depot-builder.json
+          {
+            echo "### PostHog Depot builder investigation"
+            echo
+            echo "- upstream ref: \`${UPSTREAM_REF}\`"
+            echo "- Depot build seconds: \`${build_seconds}\`"
+            echo "- Depot project: \`${PROJECT_ID:-${DEPOT_PROJECT_ID}}\`"
+            echo "- Depot build id: \`${BUILD_ID:-unknown}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload investigation artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-posthog-depot-builder
+          path: benchmark-depot-builder/
+          if-no-files-found: error

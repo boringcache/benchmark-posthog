@@ -727,8 +727,8 @@ cache_read_rollup_payload_from_summary() {
       elif type == "string" then (try tonumber catch null)
       else null
       end;
-    ((.tool.cache_read_hit_count // .metrics.hit_count // .cache_read_hit_count) | number_or_null) as $hits |
-    ((.tool.cache_read_miss_count // .metrics.miss_count // .cache_read_miss_count) | number_or_null) as $misses |
+    (((if (.tool | type) == "object" then .tool.cache_read_hit_count else null end) // .metrics.total_hits // .metrics.hit_count // .cache_read_hit_count) | number_or_null) as $hits |
+    (((if (.tool | type) == "object" then .tool.cache_read_miss_count else null end) // .metrics.total_misses // .metrics.miss_count // .cache_read_miss_count) | number_or_null) as $misses |
     {
       hits: $hits,
       misses: $misses,
@@ -738,6 +738,80 @@ cache_read_rollup_payload_from_summary() {
         else null
         end
       )
+    }
+  ' <<< "$session_summary_payload"
+}
+
+cache_review_payload_from_summary() {
+  if [[ "$session_summary_payload" == "null" ]]; then
+    echo "null"
+    return
+  fi
+
+  jq -c '
+    def number_or_null:
+      if type == "number" then .
+      elif type == "string" then (try tonumber catch null)
+      else null
+      end;
+    def array_or_empty:
+      if type == "array" then . else [] end;
+    def bounded_strings:
+      array_or_empty | map(tostring) | .[:8];
+    def tool_name:
+      if (.tool | type) == "string" then .tool
+      elif (.tool | type) == "object" then (.tool.tool // .tool.name // .tool.adapter // .adapter // null)
+      else (.adapter // null)
+      end;
+    def issue_candidates:
+      (.classification.issue_candidates // .review.issue_candidates // .issue_candidates // [])
+      | array_or_empty
+      | map({
+          "kind": (.kind // null),
+          "owner": (.owner // null),
+          "surface": (.surface // null),
+          "severity": (.severity // null),
+          "confidence": ((.confidence // null) | number_or_null),
+          "summary": (.summary // null),
+          "suggested_action": (.suggested_action // null)
+        })
+      | .[:5];
+    (((if (.tool | type) == "object" then .tool.cache_read_hit_count else null end) // .metrics.total_hits // .metrics.hit_count // .cache_read_hit_count) | number_or_null) as $hits |
+    (((if (.tool | type) == "object" then .tool.cache_read_miss_count else null end) // .metrics.total_misses // .metrics.miss_count // .cache_read_miss_count) | number_or_null) as $misses |
+    {
+      "schema_version": "benchmark_cache_review.v1",
+      "summary_schema": (.summary_schema // .schema_version // "cache_session_summary.v2"),
+      "summary_session_id": (.summary_session_id // .identity.summary_session_id // null),
+      "tool": tool_name,
+      "cache_target": (.cache_target // .target // null),
+      "project_hints": ((.project_hints // []) | array_or_empty),
+      "phase_hints": ((.phase_hints // []) | array_or_empty),
+      "primary_bottleneck": (.review.primary_bottleneck // .classification.primary_bottleneck // .classification.bottleneck // null),
+      "diagnostic_classification": (.review.diagnostic.classification // .classification.primary_bottleneck // .classification.bottleneck // null),
+      "diagnostic_label": (.review.diagnostic.label // null),
+      "customer_state": (.review.customer_state // .review.state // null),
+      "customer_summary": (.review.customer_summary // .review.summary // null),
+      "service_side_issue": (.review.service_side_issue // false),
+      "operator_issue": (.review.operator_issue // false),
+      "value_outcome": (.review.value_outcome // null),
+      "value_owner": (.review.value_owner // null),
+      "value_headline": (.review.value_headline // null),
+      "value_detail": (.review.value_detail // null),
+      "value_next_action": (.review.value_next_action // null),
+      "value_evidence": ((.review.value_evidence // []) | bounded_strings),
+      "hit_count": $hits,
+      "miss_count": $misses,
+      "hit_rate": (
+        if ($hits != null and $misses != null and ($hits + $misses) > 0)
+        then ((($hits * 1000) / ($hits + $misses) | round) / 10)
+        else ((.metrics.hit_rate // .hit_rate) | number_or_null)
+        end
+      ),
+      "error_count": ((.metrics.total_errors // .metrics.error_count // (if (.tool | type) == "object" then .tool.error_count else null end) // .error_count) | number_or_null),
+      "bytes_read": ((.metrics.total_bytes_read // .metrics.bytes_read // (if (.tool | type) == "object" then .tool.cache_read_bytes else null end) // .bytes_read) | number_or_null),
+      "bytes_written": ((.metrics.total_bytes_written // .metrics.bytes_written // (if (.tool | type) == "object" then .tool.cache_write_bytes else null end) // .bytes_written) | number_or_null),
+      "duration_seconds": ((.metrics.duration_seconds // .duration_seconds) | number_or_null),
+      "issue_candidates": issue_candidates
     }
   ' <<< "$session_summary_payload"
 }
@@ -828,6 +902,7 @@ fi
 session_summary_payload="$(session_summary_payload_from_inputs)"
 issue_candidates_payload="$(issue_candidates_payload_from_inputs)"
 cache_read_rollup_payload="$(cache_read_rollup_payload_from_summary)"
+cache_review_payload="$(cache_review_payload_from_summary)"
 launch_proof_paths_payload="$(launch_proof_paths_payload_from_inputs)"
 storage_breakdown_payload="$(json_payload_from_optional_file "storage breakdown" "$cache_storage_breakdown_json")"
 tool_outcomes_payload="$(json_payload_from_optional_file "tool outcomes" "$tool_outcomes_json")"
@@ -1136,6 +1211,7 @@ cat > "$json_path" <<JSON
   "save_result": $(json_string_or_null "$save_result"),
   "publish_status": $(json_string_or_null "$publish_status"),
   "session_summary": $session_summary_payload,
+  "cache_review": $cache_review_payload,
   "reporting_url": $(json_string_or_null "$reporting_url"),
   "launch_proof_paths": $launch_proof_paths_payload,
   "slow_reason": $slow_reason_payload,

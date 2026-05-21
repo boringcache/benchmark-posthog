@@ -62,6 +62,10 @@ bytes_uploaded=""
 bytes_downloaded=""
 hit_behavior_note=""
 tool_outcomes_json=""
+native_tool_evidence_json="${BENCHMARK_NATIVE_TOOL_EVIDENCE_JSON:-}"
+native_tool_stats_file="${BENCHMARK_NATIVE_TOOL_STATS_FILE:-}"
+native_tool_kind="${BENCHMARK_NATIVE_TOOL_KIND:-}"
+sccache_stats_file="${BENCHMARK_SCCACHE_STATS_FILE:-}"
 cli_version="${BENCHMARK_CLI_VERSION:-}"
 action_ref="${BENCHMARK_ACTION_REF:-}"
 action_sha="${BENCHMARK_ACTION_SHA:-}"
@@ -191,6 +195,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tool-outcomes-json)
       tool_outcomes_json="$2"
+      shift 2
+      ;;
+    --native-tool-evidence-json)
+      native_tool_evidence_json="$2"
+      shift 2
+      ;;
+    --native-tool-stats-file)
+      native_tool_stats_file="$2"
+      shift 2
+      ;;
+    --native-tool)
+      native_tool_kind="$2"
+      shift 2
+      ;;
+    --sccache-stats-file)
+      sccache_stats_file="$2"
       shift 2
       ;;
     --cli-version)
@@ -527,6 +547,196 @@ json_payload_from_optional_file() {
   jq -c '.' "$path"
 }
 
+sccache_text_stat() {
+  local path="$1"
+  local label="$2"
+  awk -v label="$label" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      if (substr(line, 1, length(label)) != label) {
+        next
+      }
+      rest = substr(line, length(label) + 1)
+      if (rest !~ /^[[:space:]][[:space:]]+/) {
+        next
+      }
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", rest)
+      print rest
+      exit
+    }
+  ' "$path"
+}
+
+sccache_uint_stat() {
+  local path="$1"
+  local label="$2"
+  local value
+  value="$(sccache_text_stat "$path" "$label" | tr -d ',')"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    echo "$value"
+  else
+    echo ""
+  fi
+}
+
+sccache_seconds_stat() {
+  local path="$1"
+  local label="$2"
+  local value
+  value="$(sccache_text_stat "$path" "$label")"
+  value="${value%% s*}"
+  value="${value%% sec*}"
+  sanitize_number "$value"
+}
+
+sccache_reason_counts_payload() {
+  local path="$1"
+  awk '
+    /^Non-cacheable reasons:/ {
+      in_reasons = 1
+      next
+    }
+    in_reasons && /^[[:space:]]*$/ {
+      exit
+    }
+    in_reasons {
+      line = $0
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line == "") {
+        next
+      }
+      value = line
+      sub(/^.*[[:space:]][[:space:]]+/, "", value)
+      key = line
+      sub(/[[:space:]][[:space:]]+[0-9]+$/, "", key)
+      if (key != "" && value ~ /^[0-9]+$/) {
+        printf "%s\t%s\n", key, value
+      }
+    }
+  ' "$path" | jq -Rnc 'reduce inputs as $line ({}; ($line | split("\t")) as $parts | if ($parts | length) == 2 then . + {($parts[0]): ($parts[1] | tonumber)} else . end)'
+}
+
+sccache_native_tool_payload_from_stats() {
+  local path="$1"
+  if [[ ! -f "$path" ]]; then
+    echo "Missing sccache stats file: $path" >&2
+    exit 1
+  fi
+
+  local compile_requests compile_requests_executed cache_hits cache_misses
+  local hit_c_cpp hit_rust miss_c_cpp miss_rust
+  local non_cacheable_calls average_cache_read_hit_seconds average_cache_write_seconds average_compiler_seconds
+  local cache_errors cache_read_errors cache_write_errors cache_timeouts
+  local non_cacheable_reasons
+
+  compile_requests="$(sccache_uint_stat "$path" "Compile requests")"
+  compile_requests_executed="$(sccache_uint_stat "$path" "Compile requests executed")"
+  cache_hits="$(sccache_uint_stat "$path" "Cache hits")"
+  cache_misses="$(sccache_uint_stat "$path" "Cache misses")"
+  hit_c_cpp="$(sccache_uint_stat "$path" "Cache hits (C/C++)")"
+  hit_rust="$(sccache_uint_stat "$path" "Cache hits (Rust)")"
+  miss_c_cpp="$(sccache_uint_stat "$path" "Cache misses (C/C++)")"
+  miss_rust="$(sccache_uint_stat "$path" "Cache misses (Rust)")"
+  non_cacheable_calls="$(sccache_uint_stat "$path" "Non-cacheable calls")"
+  if [[ -z "$non_cacheable_calls" ]]; then
+    non_cacheable_calls="$(sccache_uint_stat "$path" "Non-cacheable compilations")"
+  fi
+  average_cache_read_hit_seconds="$(sccache_seconds_stat "$path" "Average cache read hit")"
+  average_cache_write_seconds="$(sccache_seconds_stat "$path" "Average cache write")"
+  average_compiler_seconds="$(sccache_seconds_stat "$path" "Average compiler")"
+  cache_errors="$(sccache_uint_stat "$path" "Cache errors")"
+  cache_read_errors="$(sccache_uint_stat "$path" "Cache read errors")"
+  cache_write_errors="$(sccache_uint_stat "$path" "Cache write errors")"
+  cache_timeouts="$(sccache_uint_stat "$path" "Cache timeouts")"
+  non_cacheable_reasons="$(sccache_reason_counts_payload "$path")"
+
+  jq -n -c \
+    --arg tool "sccache" \
+    --arg source "sccache --show-stats" \
+    --argjson compile_requests "$(json_num_or_null "$compile_requests")" \
+    --argjson compile_requests_executed "$(json_num_or_null "$compile_requests_executed")" \
+    --argjson cache_hits "$(json_num_or_null "$cache_hits")" \
+    --argjson cache_misses "$(json_num_or_null "$cache_misses")" \
+    --argjson hit_c_cpp "$(json_num_or_null "$hit_c_cpp")" \
+    --argjson hit_rust "$(json_num_or_null "$hit_rust")" \
+    --argjson miss_c_cpp "$(json_num_or_null "$miss_c_cpp")" \
+    --argjson miss_rust "$(json_num_or_null "$miss_rust")" \
+    --argjson non_cacheable_calls "$(json_num_or_null "$non_cacheable_calls")" \
+    --argjson average_cache_read_hit_seconds "$(json_num_or_null "$average_cache_read_hit_seconds")" \
+    --argjson average_cache_write_seconds "$(json_num_or_null "$average_cache_write_seconds")" \
+    --argjson average_compiler_seconds "$(json_num_or_null "$average_compiler_seconds")" \
+    --argjson cache_errors "$(json_num_or_null "$cache_errors")" \
+    --argjson cache_read_errors "$(json_num_or_null "$cache_read_errors")" \
+    --argjson cache_write_errors "$(json_num_or_null "$cache_write_errors")" \
+    --argjson cache_timeouts "$(json_num_or_null "$cache_timeouts")" \
+    --argjson non_cacheable_reasons "$non_cacheable_reasons" \
+    '
+      def compact:
+        with_entries(select(.value != null and .value != "" and .value != {}));
+      {
+        "tool": $tool,
+        "schema_version": "native_tool_evidence.v1",
+        "stats_source": $source,
+        "compile_requests": $compile_requests,
+        "compile_requests_executed": $compile_requests_executed,
+        "cache_hits": $cache_hits,
+        "cache_misses": $cache_misses,
+        "hit_rate": (
+          if ($cache_hits != null and $cache_misses != null and ($cache_hits + $cache_misses) > 0)
+          then ((($cache_hits * 1000) / ($cache_hits + $cache_misses) | round) / 10)
+          else null
+          end
+        ),
+        "hit_counts": ({
+          "c_cpp": $hit_c_cpp,
+          "rust": $hit_rust
+        } | compact),
+        "miss_counts": ({
+          "c_cpp": $miss_c_cpp,
+          "rust": $miss_rust
+        } | compact),
+        "non_cacheable_calls": $non_cacheable_calls,
+        "non_cacheable_reasons": $non_cacheable_reasons,
+        "average_cache_read_hit_seconds": $average_cache_read_hit_seconds,
+        "average_cache_write_seconds": $average_cache_write_seconds,
+        "average_compiler_seconds": $average_compiler_seconds,
+        "cache_errors": $cache_errors,
+        "cache_read_errors": $cache_read_errors,
+        "cache_write_errors": $cache_write_errors,
+        "cache_timeouts": $cache_timeouts
+      } | compact
+    '
+}
+
+native_tool_payload_from_inputs() {
+  if [[ -n "$native_tool_evidence_json" ]]; then
+    if [[ ! -f "$native_tool_evidence_json" ]]; then
+      echo "Missing native tool evidence JSON: $native_tool_evidence_json" >&2
+      exit 1
+    fi
+    jq -c 'if type == "object" then . else error("native tool evidence must be a JSON object") end' "$native_tool_evidence_json"
+    return
+  fi
+
+  local stats_path="${native_tool_stats_file:-$sccache_stats_file}"
+  local tool="${native_tool_kind:-${adapter:-$mode}}"
+  if [[ -n "$stats_path" ]]; then
+    case "$tool" in
+      sccache|rust-sccache|"")
+        sccache_native_tool_payload_from_stats "$stats_path"
+        return
+        ;;
+      *)
+        echo "Raw native stats parsing is not implemented for tool: $tool" >&2
+        exit 1
+        ;;
+    esac
+  fi
+
+  echo "null"
+}
+
 number_from_payload() {
   local payload="$1"
   local query="$2"
@@ -805,12 +1015,12 @@ cache_read_rollup_payload_from_summary() {
 }
 
 cache_review_payload_from_summary() {
-  if [[ "$session_summary_payload" == "null" ]]; then
+  if [[ "$session_summary_payload" == "null" && "$native_tool_payload" == "null" ]]; then
     echo "null"
     return
   fi
 
-  jq -c '
+  jq -c --argjson native_tool "$native_tool_payload" '
     def number_or_null:
       if type == "number" then .
       elif type == "string" then (try tonumber catch null)
@@ -820,10 +1030,10 @@ cache_review_payload_from_summary() {
       if type == "array" then . else [] end;
     def bounded_strings:
       array_or_empty | map(tostring) | .[:8];
-    def tool_name:
+    def tool_name($native):
       if (.tool | type) == "string" then .tool
       elif (.tool | type) == "object" then (.tool.tool // .tool.name // .tool.adapter // .adapter // null)
-      else (.adapter // null)
+      else (.adapter // $native.tool // null)
       end;
     def cache_target:
       .cache_target // .target // (
@@ -845,19 +1055,26 @@ cache_review_payload_from_summary() {
           "suggested_action": (.suggested_action // null)
         })
       | .[:5];
-    (((if (.tool | type) == "object" then .tool.cache_read_hit_count else null end) // .metrics.total_hits // .metrics.hit_count // .hit_count // .classification.cache_temperature.hits // .classification.bottleneck.evidence.hits // .cache_read_hit_count) | number_or_null) as $hits |
-    (((if (.tool | type) == "object" then .tool.cache_read_miss_count else null end) // .metrics.total_misses // .metrics.miss_count // .miss_count // .classification.cache_temperature.misses // .classification.bottleneck.evidence.misses // .cache_read_miss_count) | number_or_null) as $misses |
-    ((.metrics.hit_rate // .hit_rate // .classification.cache_temperature.hit_rate // .classification.bottleneck.evidence.hit_rate) | number_or_null) as $reported_hit_rate |
+    ($native_tool // {}) as $native |
+    (((if (.tool | type) == "object" then .tool.cache_read_hit_count else null end) // .metrics.total_hits // .metrics.hit_count // .hit_count // .classification.cache_temperature.hits // .classification.bottleneck.evidence.hits // .cache_read_hit_count // $native.cache_hits // $native.hit_count) | number_or_null) as $hits |
+    (((if (.tool | type) == "object" then .tool.cache_read_miss_count else null end) // .metrics.total_misses // .metrics.miss_count // .miss_count // .classification.cache_temperature.misses // .classification.bottleneck.evidence.misses // .cache_read_miss_count // $native.cache_misses // $native.miss_count) | number_or_null) as $misses |
+    ((.metrics.hit_rate // .hit_rate // .classification.cache_temperature.hit_rate // .classification.bottleneck.evidence.hit_rate // $native.hit_rate) | number_or_null) as $reported_hit_rate |
     ((.metrics.duration_seconds // .duration_seconds) | number_or_null) as $duration_seconds |
     ((.duration_ms // null) | number_or_null) as $duration_ms |
     ((.oci.oci_engine_publish_total_duration_ms // .buildkit.export_duration_ms // null) | number_or_null) as $publish_ms |
     ((.startup_prefetch.startup_prefetch_oci_duration_ms // .startup_prefetch.duration_ms // null) | number_or_null) as $startup_ms |
-    (.review.primary_bottleneck // .classification.primary_bottleneck // .classification.bottleneck.primary_bottleneck // .classification.bottleneck.state // null) as $primary_bottleneck |
+    (($native.non_cacheable_calls // 0) | number_or_null) as $non_cacheable_calls |
+    (.review.primary_bottleneck // .classification.primary_bottleneck // .classification.bottleneck.primary_bottleneck // .classification.bottleneck.state // (
+      if ($misses != null and $misses > 0) then "cache_miss_quality"
+      elif ($non_cacheable_calls != null and $non_cacheable_calls > 0) then "native_tool_work"
+      else null
+      end
+    )) as $primary_bottleneck |
     {
       "schema_version": "benchmark_cache_review.v1",
       "summary_schema": (.summary_schema // .schema // .schema_version // "cache_session_summary.v2"),
       "summary_session_id": (.summary_session_id // .session_id // .identity.summary_session_id // null),
-      "tool": tool_name,
+      "tool": tool_name($native),
       "cache_target": cache_target,
       "project_hints": ((.project_hints // []) | array_or_empty),
       "phase_hints": ((.phase_hints // []) | array_or_empty),
@@ -867,8 +1084,10 @@ cache_review_payload_from_summary() {
         if ($startup_ms != null and $startup_ms >= 3000) then "setup_overhead" else empty end,
         if ($misses != null and $misses > 0) then "cache_miss_quality" else empty end,
         if ($publish_ms != null and $publish_ms >= 5000) then "save_export" else empty end,
+        if ($non_cacheable_calls != null and $non_cacheable_calls > 0) then "native_tool_work" else empty end,
         if (($primary_bottleneck // "") == "cache_side_clear" and (($misses // 0) == 0) and (((.error_count // .classification.cache_temperature.errors // .classification.bottleneck.evidence.errors // 0) | number_or_null) == 0)) then "native_tool_work" else empty end
       ] | unique),
+      "native_tool": (if $native == {} then null else $native end),
       "diagnostic_label": (.review.diagnostic.label // null),
       "customer_state": (.review.customer_state // .review.state // null),
       "customer_summary": (.review.customer_summary // .review.summary // null),
@@ -983,6 +1202,7 @@ fi
 session_summary_payload="$(session_summary_payload_from_inputs)"
 issue_candidates_payload="$(issue_candidates_payload_from_inputs)"
 cache_read_rollup_payload="$(cache_read_rollup_payload_from_summary)"
+native_tool_payload="$(native_tool_payload_from_inputs)"
 cache_review_payload="$(cache_review_payload_from_summary)"
 launch_proof_paths_payload="$(launch_proof_paths_payload_from_inputs)"
 storage_breakdown_payload="$(json_payload_from_optional_file "storage breakdown" "$cache_storage_breakdown_json")"
@@ -1039,6 +1259,19 @@ fi
 slow_hit_count="$(jq -r '.hits // empty' <<< "$cache_read_rollup_payload")"
 slow_miss_count="$(jq -r '.misses // empty' <<< "$cache_read_rollup_payload")"
 slow_hit_rate="$(jq -r '.hit_rate // empty' <<< "$cache_read_rollup_payload")"
+slow_native_hit_count="$(number_from_payload "$native_tool_payload" '.cache_hits // .hit_count')"
+slow_native_miss_count="$(number_from_payload "$native_tool_payload" '.cache_misses // .miss_count')"
+slow_native_hit_rate="$(number_from_payload "$native_tool_payload" '.hit_rate')"
+slow_native_non_cacheable_calls="$(number_from_payload "$native_tool_payload" '.non_cacheable_calls')"
+if [[ -z "$slow_hit_count" ]]; then
+  slow_hit_count="$slow_native_hit_count"
+fi
+if [[ -z "$slow_miss_count" ]]; then
+  slow_miss_count="$slow_native_miss_count"
+fi
+if [[ -z "$slow_hit_rate" ]]; then
+  slow_hit_rate="$slow_native_hit_rate"
+fi
 slow_new_blob_bytes="$oci_new_blob_bytes"
 slow_prior_cache_state="$prior_cache_state"
 if [[ -z "$slow_prior_cache_state" ]]; then
@@ -1061,7 +1294,9 @@ slow_hypotheses_payload="$(jq -n -c \
   --argjson post_cleanup "$(json_num_or_null "$slow_post_cleanup_seconds")" \
   --argjson cache_restore "$(json_num_or_null "$slow_cache_restore_seconds")" \
   --argjson cache_save_export "$(json_num_or_null "$slow_cache_save_export_seconds")" \
+  --argjson miss_count "$(json_num_or_null "$slow_miss_count")" \
   --argjson hit_rate "$(json_num_or_null "$slow_hit_rate")" \
+  --argjson non_cacheable_calls "$(json_num_or_null "$slow_native_non_cacheable_calls")" \
   --argjson new_blob_bytes "$(json_num_or_null "$slow_new_blob_bytes")" \
   --argjson issue_candidates "$issue_candidates_payload" \
   '
@@ -1116,6 +1351,22 @@ slow_hypotheses_payload="$(jq -n -c \
         "evidence": {"hit_rate": $hit_rate}
       }
     else empty end,
+    if ($miss_count != null and $miss_count > 0) then
+      {
+        "id": "cache_miss_quality",
+        "confidence": (if ($hit_rate != null and $hit_rate >= 90) then "low" else "medium" end),
+        "summary": "The native tool still missed cache entries during the measured build.",
+        "evidence": {"miss_count": $miss_count, "hit_rate": $hit_rate}
+      }
+    else empty end,
+    if ($non_cacheable_calls != null and $non_cacheable_calls > 0) then
+      {
+        "id": "native_tool_work",
+        "confidence": "medium",
+        "summary": "The native tool reported non-cacheable local work.",
+        "evidence": {"non_cacheable_calls": $non_cacheable_calls}
+      }
+    else empty end,
     if ($new_blob_bytes != null and $new_blob_bytes >= 1073741824) then
       {
         "id": "large_cache_update",
@@ -1150,6 +1401,7 @@ slow_reason_payload="$(jq -n -c \
   --argjson miss_count "$(json_num_or_null "$slow_miss_count")" \
   --argjson hit_rate "$(json_num_or_null "$slow_hit_rate")" \
   --argjson new_blob_bytes "$(json_num_or_null "$slow_new_blob_bytes")" \
+  --argjson native_tool "$native_tool_payload" \
   --argjson issue_candidates "$issue_candidates_payload" \
   --argjson hypotheses "$slow_hypotheses_payload" \
   '{
@@ -1169,6 +1421,7 @@ slow_reason_payload="$(jq -n -c \
     "hit_rate": $hit_rate,
     "prior_cache_state": $prior_cache_state,
     "new_blob_bytes": $new_blob_bytes,
+    "native_tool": $native_tool,
     "issue_candidates": $issue_candidates,
     "hypotheses": $hypotheses
   }')"
@@ -1293,6 +1546,7 @@ cat > "$json_path" <<JSON
   "publish_status": $(json_string_or_null "$publish_status"),
   "session_summary": $session_summary_payload,
   "cache_review": $cache_review_payload,
+  "native_tool": $native_tool_payload,
   "reporting_url": $(json_string_or_null "$reporting_url"),
   "launch_proof_paths": $launch_proof_paths_payload,
   "slow_reason": $slow_reason_payload,
@@ -1502,6 +1756,29 @@ JSON
     fi
     if [[ -n "$gradle_warnings" ]]; then
       echo "| Tool outcome warnings | ${gradle_warnings} |"
+    fi
+  fi
+
+  if [[ "$native_tool_payload" != "null" ]]; then
+    native_tool_name="$(jq -r '.tool // empty' <<< "$native_tool_payload")"
+    native_hit_rate="$(jq -r '.hit_rate // empty' <<< "$native_tool_payload")"
+    native_hits="$(jq -r '.cache_hits // .hit_count // empty' <<< "$native_tool_payload")"
+    native_misses="$(jq -r '.cache_misses // .miss_count // empty' <<< "$native_tool_payload")"
+    native_non_cacheable="$(jq -r '.non_cacheable_calls // empty' <<< "$native_tool_payload")"
+    if [[ -n "$native_tool_name" ]]; then
+      echo "| Native tool | ${native_tool_name} |"
+    fi
+    if [[ -n "$native_hit_rate" ]]; then
+      echo "| Native hit rate | ${native_hit_rate}% |"
+    fi
+    if [[ -n "$native_hits" ]]; then
+      echo "| Native cache hits | ${native_hits} |"
+    fi
+    if [[ -n "$native_misses" ]]; then
+      echo "| Native cache misses | ${native_misses} |"
+    fi
+    if [[ -n "$native_non_cacheable" ]]; then
+      echo "| Native non-cacheable calls | ${native_non_cacheable} |"
     fi
   fi
 

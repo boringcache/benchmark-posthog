@@ -354,6 +354,11 @@ jobs:
             fi
             if [[ -s "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" ]]; then
               cp "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" "$observability_artifact"
+              mkdir -p benchmark-session-summary
+              jq -c 'select(.operation == "cache_session_summary") | .summary // .details // .' "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" 2>/dev/null | tail -n 1 > benchmark-session-summary/benchmark-session-summary.json || true
+              if [[ ! -s benchmark-session-summary/benchmark-session-summary.json ]]; then
+                rm -f benchmark-session-summary/benchmark-session-summary.json
+              fi
             fi
             if [[ "$status" -ne 0 ]]; then
               exit "$status"
@@ -460,6 +465,14 @@ jobs:
         with:
           name: benchmark-diagnostics-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}
           path: benchmark-diagnostics/*
+          if-no-files-found: ignore
+
+      - name: Upload BoringCache session summary
+        if: inputs.strategy == 'boringcache' && always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-session-summary-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}
+          path: benchmark-session-summary/benchmark-session-summary.json
           if-no-files-found: ignore
 
   scenario-builds:
@@ -771,6 +784,14 @@ jobs:
           path: benchmark-phase
           merge-multiple: true
 
+      - name: Download BoringCache session summary
+        if: inputs.strategy == 'boringcache'
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: benchmark-session-summary-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}
+          path: benchmark-session-summary
+
       - name: Collect scenario timings
         if: ${{ inputs.cache_lane != 'rolling' }}
         id: timings
@@ -1011,6 +1032,11 @@ jobs:
       - name: Write benchmark artifacts
         id: artifact_files
         run: |
+          cache_summary_args=()
+          if [[ -s benchmark-session-summary/benchmark-session-summary.json ]]; then
+            cache_summary_args=(--cache-session-summary-json benchmark-session-summary/benchmark-session-summary.json)
+          fi
+
           .benchmark-config/scripts/write-benchmark-artifacts.sh \
             --benchmark "$BENCHMARK_ID" \
             --strategy "${{ inputs.strategy }}" \
@@ -1045,7 +1071,8 @@ jobs:
             --oci-upload-already-present "${{ steps.normalize.outputs.oci_upload_already_present }}" \
             --oci-upload-batch-seconds "${{ steps.normalize.outputs.oci_upload_batch_seconds }}" \
             --reseed-new-blob-threshold "0" \
-            --hit-behavior-note "${{ steps.normalize.outputs.hit_behavior_note }}"
+            --hit-behavior-note "${{ steps.normalize.outputs.hit_behavior_note }}" \
+            "${cache_summary_args[@]}"
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v6

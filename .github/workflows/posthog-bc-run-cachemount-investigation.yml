@@ -1,0 +1,285 @@
+name: "PostHog - BoringCache Run Cache-Mount Investigation"
+run-name: >-
+  ${{ format('BC run cache-mount ({0}) | {1}', inputs.sample_label, github.ref_name) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample_label:
+        description: "Short label for this sample, e.g. seed-1 or restore-1"
+        required: true
+        type: string
+        default: seed-1
+      runner_label:
+        description: "Runner label"
+        required: true
+        type: string
+        default: ubuntu-latest-m
+      free_disk_space:
+        description: "Reclaim hosted runner disk before building"
+        required: true
+        type: boolean
+        default: false
+      cache_prefix:
+        description: "Shared cache tag prefix for the seed/restore pair"
+        required: true
+        type: string
+        default: posthog-bc-run-cachemount-v1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ inputs.sample_label }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 180
+    env:
+      CACHE_PREFIX: ${{ inputs.cache_prefix }}
+      SAMPLE_LABEL: ${{ inputs.sample_label }}
+      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+    steps:
+      - name: Free disk space
+        if: inputs.free_disk_space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/share/swift /usr/local/.ghcup
+          sudo docker system prune --all --volumes --force
+          df -h /
+          docker system df || true
+
+      - name: Validate token
+        run: |
+          set -euo pipefail
+          if [[ -z "${BORINGCACHE_SAVE_TOKEN}" ]]; then
+            echo "Missing BORINGCACHE_SAVE_TOKEN secret" >&2
+            exit 1
+          fi
+
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Checkout pinned upstream submodule shallowly
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+
+      - name: Prepare source tree
+        run: ./scripts/prepare-source.sh base
+
+      - name: Prepare Dockerfile with BoringCache run wrappers
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def lines(*values):
+              return "\n".join(values)
+
+          def replace_once(text, old, new):
+              if old not in text:
+                  raise SystemExit(f"pattern not found:\n{old}")
+              return text.replace(old, new, 1)
+
+          path = Path("upstream/Dockerfile")
+          text = path.read_text()
+
+          text = replace_once(
+              text,
+              "# ---------------------------------------------------------\n#\nFROM node:24.13.0-bookworm-slim AS frontend-build",
+              "# ---------------------------------------------------------\n#\nARG BC_RUN_PREFIX=posthog-bc-run-cachemount-v1\n\nFROM ghcr.io/boringcache/base:bookworm AS boringcache-cli\n\nFROM node:24.13.0-bookworm-slim AS frontend-build",
+          )
+          text = replace_once(
+              text,
+              "FROM node:24.13.0-bookworm-slim AS frontend-build\nWORKDIR /code\nSHELL [\"/bin/bash\", \"-e\", \"-o\", \"pipefail\", \"-c\"]",
+              "FROM node:24.13.0-bookworm-slim AS frontend-build\nWORKDIR /code\nSHELL [\"/bin/bash\", \"-e\", \"-o\", \"pipefail\", \"-c\"]\nARG BC_RUN_PREFIX\nCOPY --from=boringcache-cli /usr/local/bin/boringcache /usr/local/bin/boringcache",
+          )
+          text = replace_once(
+              text,
+              lines(
+                  "RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \\",
+                  "    corepack enable && pnpm --version && \\",
+                  "    CI=1 pnpm --filter=@posthog/frontend... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24",
+              ),
+              lines(
+                  "RUN --mount=type=secret,id=bc_token \\",
+                  "    --mount=type=cache,id=pnpm-frontend,target=/tmp/pnpm-store-v24 \\",
+                  "    set +e; step_start=\"$(date +%s)\"; \\",
+                  "    boringcache run --no-git --force --fail-on-cache-error \\",
+                  "        boringcache/benchmark-posthog \\",
+                  "        \"${BC_RUN_PREFIX}-pnpm-frontend:/tmp/pnpm-store-v24\" \\",
+                  "        -- sh -lc 'corepack enable && pnpm --version && CI=1 pnpm --filter=@posthog/frontend... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24'; \\",
+                  "    step_status=\"$?\"; step_end=\"$(date +%s)\"; set -e; \\",
+                  "    echo \"BC_RUN_STEP pnpm-frontend seconds=$((step_end-step_start)) status=${step_status}\"; \\",
+                  "    exit \"${step_status}\" ",
+              ),
+          )
+          text = replace_once(
+              text,
+              "FROM node:24.13.0-bookworm-slim AS node-scripts-build\nWORKDIR /code\nSHELL [\"/bin/bash\", \"-e\", \"-o\", \"pipefail\", \"-c\"]",
+              "FROM node:24.13.0-bookworm-slim AS node-scripts-build\nWORKDIR /code\nSHELL [\"/bin/bash\", \"-e\", \"-o\", \"pipefail\", \"-c\"]\nARG BC_RUN_PREFIX\nCOPY --from=boringcache-cli /usr/local/bin/boringcache /usr/local/bin/boringcache",
+          )
+          text = replace_once(
+              text,
+              lines(
+                  "RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \\",
+                  "    corepack enable && \\",
+                  "    NODE_OPTIONS=\"--max-old-space-size=4096\" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24 && \\",
+                  "    NODE_OPTIONS=\"--max-old-space-size=4096\" bin/turbo --filter=@posthog/plugin-transpiler build",
+              ),
+              lines(
+                  "RUN --mount=type=secret,id=bc_token \\",
+                  "    --mount=type=cache,id=pnpm-plugin,target=/tmp/pnpm-store-v24 \\",
+                  "    set +e; step_start=\"$(date +%s)\"; \\",
+                  "    boringcache run --no-git --force --fail-on-cache-error \\",
+                  "        boringcache/benchmark-posthog \\",
+                  "        \"${BC_RUN_PREFIX}-pnpm-plugin:/tmp/pnpm-store-v24\" \\",
+                  "        -- sh -lc 'corepack enable && NODE_OPTIONS=\"--max-old-space-size=4096\" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24 && NODE_OPTIONS=\"--max-old-space-size=4096\" bin/turbo --filter=@posthog/plugin-transpiler build'; \\",
+                  "    step_status=\"$?\"; step_end=\"$(date +%s)\"; set -e; \\",
+                  "    echo \"BC_RUN_STEP pnpm-plugin seconds=$((step_end-step_start)) status=${step_status}\"; \\",
+                  "    exit \"${step_status}\" ",
+              ),
+          )
+          text = replace_once(
+              text,
+              "WORKDIR /code\nSHELL [\"/bin/bash\", \"-e\", \"-o\", \"pipefail\", \"-c\"]\n\n# uv settings for Docker builds",
+              "WORKDIR /code\nSHELL [\"/bin/bash\", \"-e\", \"-o\", \"pipefail\", \"-c\"]\nARG BC_RUN_PREFIX\nCOPY --from=boringcache-cli /usr/local/bin/boringcache /usr/local/bin/boringcache\n\n# uv settings for Docker builds",
+          )
+          text = replace_once(
+              text,
+              lines(
+                  "RUN --mount=type=cache,id=uv-libxmlsec1.2.37-2,target=/root/.cache/uv \\",
+                  "    --mount=type=bind,source=uv.lock,target=uv.lock \\",
+                  "    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \\",
+                  "    --mount=type=bind,source=tools/hogli,target=tools/hogli \\",
+                  "    uv sync --locked --no-dev --no-install-project --no-binary-package lxml --no-binary-package xmlsec",
+              ),
+              lines(
+                  "RUN --mount=type=secret,id=bc_token \\",
+                  "    --mount=type=cache,id=uv-libxmlsec1.2.37-2,target=/root/.cache/uv \\",
+                  "    --mount=type=bind,source=uv.lock,target=uv.lock \\",
+                  "    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \\",
+                  "    --mount=type=bind,source=tools/hogli,target=tools/hogli \\",
+                  "    set +e; step_start=\"$(date +%s)\"; \\",
+                  "    boringcache run --no-git --force --fail-on-cache-error \\",
+                  "        boringcache/benchmark-posthog \\",
+                  "        \"${BC_RUN_PREFIX}-uv-libxmlsec1-2-37-2:/root/.cache/uv\" \\",
+                  "        -- sh -lc 'uv sync --locked --no-dev --no-install-project --no-binary-package lxml --no-binary-package xmlsec'; \\",
+                  "    step_status=\"$?\"; step_end=\"$(date +%s)\"; set -e; \\",
+                  "    echo \"BC_RUN_STEP uv-libxmlsec seconds=$((step_end-step_start)) status=${step_status}\"; \\",
+                  "    exit \"${step_status}\" ",
+              ),
+          )
+          text = replace_once(
+              text,
+              "ARG UNIT_GIT_TAG=1.35.0\nARG UNIT_GIT_REF=28404105810f53c570523c3e70006ad0ca210e58",
+              "ARG UNIT_GIT_TAG=1.35.0\nARG UNIT_GIT_REF=28404105810f53c570523c3e70006ad0ca210e58\nARG BC_RUN_PREFIX\nCOPY --from=boringcache-cli /usr/local/bin/boringcache /usr/local/bin/boringcache",
+          )
+          text = replace_once(
+              text,
+              lines(
+                  "RUN --mount=type=cache,id=playwright-browsers,target=/tmp/playwright-cache \\",
+                  "    PLAYWRIGHT_BROWSERS_PATH=/tmp/playwright-cache \\",
+                  "    /python-runtime/bin/python -m playwright install --with-deps chromium && \\",
+                  "    mkdir -p /ms-playwright && \\",
+                  "    cp -r /tmp/playwright-cache/* /ms-playwright/ && \\",
+                  "    chown -R posthog:posthog /ms-playwright",
+              ),
+              lines(
+                  "RUN --mount=type=secret,id=bc_token \\",
+                  "    --mount=type=cache,id=playwright-browsers,target=/tmp/playwright-cache \\",
+                  "    set +e; step_start=\"$(date +%s)\"; \\",
+                  "    boringcache run --no-git --force --fail-on-cache-error \\",
+                  "        boringcache/benchmark-posthog \\",
+                  "        \"${BC_RUN_PREFIX}-playwright-browsers:/tmp/playwright-cache\" \\",
+                  "        -- sh -lc 'PLAYWRIGHT_BROWSERS_PATH=/tmp/playwright-cache /python-runtime/bin/python -m playwright install --with-deps chromium'; \\",
+                  "    step_status=\"$?\"; step_end=\"$(date +%s)\"; set -e; \\",
+                  "    echo \"BC_RUN_STEP playwright-browsers seconds=$((step_end-step_start)) status=${step_status}\"; \\",
+                  "    if [[ \"${step_status}\" -ne 0 ]]; then exit \"${step_status}\"; fi; \\",
+                  "    mkdir -p /ms-playwright && \\",
+                  "    cp -r /tmp/playwright-cache/* /ms-playwright/ && \\",
+                  "    chown -R posthog:posthog /ms-playwright",
+              ),
+          )
+
+          out = Path("upstream/Dockerfile.bc-run-cachemount")
+          out.write_text(text)
+          print(out)
+          PY
+          grep -n 'BC_RUN_STEP\|boringcache run\|bc_token' upstream/Dockerfile.bc-run-cachemount
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build with BoringCache run wrappers
+        id: build
+        env:
+          DOCKERFILE_PATH: upstream/Dockerfile.bc-run-cachemount
+          DOCKER_CONTEXT: upstream
+          IMAGE_TAG: posthog-bc-run-cachemount:${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          token_file="${RUNNER_TEMP}/bc_token"
+          umask 077
+          printf '%s\n' "${BORINGCACHE_SAVE_TOKEN}" > "${token_file}"
+          log_file="${RUNNER_TEMP}/posthog-bc-run-cachemount.log"
+          start="$(date +%s)"
+          set +e
+          /usr/bin/time -p docker buildx build \
+            --builder "${{ steps.buildx.outputs.name }}" \
+            --progress=plain \
+            --secret "id=bc_token,src=${token_file}" \
+            --build-arg "BC_RUN_PREFIX=${CACHE_PREFIX}" \
+            --tag "${IMAGE_TAG}" \
+            --file "${DOCKERFILE_PATH}" \
+            "${DOCKER_CONTEXT}" \
+            >"${log_file}" 2>&1
+          status="$?"
+          set -e
+          end="$(date +%s)"
+          rm -f "${token_file}"
+          cp "${log_file}" posthog-bc-run-cachemount.log
+          {
+            echo "status=${status}"
+            echo "wall_seconds=$((end-start))"
+          } >> "$GITHUB_OUTPUT"
+          exit "${status}"
+
+      - name: Summarize timings
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "### PostHog BoringCache run cache-mount probe"
+            echo
+            echo "- sample: \`${SAMPLE_LABEL}\`"
+            echo "- runner: \`${{ inputs.runner_label }}\`"
+            echo "- cache prefix: \`${CACHE_PREFIX}\`"
+            echo "- build status: \`${{ steps.build.outputs.status || 'not-finished' }}\`"
+            echo "- build wall seconds: \`${{ steps.build.outputs.wall_seconds || 'unknown' }}\`"
+            echo
+            echo '```text'
+            grep 'BC_RUN_STEP' posthog-bc-run-cachemount.log || true
+            echo '```'
+            echo
+            echo '```text'
+            grep -E 'Restor|Saving|Uploaded|Downloaded|No token|No cache|Cache (hit|miss)|already exists|BC_RUN_STEP|real |user |sys ' posthog-bc-run-cachemount.log | tail -200 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: posthog-bc-run-cachemount-${{ inputs.sample_label }}
+          path: posthog-bc-run-cachemount.log
+          if-no-files-found: ignore

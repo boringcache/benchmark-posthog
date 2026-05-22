@@ -1,4 +1,8 @@
+import os
 from pathlib import Path
+
+
+expanded = os.environ.get("BC_RUN_EXPANDED") == "1"
 
 
 def lines(*values):
@@ -62,6 +66,28 @@ text = replace_once(
     ),
 )
 
+if expanded:
+    text = replace_once(
+        text,
+        lines(
+            "COPY frontend/ frontend/",
+            "RUN bin/turbo --filter=@posthog/frontend build",
+        ),
+        lines(
+            "COPY frontend/ frontend/",
+            "RUN --mount=type=secret,id=bc_token \\",
+            "    --mount=type=cache,id=turbo-frontend,target=/code/.turbo/cache \\",
+            '    set +e; step_start="$(date +%s)"; \\',
+            "    boringcache run --no-git --force --fail-on-cache-error \\",
+            "        boringcache/benchmark-posthog \\",
+            '        "${BC_RUN_PREFIX}-turbo-frontend:/code/.turbo/cache" \\',
+            "        -- sh -lc 'bin/turbo --filter=@posthog/frontend build'; \\",
+            '    step_status="$?"; step_end="$(date +%s)"; set -e; \\',
+            '    echo "BC_RUN_STEP turbo-frontend seconds=$((step_end-step_start)) status=${step_status}"; \\',
+            '    exit "${step_status}"',
+        ),
+    )
+
 text = replace_once(
     text,
     'FROM node:24.13.0-bookworm-slim AS node-scripts-build\nWORKDIR /code\nSHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]',
@@ -75,6 +101,17 @@ text = replace_once(
     ),
 )
 
+plugin_cache_mounts = [
+    "RUN --mount=type=secret,id=bc_token \\",
+    "    --mount=type=cache,id=pnpm-plugin,target=/tmp/pnpm-store-v24 \\",
+]
+plugin_tag_paths = '"${BC_RUN_PREFIX}-pnpm-plugin:/tmp/pnpm-store-v24"'
+if expanded:
+    plugin_cache_mounts.append(
+        "    --mount=type=cache,id=turbo-plugin,target=/code/.turbo/cache \\"
+    )
+    plugin_tag_paths = '"${BC_RUN_PREFIX}-pnpm-plugin:/tmp/pnpm-store-v24,${BC_RUN_PREFIX}-turbo-plugin:/code/.turbo/cache"'
+
 text = replace_once(
     text,
     lines(
@@ -84,12 +121,11 @@ text = replace_once(
         '    NODE_OPTIONS="--max-old-space-size=4096" bin/turbo --filter=@posthog/plugin-transpiler build',
     ),
     lines(
-        "RUN --mount=type=secret,id=bc_token \\",
-        "    --mount=type=cache,id=pnpm-plugin,target=/tmp/pnpm-store-v24 \\",
+        *plugin_cache_mounts,
         '    set +e; step_start="$(date +%s)"; \\',
         "    boringcache run --no-git --force --fail-on-cache-error \\",
         "        boringcache/benchmark-posthog \\",
-        '        "${BC_RUN_PREFIX}-pnpm-plugin:/tmp/pnpm-store-v24" \\',
+        f"        {plugin_tag_paths} \\",
         """        -- sh -lc 'corepack enable && NODE_OPTIONS="--max-old-space-size=4096" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24 && NODE_OPTIONS="--max-old-space-size=4096" bin/turbo --filter=@posthog/plugin-transpiler build && rm -rf /tmp/pnpm-store-v24/v*/projects'; \\""",
         '    step_status="$?"; step_end="$(date +%s)"; set -e; \\',
         '    echo "BC_RUN_STEP pnpm-plugin seconds=$((step_end-step_start)) status=${step_status}"; \\',
@@ -110,6 +146,71 @@ text = replace_once(
         "# uv settings for Docker builds",
     ),
 )
+
+if expanded:
+    text = replace_once(
+        text,
+        lines(
+            "RUN apt-get update && \\",
+            "    apt-get install -y --no-install-recommends \\",
+            '    "build-essential" \\',
+            '    "git" \\',
+            '    "libpcre2-dev" \\',
+            '    "zlib1g-dev" \\',
+            "    && \\",
+            '    git clone --depth 1 --branch "$UNIT_GIT_TAG" https://github.com/nginx/unit.git /tmp/unit && \\',
+            "    cd /tmp/unit && \\",
+            '    test "$(git rev-parse HEAD)" = "$UNIT_GIT_REF" && \\',
+            '    NCPU="$(getconf _NPROCESSORS_ONLN)" && \\',
+            '    DEB_HOST_MULTIARCH="$(gcc -print-multiarch)" && \\',
+            '    CONFIGURE_ARGS="--prefix=/usr \\',
+            "        --statedir=/var/lib/unit \\",
+            "        --control=unix:/var/run/control.unit.sock \\",
+            "        --runstatedir=/var/run \\",
+            "        --pid=/var/run/unit.pid \\",
+            "        --logdir=/var/log \\",
+            "        --log=/var/log/unit.log \\",
+            "        --tmpdir=/var/tmp \\",
+            "        --user=unit \\",
+            "        --group=unit \\",
+            "        --openssl \\",
+            '        --libdir=/usr/lib/$DEB_HOST_MULTIARCH \\',
+            '        --modulesdir=/usr/lib/unit/modules" && \\',
+            "    ./configure $CONFIGURE_ARGS && \\",
+            '    make -j "$NCPU" unitd && \\',
+            "    install -pm755 build/sbin/unitd /usr/sbin/unitd && \\",
+            "    make clean && \\",
+            "    ./configure $CONFIGURE_ARGS && \\",
+            "    ./configure python --config=/usr/local/bin/python3-config && \\",
+            '    make -j "$NCPU" python3-install && \\',
+            "    rm -rf /tmp/unit && \\",
+            '    apt-get purge -y --auto-remove "build-essential" "git" "libpcre2-dev" "zlib1g-dev" && \\',
+            "    rm -rf /var/lib/apt/lists/*",
+        ),
+        lines(
+            "RUN --mount=type=secret,id=bc_token \\",
+            "    --mount=type=cache,id=unit-ccache,target=/root/.cache/ccache \\",
+            "    apt-get update && \\",
+            "    apt-get install -y --no-install-recommends \\",
+            '    "build-essential" \\',
+            '    "git" \\',
+            '    "libpcre2-dev" \\',
+            '    "zlib1g-dev" \\',
+            '    "ccache" \\',
+            "    && \\",
+            '    set +e; step_start="$(date +%s)"; \\',
+            "    boringcache run --no-git --force --fail-on-cache-error \\",
+            "        boringcache/benchmark-posthog \\",
+            '        "${BC_RUN_PREFIX}-unit-ccache:/root/.cache/ccache" \\',
+            """        -- sh -lc 'git clone --depth 1 --branch "$UNIT_GIT_TAG" https://github.com/nginx/unit.git /tmp/unit && cd /tmp/unit && test "$(git rev-parse HEAD)" = "$UNIT_GIT_REF" && export PATH="/usr/lib/ccache:$PATH" && export CCACHE_DIR=/root/.cache/ccache && (ccache --zero-stats || true) && NCPU="$(getconf _NPROCESSORS_ONLN)" && DEB_HOST_MULTIARCH="$(gcc -print-multiarch)" && CONFIGURE_ARGS="--prefix=/usr --statedir=/var/lib/unit --control=unix:/var/run/control.unit.sock --runstatedir=/var/run --pid=/var/run/unit.pid --logdir=/var/log --log=/var/log/unit.log --tmpdir=/var/tmp --user=unit --group=unit --openssl --libdir=/usr/lib/$DEB_HOST_MULTIARCH --modulesdir=/usr/lib/unit/modules" && ./configure $CONFIGURE_ARGS && make -j "$NCPU" unitd && install -pm755 build/sbin/unitd /usr/sbin/unitd && make clean && ./configure $CONFIGURE_ARGS && ./configure python --config=/usr/local/bin/python3-config && make -j "$NCPU" python3-install && (ccache --show-stats || true)'; \\""",
+            '    step_status="$?"; step_end="$(date +%s)"; set -e; \\',
+            '    echo "BC_RUN_STEP unit-ccache seconds=$((step_end-step_start)) status=${step_status}"; \\',
+            '    if [[ "${step_status}" -ne 0 ]]; then exit "${step_status}"; fi; \\',
+            "    rm -rf /tmp/unit && \\",
+            '    apt-get purge -y --auto-remove "build-essential" "git" "libpcre2-dev" "zlib1g-dev" "ccache" && \\',
+            "    rm -rf /var/lib/apt/lists/*",
+        ),
+    )
 
 text = replace_once(
     text,

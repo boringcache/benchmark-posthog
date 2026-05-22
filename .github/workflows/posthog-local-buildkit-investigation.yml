@@ -19,6 +19,7 @@ on:
           - no-external-cache
           - no-cache-no-export
           - bc-run-cachemount
+          - bc-run-cachemount-expanded
       free_disk_space:
         description: "Reclaim runner disk before the Docker build."
         required: true
@@ -39,7 +40,7 @@ jobs:
     timeout-minutes: 120
     env:
       BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
-      BC_RUN_CACHE_PREFIX: posthog-bc-run-cachemount-20260522b
+      BC_RUN_CACHE_PREFIX: posthog-bc-run-cachemount-20260522c
     steps:
       - name: Free disk space
         if: inputs.free_disk_space
@@ -65,7 +66,7 @@ jobs:
         run: ./scripts/prepare-source.sh base
 
       - name: Validate BoringCache token
-        if: inputs.mode == 'bc-run-cachemount'
+        if: startsWith(inputs.mode, 'bc-run-cachemount')
         run: |
           set -euo pipefail
           if [[ -z "${BORINGCACHE_SAVE_TOKEN}" ]]; then
@@ -94,13 +95,16 @@ jobs:
           dockerfile="upstream/Dockerfile"
           if [[ "${MODE}" == "no-cache-no-export" ]]; then
             build_args+=(--no-cache)
-          elif [[ "${MODE}" == "bc-run-cachemount" ]]; then
+          elif [[ "${MODE}" == "bc-run-cachemount" || "${MODE}" == "bc-run-cachemount-expanded" ]]; then
             token_file="${RUNNER_TEMP}/bc_token"
             umask 077
             printf '%s\n' "${BORINGCACHE_SAVE_TOKEN}" > "${token_file}"
             build_secret_args+=(--secret "id=bc_token,src=${token_file}")
             build_args+=(--build-arg "BC_RUN_PREFIX=${BC_RUN_CACHE_PREFIX}")
             dockerfile="upstream/Dockerfile.bc-run-cachemount"
+            if [[ "${MODE}" == "bc-run-cachemount-expanded" ]]; then
+              export BC_RUN_EXPANDED=1
+            fi
             python3 .github/scripts/prepare-bc-run-cachemount-dockerfile.py
             grep -n 'BC_RUN_STEP\|boringcache run\|bc_token' "${dockerfile}"
           fi

@@ -1,0 +1,158 @@
+name: "PostHog - Namespace Runner Investigation"
+run-name: >-
+  ${{ format('Namespace Runner Investigation | {0} | {1}', inputs.mode, github.ref_name) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Namespace runner Docker build mode. Both modes avoid external cache export/import."
+        required: true
+        type: choice
+        default: no-external-cache
+        options:
+          - no-external-cache
+          - no-cache-no-export
+      free_disk_space:
+        description: "Reclaim runner disk before the Docker build."
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ inputs.mode }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  namespace-build:
+    name: Docker Build (Namespace runner)
+    runs-on: namespace-profile-posthog
+    timeout-minutes: 120
+    env:
+      NAMESPACE_PROFILE: namespace-profile-posthog
+    steps:
+      - name: Free disk space
+        if: inputs.free_disk_space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/share/swift /usr/local/.ghcup
+          sudo docker system prune --all --volumes --force
+          df -h /
+          docker system df || true
+
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Checkout pinned upstream submodule shallowly
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+
+      - name: Prepare base benchmark source tree
+        run: ./scripts/prepare-source.sh base
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Capture upstream ref
+        id: upstream
+        run: echo "sha=$(git rev-parse HEAD:upstream)" >> "$GITHUB_OUTPUT"
+
+      - name: Run Docker build on Namespace runner
+        id: namespace_build
+        env:
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          build_log="${RUNNER_TEMP}/posthog-namespace-runner.log"
+          build_args=()
+          if [[ "${MODE}" == "no-cache-no-export" ]]; then
+            build_args+=(--no-cache)
+          fi
+
+          started_at="$(date +%s)"
+          DOCKER_BUILDKIT=1 docker buildx build \
+            --builder "${BUILDER}" \
+            --file upstream/Dockerfile \
+            --tag posthog-namespace-runner:latest \
+            --progress=plain \
+            "${build_args[@]}" \
+            upstream 2>&1 | tee "${build_log}"
+          ended_at="$(date +%s)"
+
+          echo "started_at=${started_at}" >> "$GITHUB_OUTPUT"
+          echo "ended_at=${ended_at}" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=$((ended_at - started_at))" >> "$GITHUB_OUTPUT"
+
+          mkdir -p benchmark-namespace-runner benchmark-diagnostics
+          cp "${build_log}" benchmark-diagnostics/posthog-namespace-runner.log
+
+      - name: Write investigation artifact
+        if: always()
+        env:
+          UPSTREAM_REF: ${{ steps.upstream.outputs.sha }}
+          MODE: ${{ inputs.mode }}
+          FREE_DISK_SPACE: ${{ inputs.free_disk_space }}
+          STARTED_AT: ${{ steps.namespace_build.outputs.started_at }}
+          ENDED_AT: ${{ steps.namespace_build.outputs.ended_at }}
+          BUILD_SECONDS: ${{ steps.namespace_build.outputs.build_seconds }}
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-namespace-runner
+          jq -n \
+            --arg project_repo "PostHog/posthog" \
+            --arg project_ref "${UPSTREAM_REF}" \
+            --arg strategy "namespace-runner" \
+            --arg runner_label "${NAMESPACE_PROFILE}" \
+            --arg runner_name "${RUNNER_NAME:-}" \
+            --arg mode "${MODE}" \
+            --arg free_disk_space "${FREE_DISK_SPACE}" \
+            --arg started_at "${STARTED_AT}" \
+            --arg ended_at "${ENDED_AT}" \
+            --argjson build_seconds "${BUILD_SECONDS:-0}" \
+            '{
+              project: {repo: $project_repo, ref: $project_ref},
+              strategy: $strategy,
+              runner_label: $runner_label,
+              runner_name: $runner_name,
+              namespace: {
+                profile: $runner_label,
+                mode: $mode,
+                external_cache: false,
+                output_export: false,
+                free_disk_space: ($free_disk_space == "true"),
+                started_at: $started_at,
+                ended_at: $ended_at
+              },
+              runs: {
+                namespace_build_seconds: $build_seconds
+              }
+            }' > benchmark-namespace-runner/posthog-namespace-runner.json
+          {
+            echo "### PostHog Namespace runner investigation"
+            echo
+            echo "- upstream ref: \`${UPSTREAM_REF}\`"
+            echo "- Namespace profile: \`${NAMESPACE_PROFILE}\`"
+            echo "- mode: \`${MODE}\`"
+            echo "- Namespace build seconds: \`${BUILD_SECONDS:-0}\`"
+            echo "- external cache: \`false\`"
+            echo "- output export: \`false\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload investigation artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-posthog-namespace-runner
+          path: |
+            benchmark-namespace-runner/
+            benchmark-diagnostics/
+          if-no-files-found: error

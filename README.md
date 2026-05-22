@@ -48,9 +48,12 @@ This repo uses split BoringCache tokens as the standard CI shape:
 
 ## Repo Layout
 
-- [`scripts/prepare-source.sh`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/scripts/prepare-source.sh)
-- [`.github/workflows/posthog-boringcache.yml`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/.github/workflows/posthog-boringcache.yml)
-- [`.github/workflows/posthog-actions-cache.yml`](/Users/gaurav/boringcache/benchmark-repos/benchmark-posthog/.github/workflows/posthog-actions-cache.yml)
+- [`scripts/prepare-source.sh`](scripts/prepare-source.sh)
+- [`.github/workflows/posthog-boringcache.yml`](.github/workflows/posthog-boringcache.yml)
+- [`.github/workflows/posthog-actions-cache.yml`](.github/workflows/posthog-actions-cache.yml)
+- [`.github/workflows/posthog-depot-builder-investigation.yml`](.github/workflows/posthog-depot-builder-investigation.yml)
+- [`.github/workflows/posthog-local-buildkit-investigation.yml`](.github/workflows/posthog-local-buildkit-investigation.yml)
+- [`.github/workflows/posthog-namespace-runner-investigation.yml`](.github/workflows/posthog-namespace-runner-investigation.yml)
 
 ## Output
 

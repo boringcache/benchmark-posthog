@@ -39,7 +39,7 @@ jobs:
     timeout-minutes: 120
     env:
       BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
-      BC_RUN_CACHE_PREFIX: posthog-bc-run-cachemount-20260522a
+      BC_RUN_CACHE_PREFIX: posthog-bc-run-cachemount-20260522b
     steps:
       - name: Free disk space
         if: inputs.free_disk_space

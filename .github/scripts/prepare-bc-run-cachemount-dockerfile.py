@@ -37,6 +37,7 @@ text = replace_once(
         'SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]',
         "ARG BC_RUN_PREFIX",
         "COPY --from=boringcache-cli /usr/local/bin/boringcache /usr/local/bin/boringcache",
+        "COPY --from=boringcache-cli /etc/ssl/certs /etc/ssl/certs",
     ),
 )
 
@@ -70,6 +71,7 @@ text = replace_once(
         'SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]',
         "ARG BC_RUN_PREFIX",
         "COPY --from=boringcache-cli /usr/local/bin/boringcache /usr/local/bin/boringcache",
+        "COPY --from=boringcache-cli /etc/ssl/certs /etc/ssl/certs",
     ),
 )
 
@@ -103,6 +105,7 @@ text = replace_once(
         'SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]',
         "ARG BC_RUN_PREFIX",
         "COPY --from=boringcache-cli /usr/local/bin/boringcache /usr/local/bin/boringcache",
+        "COPY --from=boringcache-cli /etc/ssl/certs /etc/ssl/certs",
         "",
         "# uv settings for Docker builds",
     ),
@@ -142,6 +145,7 @@ text = replace_once(
         "ARG UNIT_GIT_REF=28404105810f53c570523c3e70006ad0ca210e58",
         "ARG BC_RUN_PREFIX",
         "COPY --from=boringcache-cli /usr/local/bin/boringcache /usr/local/bin/boringcache",
+        "COPY --from=boringcache-cli /etc/ssl/certs /etc/ssl/certs",
     ),
 )
 

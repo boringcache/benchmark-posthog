@@ -13,6 +13,14 @@ on:
         options:
           - fresh
           - rolling
+      buildkit_backend:
+        description: "BoringCache BuildKit backend"
+        required: false
+        type: choice
+        default: registry
+        options:
+          - registry
+          - native
       cli_ref:
         description: "Internal benchmark diagnostic only: build this boringcache/cli ref instead of using the released CLI"
         required: false
@@ -43,7 +51,7 @@ on:
       - "upstream"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}-${{ github.event_name == 'workflow_dispatch' && inputs.buildkit_backend || 'registry' }}
   cancel-in-progress: false
 
 permissions:
@@ -56,6 +64,7 @@ jobs:
     with:
       strategy: boringcache
       cache_lane: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
+      buildkit_backend: ${{ github.event_name == 'workflow_dispatch' && inputs.buildkit_backend || 'registry' }}
       benchmark_id: posthog
       project_repo: PostHog/posthog
       dockerfile_path: upstream/Dockerfile

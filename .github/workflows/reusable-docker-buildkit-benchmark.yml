@@ -94,7 +94,7 @@ env:
 
 jobs:
   seed-cache:
-    name: ${{ format('Docker {0} ({1}, {2})', inputs.cache_lane == 'rolling' && 'Commit Build' || 'Cold Build', inputs.strategy == 'actions-cache' && 'GitHub Actions Cache' || 'BoringCache', inputs.cache_lane == 'rolling' && 'rolling' || 'fresh') }}
+    name: ${{ format('Docker {0} ({1}, {2}, {3})', inputs.cache_lane == 'rolling' && 'Commit Build' || 'Cold Build', inputs.strategy == 'actions-cache' && 'GitHub Actions Cache' || 'BoringCache', inputs.strategy == 'boringcache' && inputs.buildkit_backend || 'gha', inputs.cache_lane == 'rolling' && 'rolling' || 'fresh') }}
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 180
     env:

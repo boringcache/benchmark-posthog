@@ -17,8 +17,9 @@ on:
         description: "BoringCache BuildKit backend"
         required: false
         type: choice
-        default: registry
+        default: both
         options:
+          - both
           - registry
           - native
       cli_ref:
@@ -51,7 +52,7 @@ on:
       - "upstream"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}-${{ github.event_name == 'workflow_dispatch' && inputs.buildkit_backend || 'registry' }}
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}-${{ github.event_name == 'workflow_dispatch' && inputs.buildkit_backend || 'both' }}
   cancel-in-progress: false
 
 permissions:
@@ -60,12 +61,16 @@ permissions:
 
 jobs:
   benchmark:
+    strategy:
+      fail-fast: false
+      matrix:
+        buildkit_backend: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.buildkit_backend == 'registry') && '["registry"]' || (github.event_name == 'workflow_dispatch' && inputs.buildkit_backend == 'native') && '["native"]' || '["registry","native"]') }}
     uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
     with:
       strategy: boringcache
       cache_lane: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
-      buildkit_backend: ${{ github.event_name == 'workflow_dispatch' && inputs.buildkit_backend || 'registry' }}
-      benchmark_id: posthog
+      buildkit_backend: ${{ matrix.buildkit_backend }}
+      benchmark_id: ${{ matrix.buildkit_backend == 'native' && 'posthog-native' || 'posthog' }}
       project_repo: PostHog/posthog
       dockerfile_path: upstream/Dockerfile
       docker_context: upstream

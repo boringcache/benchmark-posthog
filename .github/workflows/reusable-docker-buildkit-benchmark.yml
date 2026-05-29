@@ -106,6 +106,7 @@ jobs:
       scope_started_at: ${{ steps.scope.outputs.scope_started_at }}
       docker_cache_export_seconds: ${{ steps.cold_baseline_build.outputs.docker_cache_export_seconds }}
       docker_cache_import_seconds: ${{ steps.cold_baseline_build.outputs.docker_cache_import_seconds }}
+      buildkit_cached_steps: ${{ steps.cold_baseline_build.outputs.buildkit_cached_steps }}
       tags_csv: ${{ steps.scope.outputs.tags_csv }}
       cache_import_status: ${{ steps.cold_baseline_build.outputs.cache_import_status }}
       oci_hydration_policy: ${{ steps.cold_baseline_build.outputs.oci_hydration_policy }}
@@ -483,6 +484,8 @@ jobs:
             if [[ -n "$export_seconds" ]]; then
               echo "docker_cache_export_seconds=${export_seconds}" >> "$GITHUB_OUTPUT"
             fi
+            cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
+            echo "buildkit_cached_steps=${cached_steps}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload seed diagnostics
@@ -706,6 +709,8 @@ jobs:
             if [[ -n "$import_seconds" ]]; then
               echo "docker_cache_import_seconds=${import_seconds}" >> "$GITHUB_OUTPUT"
             fi
+            cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
+            echo "buildkit_cached_steps=${cached_steps}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Capture scenario timing
@@ -716,6 +721,7 @@ jobs:
           build_seconds=""
           cache_import_status=""
           docker_cache_import_seconds=""
+          buildkit_cached_steps=""
           metric_names=(oci_hydration_policy oci_body_local_hits oci_body_remote_fetches oci_body_local_bytes oci_body_remote_bytes oci_body_local_duration_ms oci_body_remote_duration_ms startup_oci_body_inserted startup_oci_body_failures startup_oci_body_cold_blobs startup_oci_body_duration_ms)
           for metric_name in "${metric_names[@]}"; do
             printf -v "$metric_name" '%s' ''
@@ -724,6 +730,7 @@ jobs:
           build_seconds="${{ steps.warm1_build.outputs.build_seconds }}"
           cache_import_status="${{ steps.warm1_build.outputs.cache_import_status }}"
           docker_cache_import_seconds="${{ steps.warm1_build.outputs.docker_cache_import_seconds }}"
+          buildkit_cached_steps="${{ steps.warm1_build.outputs.buildkit_cached_steps }}"
           oci_hydration_policy="${{ steps.warm1_build.outputs.oci_hydration_policy }}"
           oci_body_local_hits="${{ steps.warm1_build.outputs.oci_body_local_hits }}"
           oci_body_remote_fetches="${{ steps.warm1_build.outputs.oci_body_remote_fetches }}"
@@ -747,6 +754,9 @@ jobs:
           if [[ -n "${docker_cache_import_seconds}" ]]; then
             echo "docker_cache_import_seconds=${docker_cache_import_seconds}" >> "$GITHUB_OUTPUT"
           fi
+          if [[ -n "${buildkit_cached_steps}" ]]; then
+            echo "buildkit_cached_steps=${buildkit_cached_steps}" >> "$GITHUB_OUTPUT"
+          fi
           for metric_name in "${metric_names[@]}"; do
             metric_value="${!metric_name}"
             if [[ -n "$metric_value" ]]; then
@@ -764,6 +774,7 @@ jobs:
           build_seconds=${{ steps.phase_timing.outputs.build_seconds }}
           cache_import_status=${{ steps.phase_timing.outputs.cache_import_status }}
           docker_cache_import_seconds=${{ steps.phase_timing.outputs.docker_cache_import_seconds }}
+          buildkit_cached_steps=${{ steps.phase_timing.outputs.buildkit_cached_steps }}
           oci_hydration_policy=${{ steps.phase_timing.outputs.oci_hydration_policy }}
           oci_body_local_hits=${{ steps.phase_timing.outputs.oci_body_local_hits }}
           oci_body_remote_fetches=${{ steps.phase_timing.outputs.oci_body_remote_fetches }}
@@ -855,7 +866,7 @@ jobs:
             if [[ -n "${docker_cache_import_seconds}" ]]; then
               echo "${key}_docker_cache_import_seconds=${docker_cache_import_seconds}" >> "$GITHUB_OUTPUT"
             fi
-            metric_names=(cache_import_status oci_hydration_policy oci_body_local_hits oci_body_remote_fetches oci_body_local_bytes oci_body_remote_bytes oci_body_local_duration_ms oci_body_remote_duration_ms startup_oci_body_inserted startup_oci_body_failures startup_oci_body_cold_blobs startup_oci_body_duration_ms)
+            metric_names=(cache_import_status buildkit_cached_steps oci_hydration_policy oci_body_local_hits oci_body_remote_fetches oci_body_local_bytes oci_body_remote_bytes oci_body_local_duration_ms oci_body_remote_duration_ms startup_oci_body_inserted startup_oci_body_failures startup_oci_body_cold_blobs startup_oci_body_duration_ms)
             for metric_name in "${metric_names[@]}"; do
               metric_value="$(grep "^${metric_name}=" "$file" | head -n1 | cut -d= -f2- || true)"
               if [[ -n "${metric_value}" ]]; then
@@ -900,6 +911,7 @@ jobs:
           SEED_COLD_BUILD_SECONDS: ${{ needs.seed-cache.outputs.cold_build_seconds }}
           SEED_DOCKER_EXPORT_SECONDS: ${{ needs.seed-cache.outputs.docker_cache_export_seconds }}
           SEED_DOCKER_IMPORT_SECONDS: ${{ needs.seed-cache.outputs.docker_cache_import_seconds }}
+          SEED_BUILDKIT_CACHED_STEPS: ${{ needs.seed-cache.outputs.buildkit_cached_steps }}
           SEED_CACHE_IMPORT_STATUS: ${{ needs.seed-cache.outputs.cache_import_status }}
           SEED_OCI_HYDRATION_POLICY: ${{ needs.seed-cache.outputs.oci_hydration_policy }}
           SEED_OCI_BODY_LOCAL_HITS: ${{ needs.seed-cache.outputs.oci_body_local_hits }}
@@ -920,6 +932,7 @@ jobs:
           WARM1_SECONDS: ${{ steps.timings.outputs.warm1_seconds }}
           WARM1_BUILD_SECONDS: ${{ steps.timings.outputs.warm1_build_seconds }}
           WARM1_DOCKER_CACHE_IMPORT_SECONDS: ${{ steps.timings.outputs.warm1_docker_cache_import_seconds }}
+          WARM1_BUILDKIT_CACHED_STEPS: ${{ steps.timings.outputs.warm1_buildkit_cached_steps }}
           WARM1_CACHE_IMPORT_STATUS: ${{ steps.timings.outputs.warm1_cache_import_status }}
           WARM1_OCI_HYDRATION_POLICY: ${{ steps.timings.outputs.warm1_oci_hydration_policy }}
           WARM1_OCI_BODY_LOCAL_HITS: ${{ steps.timings.outputs.warm1_oci_body_local_hits }}
@@ -962,11 +975,13 @@ jobs:
             emit warm1_seconds ""
             emit warm1_build_seconds ""
             emit docker_cache_import_seconds "$SEED_DOCKER_IMPORT_SECONDS"
+            emit buildkit_cached_steps "$SEED_BUILDKIT_CACHED_STEPS"
           else
             require warm1_seconds "$WARM1_SECONDS"
             emit warm1_seconds "$WARM1_SECONDS"
             emit warm1_build_seconds "$WARM1_BUILD_SECONDS"
             emit docker_cache_import_seconds "$WARM1_DOCKER_CACHE_IMPORT_SECONDS"
+            emit buildkit_cached_steps "$WARM1_BUILDKIT_CACHED_STEPS"
           fi
 
           if [[ "$STRATEGY" == "boringcache" ]]; then
@@ -1074,6 +1089,8 @@ jobs:
             --benchmark "$BENCHMARK_ID" \
             --strategy "${{ inputs.strategy }}" \
             --lane "$CACHE_LANE" \
+            --mode docker \
+            --adapter oci \
             --project-repo "$PROJECT_REPO" \
             --project-ref "${{ steps.upstream_ref.outputs.sha }}" \
             --cold-seconds "${{ steps.normalize.outputs.cold_seconds }}" \
@@ -1083,6 +1100,7 @@ jobs:
             --cache-import-status "${{ steps.normalize.outputs.cache_import_status }}" \
             --docker-cache-import-seconds "${{ steps.normalize.outputs.docker_cache_import_seconds }}" \
             --docker-cache-export-seconds "${{ steps.normalize.outputs.docker_cache_export_seconds }}" \
+            --buildkit-cached-steps "${{ steps.normalize.outputs.buildkit_cached_steps }}" \
             --cache-storage-bytes "${{ steps.normalize.outputs.cache_storage_bytes }}" \
             --cache-storage-source "${{ steps.normalize.outputs.cache_storage_source }}" \
             --storage-breakdown-json "${{ steps.normalize.outputs.cache_storage_breakdown_json }}" \

@@ -262,6 +262,7 @@ if [[ -n "${BENCHMARK_METRICS_OUTPUT:-}" ]]; then
   mkdir -p "$(dirname "$metrics_output")"
   : > "$metrics_output"
   write_metric cache_import_status "$import_status"
+  write_metric buildkit_cached_steps "$cached_steps"
   write_metric docker_cache_import_seconds "$import_seconds"
   write_metric docker_cache_export_seconds "$final_publish_seconds"
   write_metric buildkit_backend native

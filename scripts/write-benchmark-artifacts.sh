@@ -97,6 +97,7 @@ cache_import_status=""
 output_dir="benchmark-results"
 docker_cache_import_seconds=""
 docker_cache_export_seconds=""
+buildkit_cached_steps="${BENCHMARK_BUILDKIT_CACHED_STEPS:-}"
 oci_hydration_policy=""
 oci_body_local_hits=""
 oci_body_remote_fetches=""
@@ -326,6 +327,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --docker-cache-export-seconds)
       docker_cache_export_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cached-steps)
+      buildkit_cached_steps="$2"
       shift 2
       ;;
     --http-transport)
@@ -1157,6 +1162,7 @@ fi
 if [[ -n "$docker_cache_export_seconds" ]] && ! [[ "$docker_cache_export_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   docker_cache_export_seconds=""
 fi
+buildkit_cached_steps="$(sanitize_uint "$buildkit_cached_steps")"
 oci_body_local_hits="$(sanitize_uint "$oci_body_local_hits")"
 oci_body_remote_fetches="$(sanitize_uint "$oci_body_remote_fetches")"
 oci_body_local_bytes="$(sanitize_uint "$oci_body_local_bytes")"
@@ -1289,6 +1295,7 @@ fi
 slow_hypotheses_payload="$(jq -n -c \
   --arg import_status "$cache_import_status" \
   --arg prior_cache_state "$slow_prior_cache_state" \
+  --argjson buildkit_cached_steps "$(json_num_or_null "$buildkit_cached_steps")" \
   --argjson build "$(json_num_or_null "$slow_build_seconds")" \
   --argjson setup "$(json_num_or_null "$slow_setup_seconds")" \
   --argjson post_cleanup "$(json_num_or_null "$slow_post_cleanup_seconds")" \
@@ -1309,6 +1316,14 @@ slow_hypotheses_payload="$(jq -n -c \
         "confidence": "high",
         "summary": "Prior cache import was not usable for this run.",
         "evidence": {"cache_import_status": $import_status, "prior_cache_state": $prior_cache_state}
+      }
+    else empty end,
+    if ($import_status == "ok" and $buildkit_cached_steps == 0) then
+      {
+        "id": "docker_import_without_reuse",
+        "confidence": "high",
+        "summary": "BuildKit imported cache metadata but reported zero cached steps.",
+        "evidence": {"cache_import_status": $import_status, "buildkit_cached_steps": $buildkit_cached_steps}
       }
     else empty end,
     if dominates($setup; $build) then
@@ -1397,6 +1412,7 @@ slow_reason_payload="$(jq -n -c \
   --argjson post_cleanup "$(json_num_or_null "$slow_post_cleanup_seconds")" \
   --argjson cache_restore "$(json_num_or_null "$slow_cache_restore_seconds")" \
   --argjson cache_save_export "$(json_num_or_null "$slow_cache_save_export_seconds")" \
+  --argjson buildkit_cached_steps "$(json_num_or_null "$buildkit_cached_steps")" \
   --argjson hit_count "$(json_num_or_null "$slow_hit_count")" \
   --argjson miss_count "$(json_num_or_null "$slow_miss_count")" \
   --argjson hit_rate "$(json_num_or_null "$slow_hit_rate")" \
@@ -1416,6 +1432,7 @@ slow_reason_payload="$(jq -n -c \
     "post_cleanup_seconds": $post_cleanup,
     "cache_restore_seconds": $cache_restore,
     "cache_save_export_seconds": $cache_save_export,
+    "buildkit_cached_steps": $buildkit_cached_steps,
     "hit_count": $hit_count,
     "miss_count": $miss_count,
     "hit_rate": $hit_rate,
@@ -1470,6 +1487,14 @@ elif [[ "$lane" == "rolling" && -n "$cache_import_status" && "$cache_import_stat
   reporting_mode="investigation_only"
   reporting_reason="rolling_cache_import_not_ok"
   reporting_note="Rolling cache import was unavailable, so this sample populated the rolling cache and is excluded from parity claims."
+elif [[ "$strategy" == "boringcache" && "$lane" == "rolling" && "$cache_import_status" == "ok" && "$buildkit_cached_steps" == "0" && ( "$mode" == "docker" || "$adapter" == "oci" ) ]]; then
+  rolling_reseed="null"
+  steady_state_candidate="false"
+  rolling_reseed_kind="rolling_import_no_reuse"
+  reporting_mode="investigation_only"
+  reporting_reason="rolling_cache_import_no_reuse"
+  reporting_note="Rolling cache import completed, but BuildKit reported zero cached steps; this sample behaved like a cold build and is excluded from parity claims."
+  reseed_reason="rolling imported prior cache metadata, but BuildKit reported zero cached steps"
 fi
 
 lane_label() {
@@ -1574,7 +1599,8 @@ cat > "$json_path" <<JSON
   },
   "docker_cache": {
     "import_seconds": $(json_num_or_null "$docker_cache_import_seconds"),
-    "export_seconds": $(json_num_or_null "$docker_cache_export_seconds")
+    "export_seconds": $(json_num_or_null "$docker_cache_export_seconds"),
+    "cached_steps": $(json_num_or_null "$buildkit_cached_steps")
   },
   "startup_prefetch": {
     "duration_ms": $(json_num_or_null "$startup_prefetch_duration_ms"),
@@ -1689,6 +1715,9 @@ JSON
   fi
   if [[ -n "$cache_import_status" ]]; then
     echo "| Cache import status | ${cache_import_status} |"
+  fi
+  if [[ -n "$buildkit_cached_steps" ]]; then
+    echo "| BuildKit cached steps | ${buildkit_cached_steps} |"
   fi
   echo "| Slow reason build | ${slow_build_seconds}s |"
   if [[ -n "$slow_setup_seconds" ]]; then

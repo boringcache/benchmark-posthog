@@ -84,16 +84,19 @@ write_build_metrics() {
   local import_seconds=""
   local export_seconds=""
   local import_status=""
+  local cached_steps=""
 
   import_step="$(find_step_id "importing cache manifest from")"
   export_step="$(find_step_id "exporting cache to registry")"
   import_seconds="$(find_step_seconds "$import_step")"
   export_seconds="$(find_step_seconds "$export_step")"
   import_status="$(build_import_status)"
+  cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
 
   mkdir -p "$(dirname "$output_path")"
   : > "$output_path"
   echo "cache_import_status=$import_status" >> "$output_path"
+  echo "buildkit_cached_steps=$cached_steps" >> "$output_path"
   if [[ -n "$import_seconds" ]]; then
     echo "docker_cache_import_seconds=$import_seconds" >> "$output_path"
   fi

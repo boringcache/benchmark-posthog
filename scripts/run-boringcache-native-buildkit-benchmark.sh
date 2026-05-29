@@ -5,10 +5,6 @@ mode="${1:-full}"
 benchmark_id="${BENCHMARK_ID:-docker}"
 workspace="${BENCHMARK_WORKSPACE:-${GITHUB_REPOSITORY:-boringcache/benchmarks}}"
 cache_scope="${CACHE_SCOPE:?Set CACHE_SCOPE}"
-native_cache_tags="${BORINGCACHE_NATIVE_CACHE_TAGS:-$cache_scope}"
-native_publish_scope="${native_cache_tags%%,*}"
-native_publish_scope="${native_publish_scope#"${native_publish_scope%%[![:space:]]*}"}"
-native_publish_scope="${native_publish_scope%"${native_publish_scope##*[![:space:]]}"}"
 dockerfile_path="${DOCKERFILE_PATH:?Set DOCKERFILE_PATH}"
 docker_context="${BENCHMARK_DOCKER_CONTEXT:?Set BENCHMARK_DOCKER_CONTEXT}"
 image_tag="${IMAGE_TAG:-${benchmark_id}:native}"
@@ -157,7 +153,7 @@ fi
 boringcache_args=(
   boringcache buildkit
   --workspace "$workspace"
-  --tag "$native_cache_tags"
+  --tag "$cache_scope"
   --no-platform
   --no-git
   --host 0.0.0.0
@@ -287,8 +283,6 @@ if [[ -n "${BENCHMARK_DIAGNOSTICS_OUTPUT:-}" ]]; then
     echo "buildkit_backend=native"
     echo "mode=${mode}"
     echo "cache_scope=${cache_scope}"
-    echo "native_cache_tags=${native_cache_tags}"
-    echo "native_publish_scope=${native_publish_scope}"
     echo "workspace=${workspace}"
     echo "image_tag=${image_tag}"
     echo "dockerfile_path=${dockerfile_path}"

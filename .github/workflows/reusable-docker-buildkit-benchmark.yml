@@ -242,9 +242,16 @@ jobs:
             cache_scope="${CACHE_ID}-run-${run_suffix}"
             registry_proxy_tags="${cache_scope}"
             tags_csv="${cache_scope}"
+            native_cache_tags=""
+            if [[ "$BUILDKIT_BACKEND" == "native" && "$CACHE_LANE" == "rolling" ]]; then
+              native_candidate_scope="${cache_scope}-candidate-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+              native_cache_tags="${native_candidate_scope},${cache_scope}"
+              tags_csv="${native_candidate_scope}"
+            fi
             echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
             echo "registry_proxy_tags=${registry_proxy_tags}" >> "$GITHUB_OUTPUT"
             echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
+            echo "native_cache_tags=${native_cache_tags}" >> "$GITHUB_OUTPUT"
           else
             if [[ "$CACHE_LANE" == "rolling" ]]; then
               cache_scope_primary="${CACHE_ID}-rolling-${ref_slug}${CACHE_SCOPE_SUFFIX}"
@@ -331,6 +338,7 @@ jobs:
           CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
           CACHE_SCOPE_PRIMARY: ${{ steps.scope.outputs.cache_scope_primary }}
           CACHE_SCOPE_FALLBACK: ${{ steps.scope.outputs.cache_scope_fallback }}
+          BORINGCACHE_NATIVE_CACHE_TAGS: ${{ steps.scope.outputs.native_cache_tags }}
           BORINGCACHE_REGISTRY_PROXY_TAGS: ${{ steps.scope.outputs.registry_proxy_tags }}
           BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-seed-observability.jsonl
           ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP: ${{ inputs.cache_lane == 'rolling' && 'true' || '' }}

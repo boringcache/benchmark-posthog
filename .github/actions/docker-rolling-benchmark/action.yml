@@ -1,0 +1,537 @@
+name: "Docker rolling benchmark"
+description: "Run one rolling Docker benchmark provider inside a single visible job."
+
+inputs:
+  strategy:
+    required: true
+  buildkit_backend:
+    required: false
+    default: registry
+  benchmark_id:
+    required: true
+  project_repo:
+    required: true
+  dockerfile_path:
+    required: false
+    default: upstream/Dockerfile
+  docker_context:
+    required: false
+    default: upstream
+  docker_build_args:
+    required: false
+    default: ""
+  image_tag:
+    required: true
+  prepare_install_command:
+    required: false
+    default: ""
+  prepare_command:
+    required: false
+    default: ""
+  prepare_node_version:
+    required: false
+    default: ""
+  cli_platform:
+    required: false
+    default: linux-amd64
+  benchmark_workspace:
+    required: true
+  cli_ref:
+    required: false
+    default: ""
+  blob_download_concurrency:
+    required: false
+    default: ""
+  blob_prefetch_concurrency:
+    required: false
+    default: ""
+  oci_stream_through_min_bytes:
+    required: false
+    default: ""
+  free_disk_space:
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Free disk space
+      if: ${{ inputs.free_disk_space == 'true' }}
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/share/swift /usr/local/.ghcup
+        sudo docker system prune --all --volumes --force
+        df -h /
+        docker system df || true
+
+    - name: Validate BoringCache secrets
+      if: ${{ inputs.strategy == 'boringcache' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -z "${BORINGCACHE_RESTORE_TOKEN:-}" ]]; then
+          echo "Missing BORINGCACHE_RESTORE_TOKEN secret" >&2
+          exit 1
+        fi
+        if [[ -z "${BORINGCACHE_SAVE_TOKEN:-}" ]]; then
+          echo "Missing BORINGCACHE_SAVE_TOKEN secret" >&2
+          exit 1
+        fi
+
+    - name: Install BoringCache CLI with boringcache/one
+      if: ${{ inputs.strategy == 'boringcache' }}
+      uses: boringcache/one@v1
+      with:
+        setup: none
+        mode: archive
+        workspace: ${{ inputs.benchmark_workspace }}
+        cli-platform: ${{ inputs.cli_platform }}
+        cache-runtime: false
+
+    - name: Validate internal CLI ref diagnostic
+      if: ${{ inputs.strategy == 'boringcache' && inputs.cli_ref != '' }}
+      shell: bash
+      env:
+        CLI_REF: ${{ inputs.cli_ref }}
+      run: |
+        set -euo pipefail
+        if [[ "${GITHUB_REPOSITORY_OWNER}" != "boringcache" ]]; then
+          echo "cli_ref is an internal BoringCache benchmark diagnostic and is disabled outside boringcache-owned benchmark repos." >&2
+          exit 1
+        fi
+        {
+          echo "### Internal CLI ref diagnostic"
+          echo
+          echo "Using boringcache/cli ref \`${CLI_REF}\` for the outer registry proxy only."
+          echo "Launch proof runs should leave \`cli_ref\` empty and use the CLI bundled by \`boringcache/one@v1\`."
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Checkout BoringCache CLI ref
+      if: ${{ inputs.strategy == 'boringcache' && inputs.cli_ref != '' }}
+      uses: actions/checkout@v6
+      with:
+        repository: boringcache/cli
+        ref: ${{ inputs.cli_ref }}
+        path: .boringcache-cli
+        fetch-depth: 1
+
+    - name: Build BoringCache CLI ref
+      if: ${{ inputs.strategy == 'boringcache' && inputs.cli_ref != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        rustup toolchain install stable --profile minimal
+        rustup target add x86_64-unknown-linux-musl
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends musl-tools
+        cargo build --release --locked --target x86_64-unknown-linux-musl --manifest-path .boringcache-cli/Cargo.toml --bin boringcache
+        mkdir -p "$HOME/.local/bin"
+        cp .boringcache-cli/target/x86_64-unknown-linux-musl/release/boringcache "$HOME/.local/bin/boringcache"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        "$HOME/.local/bin/boringcache" --version
+
+    - name: Checkout pinned upstream submodule shallowly
+      shell: bash
+      run: |
+        set -euo pipefail
+        git submodule sync --recursive
+        git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+
+    - name: Prepare base benchmark source tree
+      shell: bash
+      run: ./scripts/prepare-source.sh base
+
+    - name: Setup Node for Docker build artifacts
+      if: ${{ inputs.prepare_install_command != '' || inputs.prepare_command != '' }}
+      uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.prepare_node_version }}
+
+    - name: Enable Node package manager for Docker build artifacts
+      if: ${{ inputs.prepare_install_command != '' || inputs.prepare_command != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd upstream
+        corepack enable
+        corepack install
+
+    - name: Install Docker build artifact dependencies
+      if: ${{ inputs.prepare_install_command != '' }}
+      shell: bash
+      env:
+        PREPARE_INSTALL_COMMAND: ${{ inputs.prepare_install_command }}
+      run: |
+        set -euo pipefail
+        cd upstream
+        eval "$PREPARE_INSTALL_COMMAND"
+
+    - name: Prepare Docker build artifacts
+      if: ${{ inputs.prepare_command != '' }}
+      shell: bash
+      env:
+        PREPARE_COMMAND: ${{ inputs.prepare_command }}
+      run: |
+        set -euo pipefail
+        cd upstream
+        eval "$PREPARE_COMMAND"
+
+    - name: Start timing
+      id: timing_start
+      shell: bash
+      run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+    - name: Prepare benchmark scope
+      id: scope
+      shell: bash
+      env:
+        STRATEGY: ${{ inputs.strategy }}
+        BENCHMARK_ID: ${{ inputs.benchmark_id }}
+      run: |
+        set -euo pipefail
+        ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+        ref_slug="${ref_slug#-}"
+        ref_slug="${ref_slug%-}"
+        ref_slug="${ref_slug:-main}"
+        scope_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "scope_started_at=${scope_started_at}" >> "$GITHUB_OUTPUT"
+
+        if [[ "$STRATEGY" == "boringcache" ]]; then
+          cache_scope="${BENCHMARK_ID}-run-rolling-${ref_slug}"
+          echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
+          echo "registry_proxy_tags=${cache_scope}" >> "$GITHUB_OUTPUT"
+          echo "tags_csv=${cache_scope}" >> "$GITHUB_OUTPUT"
+        else
+          cache_scope_primary="${BENCHMARK_ID}-rolling-${ref_slug}"
+          cache_scope_fallback="${BENCHMARK_ID}-rolling-${ref_slug}-fallback"
+          echo "cache_scope_primary=${cache_scope_primary}" >> "$GITHUB_OUTPUT"
+          echo "cache_scope_fallback=${cache_scope_fallback}" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Configure boringcache/one for Docker
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' }}
+      id: docker_cache
+      uses: boringcache/one@v1
+      with:
+        cli-version: ${{ inputs.cli_ref != '' && 'skip' || '' }}
+        setup: none
+        cache-runtime: false
+        mode: docker
+        docker-command: setup
+        workspace: ${{ inputs.benchmark_workspace }}
+        cache-tag: ${{ steps.scope.outputs.cache_scope }}
+        registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
+        proxy-no-git: "true"
+        driver-opts: |
+          network=host
+        verbose: true
+
+    - name: Set up Docker Buildx
+      if: ${{ inputs.strategy == 'actions-cache' }}
+      id: buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Expose GitHub runtime for Buildx cache
+      if: ${{ inputs.strategy == 'actions-cache' }}
+      uses: crazy-max/ghaction-github-runtime@v4
+
+    - name: Prepare GitHub Actions Cache write probe
+      if: ${{ inputs.strategy == 'actions-cache' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p .bench-cache-probe
+        printf '%s\n' "probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(date +%s)" > .bench-cache-probe/probe.txt
+
+    - name: Verify GitHub Actions Cache write access
+      if: ${{ inputs.strategy == 'actions-cache' }}
+      id: cache_write_probe
+      continue-on-error: true
+      uses: actions/cache/save@v5
+      with:
+        path: .bench-cache-probe
+        key: ac-${{ inputs.benchmark_id }}-write-probe-r${{ github.run_id }}-a${{ github.run_attempt }}
+
+    - name: Fail early if GitHub Actions Cache is read-only
+      if: ${{ inputs.strategy == 'actions-cache' && steps.cache_write_probe.outcome != 'success' }}
+      shell: bash
+      run: |
+        echo "GitHub Actions Cache write probe failed (likely read-only budget/spending cap)." >&2
+        echo "Cannot produce reliable GitHub Actions Cache benchmark results until cache writes are enabled." >&2
+        exit 1
+
+    - name: Run rolling commit build
+      id: build
+      shell: bash
+      env:
+        STRATEGY: ${{ inputs.strategy }}
+        BUILDKIT_BACKEND: ${{ inputs.buildkit_backend }}
+        BENCHMARK_ID: ${{ inputs.benchmark_id }}
+        BENCHMARK_WORKSPACE: ${{ inputs.benchmark_workspace }}
+        BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
+        BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
+        BORINGCACHE_CACHE_IMPORT_READY: ${{ steps.docker_cache.outputs.docker-cache-import-ready }}
+        BORINGCACHE_CACHE_REQUESTED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-requested-from-refs }}
+        BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
+        BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
+        BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
+        BUILDER: ${{ inputs.strategy == 'boringcache' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name }}
+        CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
+        CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
+        CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
+        CACHE_SCOPE_PRIMARY: ${{ steps.scope.outputs.cache_scope_primary }}
+        CACHE_SCOPE_FALLBACK: ${{ steps.scope.outputs.cache_scope_fallback }}
+        BORINGCACHE_REGISTRY_PROXY_TAGS: ${{ steps.scope.outputs.registry_proxy_tags }}
+        BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-seed-observability.jsonl
+        ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP: "true"
+        IMAGE_TAG: ${{ inputs.image_tag }}
+        DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
+        BENCHMARK_DOCKER_CONTEXT: ${{ inputs.docker_context }}
+        DOCKER_BUILD_EXTRA_ARGS: ${{ inputs.docker_build_args }}
+      run: |
+        set -euo pipefail
+        docker_extra_args=()
+        if [[ -n "${DOCKER_BUILD_EXTRA_ARGS:-}" ]]; then
+          while IFS= read -r arg; do
+            [[ -n "$arg" ]] && docker_extra_args+=("$arg")
+          done <<< "$DOCKER_BUILD_EXTRA_ARGS"
+        fi
+
+        phase_start="${{ steps.timing_start.outputs.started_at }}"
+        start="$(date +%s)"
+
+        if [[ "$STRATEGY" == "boringcache" ]]; then
+          metrics_file="${RUNNER_TEMP}/rolling-build-metrics.env"
+          diagnostics_file="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-rolling-seed.txt"
+          observability_artifact="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-rolling-seed-observability.jsonl"
+          rm -f "$metrics_file" "$diagnostics_file" "$observability_artifact"
+          mkdir -p "$(dirname "$diagnostics_file")"
+
+          benchmark_script="./scripts/run-boringcache-buildkit-benchmark.sh"
+          if [[ "$BUILDKIT_BACKEND" == "native" ]]; then
+            benchmark_script="./scripts/run-boringcache-native-buildkit-benchmark.sh"
+          elif [[ "${BORINGCACHE_CACHE_IMPORT_READY:-}" != "true" || ( -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ) ]]; then
+            echo "Rolling BoringCache Docker import was not ready; continuing as a bootstrap/update sample." >&2
+            echo "import ready: ${BORINGCACHE_CACHE_IMPORT_READY:-}" >&2
+            echo "requested refs: ${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}" >&2
+            echo "used refs: ${BORINGCACHE_CACHE_USED_FROM_REFS:-}" >&2
+            echo "unreadable refs: ${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}" >&2
+          fi
+
+          set +e
+          BENCHMARK_METRICS_OUTPUT="$metrics_file" BENCHMARK_DIAGNOSTICS_OUTPUT="$diagnostics_file" "$benchmark_script" full
+          status="$?"
+          set -e
+          end="$(date +%s)"
+
+          if [[ -s "$diagnostics_file" ]]; then
+            {
+              echo "seed_phase_started_at=${phase_start}"
+              echo "seed_build_started_at=${start}"
+              echo "seed_build_finished_at=${end}"
+              echo "seed_phase_wall_seconds=$((end - phase_start))"
+              echo "seed_build_wall_seconds=$((end - start))"
+            } >> "$diagnostics_file"
+          fi
+          if [[ -s "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" ]]; then
+            cp "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" "$observability_artifact"
+            mkdir -p benchmark-session-summary
+            jq -c 'select(.operation == "cache_session_summary") | .summary // .details // .' "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" 2>/dev/null | tail -n 1 > benchmark-session-summary/benchmark-session-summary.json || true
+            if [[ ! -s benchmark-session-summary/benchmark-session-summary.json ]]; then
+              rm -f benchmark-session-summary/benchmark-session-summary.json
+            fi
+          fi
+          if [[ "$status" -ne 0 ]]; then
+            exit "$status"
+          fi
+          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          if [[ -s "$metrics_file" ]]; then
+            cat "$metrics_file" >> "$GITHUB_OUTPUT"
+            native_tool_evidence="$(grep "^native_tool_evidence=" "$metrics_file" | head -n1 | cut -d= -f2- || true)"
+            if [[ "$BUILDKIT_BACKEND" == "native" && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
+              mkdir -p benchmark-native-tool
+              cp "$native_tool_evidence" benchmark-native-tool/native-tool.json
+            fi
+          fi
+        else
+          build_log="$(mktemp /tmp/${BENCHMARK_ID}-ac-rolling.XXXXXX.log)"
+          find_step_id() {
+            local pattern="$1"
+            sed -nE "s/^#([0-9]+) ${pattern}.*/\\1/p" "$build_log" | tail -n1
+          }
+          find_step_seconds() {
+            local step_id="$1"
+            [[ -n "$step_id" ]] || return 0
+            sed -nE "s/^#${step_id} DONE ([0-9]+(\\.[0-9]+)?)s$/\\1/p" "$build_log" | tail -n1
+          }
+
+          selected_scope="$CACHE_SCOPE_PRIMARY"
+          attempt=1
+          while true; do
+            : > "$build_log"
+            set +e
+            DOCKER_BUILDKIT=1 docker buildx build \
+              --builder "$BUILDER" \
+              --file "$DOCKERFILE_PATH" \
+              --tag "$IMAGE_TAG" \
+              --progress=plain \
+              "${docker_extra_args[@]}" \
+              --cache-from "type=gha,scope=${selected_scope}" \
+              --cache-to "type=gha,mode=max,scope=${selected_scope}" \
+              "$BENCHMARK_DOCKER_CONTEXT" 2>&1 | tee "$build_log"
+            status=${PIPESTATUS[0]}
+            set -e
+
+            if [[ "$status" -eq 0 ]]; then
+              break
+            fi
+            if [[ "$attempt" -ge 2 ]]; then
+              echo "Rolling build failed after retry" >&2
+              exit "$status"
+            fi
+            attempt=$((attempt + 1))
+            selected_scope="$CACHE_SCOPE_FALLBACK"
+            echo "Retrying rolling build with fallback cache scope: ${selected_scope}"
+            sleep 5
+          done
+
+          end="$(date +%s)"
+          echo "cache_scope=${selected_scope}" >> "$GITHUB_OUTPUT"
+          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          import_step="$(find_step_id "importing cache manifest from")"
+          import_seconds="$(find_step_seconds "$import_step")"
+          if [[ -n "$import_seconds" ]]; then
+            echo "docker_cache_import_seconds=${import_seconds}" >> "$GITHUB_OUTPUT"
+          fi
+          export_step="$(find_step_id "preparing build cache for export")"
+          export_seconds="$(find_step_seconds "$export_step")"
+          if [[ -n "$export_seconds" ]]; then
+            echo "docker_cache_export_seconds=${export_seconds}" >> "$GITHUB_OUTPUT"
+          fi
+          cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
+          echo "buildkit_cached_steps=${cached_steps}" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upload seed diagnostics
+      if: ${{ inputs.strategy == 'boringcache' && always() }}
+      uses: actions/upload-artifact@v6
+      with:
+        name: benchmark-diagnostics-${{ inputs.benchmark_id }}-boringcache-rolling
+        path: benchmark-diagnostics/*
+        if-no-files-found: ignore
+
+    - name: Upload native BuildKit evidence
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'native' && always() }}
+      uses: actions/upload-artifact@v6
+      with:
+        name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-rolling-seed
+        path: benchmark-native-tool/native-tool.json
+        if-no-files-found: ignore
+
+    - name: Measure cache storage usage
+      id: storage
+      shell: bash
+      env:
+        STRATEGY: ${{ inputs.strategy }}
+        BUILDKIT_BACKEND: ${{ inputs.buildkit_backend }}
+        BENCHMARK_ID: ${{ inputs.benchmark_id }}
+        BENCHMARK_WORKSPACE: ${{ inputs.benchmark_workspace }}
+      run: |
+        set -euo pipefail
+        mkdir -p benchmark-storage
+        if [[ "$STRATEGY" == "boringcache" ]]; then
+          tags_csv="${{ steps.scope.outputs.tags_csv }}"
+          breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
+          exact_tags=""
+          if [[ "$BUILDKIT_BACKEND" == "native" ]]; then
+            exact_tags="$tags_csv"
+          fi
+          bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" BORINGCACHE_EXACT_TAGS="$exact_tags" ./scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
+          source="boringcache-check"
+        else
+          breakdown_path=""
+          bytes="$(./scripts/sum-gha-cache-by-key.sh "$BENCHMARK_ID" "${{ steps.scope.outputs.scope_started_at }}")"
+          source="github-actions-cache-api"
+        fi
+        echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"
+        echo "source=${source}" >> "$GITHUB_OUTPUT"
+        echo "breakdown_path=${breakdown_path}" >> "$GITHUB_OUTPUT"
+
+    - name: Write benchmark artifacts
+      id: artifact_files
+      shell: bash
+      env:
+        STRATEGY: ${{ inputs.strategy }}
+        BENCHMARK_ID: ${{ inputs.benchmark_id }}
+        PROJECT_REPO: ${{ inputs.project_repo }}
+      run: |
+        set -euo pipefail
+        cache_summary_args=()
+        if [[ -s benchmark-session-summary/benchmark-session-summary.json ]]; then
+          cache_summary_args=(--cache-session-summary-json benchmark-session-summary/benchmark-session-summary.json)
+        fi
+        native_tool_args=()
+        if [[ -s benchmark-native-tool/native-tool.json ]]; then
+          native_tool_args=(--native-tool-evidence-json benchmark-native-tool/native-tool.json)
+        fi
+
+        cache_import_status=""
+        if [[ "$STRATEGY" == "boringcache" ]]; then
+          cache_import_status="${{ steps.build.outputs.cache_import_status }}"
+        fi
+
+        ./scripts/write-benchmark-artifacts.sh \
+          --benchmark "$BENCHMARK_ID" \
+          --strategy "$STRATEGY" \
+          --lane rolling \
+          --mode docker \
+          --adapter oci \
+          --project-repo "$PROJECT_REPO" \
+          --project-ref "$(git rev-parse HEAD:upstream)" \
+          --cold-seconds "${{ steps.build.outputs.seconds }}" \
+          --cold-build-seconds "${{ steps.build.outputs.build_seconds }}" \
+          --warm1-seconds "" \
+          --warm1-build-seconds "" \
+          --cache-import-status "$cache_import_status" \
+          --docker-cache-import-seconds "${{ steps.build.outputs.docker_cache_import_seconds }}" \
+          --docker-cache-export-seconds "${{ steps.build.outputs.docker_cache_export_seconds }}" \
+          --buildkit-cached-steps "${{ steps.build.outputs.buildkit_cached_steps }}" \
+          --cache-storage-bytes "${{ steps.storage.outputs.bytes }}" \
+          --cache-storage-source "${{ steps.storage.outputs.source }}" \
+          --storage-breakdown-json "${{ steps.storage.outputs.breakdown_path }}" \
+          --bytes-uploaded "${{ steps.storage.outputs.bytes }}" \
+          --oci-hydration-policy "${{ steps.build.outputs.oci_hydration_policy }}" \
+          --oci-body-local-hits "${{ steps.build.outputs.oci_body_local_hits }}" \
+          --oci-body-remote-fetches "${{ steps.build.outputs.oci_body_remote_fetches }}" \
+          --oci-body-local-bytes "${{ steps.build.outputs.oci_body_local_bytes }}" \
+          --oci-body-remote-bytes "${{ steps.build.outputs.oci_body_remote_bytes }}" \
+          --oci-body-local-duration-ms "${{ steps.build.outputs.oci_body_local_duration_ms }}" \
+          --oci-body-remote-duration-ms "${{ steps.build.outputs.oci_body_remote_duration_ms }}" \
+          --startup-oci-body-inserted "${{ steps.build.outputs.startup_oci_body_inserted }}" \
+          --startup-oci-body-failures "${{ steps.build.outputs.startup_oci_body_failures }}" \
+          --startup-oci-body-cold-blobs "${{ steps.build.outputs.startup_oci_body_cold_blobs }}" \
+          --startup-oci-body-duration-ms "${{ steps.build.outputs.startup_oci_body_duration_ms }}" \
+          --oci-new-blob-count "${{ steps.build.outputs.oci_new_blob_count }}" \
+          --oci-new-blob-bytes "${{ steps.build.outputs.oci_new_blob_bytes }}" \
+          --oci-upload-requested-blobs "${{ steps.build.outputs.oci_upload_requested_blobs }}" \
+          --oci-upload-already-present "${{ steps.build.outputs.oci_upload_already_present }}" \
+          --oci-upload-batch-seconds "${{ steps.build.outputs.oci_upload_batch_seconds }}" \
+          --reseed-new-blob-threshold "0" \
+          --hit-behavior-note "Rolling lane: one continuous-commit build imports the prior branch/default Docker cache, exports the updated cache, and records that commit build only." \
+          "${cache_summary_args[@]}" \
+          "${native_tool_args[@]}"
+
+    - name: Upload benchmark artifacts
+      uses: actions/upload-artifact@v6
+      with:
+        name: benchmark-${{ inputs.benchmark_id }}-${{ inputs.strategy }}-rolling
+        path: |
+          ${{ steps.artifact_files.outputs.json_path }}
+          ${{ steps.artifact_files.outputs.md_path }}
+        if-no-files-found: error
+
+    - name: Publish summary
+      shell: bash
+      run: cat "${{ steps.artifact_files.outputs.md_path }}" >> "$GITHUB_STEP_SUMMARY"

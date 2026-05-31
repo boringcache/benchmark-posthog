@@ -46,7 +46,7 @@ jobs:
             local workflow="$1"
             local attempt=1
             local max_attempts=3
-            local fields=(-f cache_lane=rolling)
+            local fields=()
             fields+=(
               -f "blob_download_concurrency=${{ inputs.blob_download_concurrency || '' }}"
               -f "blob_prefetch_concurrency=${{ inputs.blob_prefetch_concurrency || '' }}"

@@ -12,8 +12,11 @@ buildkit_image="${BUILDKIT_IMAGE:-moby/buildkit:buildx-stable-1}"
 cli_image="${BORINGCACHE_NATIVE_CLI_IMAGE:-buildpack-deps:noble-curl}"
 proxy_port="${BORINGCACHE_PROXY_PORT:-5100}"
 oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
+export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS:-1}"
 build_log="$(mktemp /tmp/boringcache-native-build.XXXXXX.log)"
 native_tool_evidence_path="$(mktemp /tmp/boringcache-native-tool.XXXXXX.json)"
+native_tool_evidence_dir="$(dirname "$native_tool_evidence_path")"
+observability_container_path="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-/evidence/observability.jsonl}"
 buildctl_dir="$(mktemp -d /tmp/boringcache-buildctl.XXXXXX)"
 run_slug="$(printf '%s' "${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${benchmark_id}-${mode}-${cache_scope}" | shasum -a 256 | awk '{print substr($1, 1, 12)}')"
 network="bc-native-${run_slug}"
@@ -206,6 +209,8 @@ docker run --rm \
   -e BORINGCACHE_RESTORE_TOKEN \
   -e BORINGCACHE_SAVE_TOKEN \
   -e BORINGCACHE_OCI_BODY_PREFETCH_MAX_MB \
+  -e "BORINGCACHE_OBSERVABILITY_JSONL_PATH=${observability_container_path}" \
+  -e BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS \
   -e BORINGCACHE_TIMING_TRACE=1 \
   "${github_env[@]}" \
   -v "${boringcache_bin}:/usr/local/bin/boringcache:ro" \
@@ -213,7 +218,7 @@ docker run --rm \
   -v "${context_abs}:/src:ro" \
   -v "${root_volume}:/buildkit" \
   -v "${cache_volume}:/cache" \
-  -v "$(dirname "$native_tool_evidence_path"):/evidence" \
+  -v "${native_tool_evidence_dir}:/evidence" \
   "$cli_image" \
   "${timed_command[@]}" \
   "${boringcache_args[@]}" \
@@ -224,8 +229,12 @@ status="${PIPESTATUS[0]}"
 set -e
 ended="$(date +%s)"
 wall_seconds="$((ended - started))"
+observability_path="$observability_container_path"
+case "$observability_container_path" in
+  /evidence/*) observability_path="${native_tool_evidence_dir}/${observability_container_path#/evidence/}" ;;
+esac
 
-cp "$(dirname "$native_tool_evidence_path")/native-tool.json" "$native_tool_evidence_path" 2>/dev/null || true
+cp "${native_tool_evidence_dir}/native-tool.json" "$native_tool_evidence_path" 2>/dev/null || true
 
 cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
 if grep -Eq 'failed to configure .*cache importer|cache manifest.*(manifest unknown|not found)|importing cache manifest.*(manifest unknown|not found)' "$build_log"; then
@@ -257,6 +266,79 @@ write_metric() {
   echo "${key}=${value}" >> "$metrics_output"
 }
 
+append_native_observability_metrics() {
+  local metrics_file="$1"
+  [[ -n "$metrics_file" && -s "$metrics_file" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  detail_value() {
+    local details="$1"
+    local name="$2"
+    printf '%s\n' "$details" | tr ' ' '\n' | awk -F= -v key="$name" '$1 == key { print $2; exit }'
+  }
+
+  local plan_details=""
+  plan_details="$(jq -r 'select(.operation == "oci_blob_upload_plan") | .details // empty' "$metrics_file" 2>/dev/null | tail -n1 || true)"
+  if [[ -n "$plan_details" ]]; then
+    write_metric oci_upload_requested_blobs "$(detail_value "$plan_details" requested_blobs)"
+    write_metric oci_new_blob_count "$(detail_value "$plan_details" upload_urls)"
+    write_metric oci_upload_already_present "$(detail_value "$plan_details" already_present)"
+  else
+    return 1
+  fi
+
+  local uploaded_blob_bytes=""
+  uploaded_blob_bytes="$(jq -s -r '
+    ([range(0; length) as $i | select(.[$i].operation == "oci_blob_upload_plan") | $i] | last) as $plan
+    | if $plan == null then
+        0
+      else
+        ([range(($plan + 1); length) as $i | .[$i] | select(.operation == "oci_blob_upload") | (.request_bytes // 0)] | add // 0)
+      end
+  ' "$metrics_file" 2>/dev/null || true)"
+  write_metric oci_new_blob_bytes "${uploaded_blob_bytes:-0}"
+
+  local batch_duration_ms=""
+  batch_duration_ms="$(jq -r 'select(.operation == "oci_blob_upload_batch") | .duration_ms // empty' "$metrics_file" 2>/dev/null | tail -n1 || true)"
+  if [[ -n "$batch_duration_ms" ]]; then
+    awk -v ms="$batch_duration_ms" 'BEGIN { printf "oci_upload_batch_seconds=%.3f\n", ms / 1000 }' >> "$metrics_output"
+  fi
+}
+
+append_native_tool_metrics() {
+  local evidence_file="$1"
+  [[ -s "$evidence_file" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  local requested uploaded already_present uploaded_bytes
+  requested="$(jq -r '.publisher.final_save_checked_blob_count // .publisher.final_save_graph_blob_count // empty' "$evidence_file" 2>/dev/null || true)"
+  uploaded="$(jq -r '.publisher.final_save_uploaded_blob_count // empty' "$evidence_file" 2>/dev/null || true)"
+  already_present="$(jq -r '.publisher.final_save_already_present_blob_count // empty' "$evidence_file" 2>/dev/null || true)"
+  uploaded_bytes="$(jq -r '.publisher.final_save_uploaded_blob_bytes // .publisher.final_save_missing_blob_bytes // empty' "$evidence_file" 2>/dev/null || true)"
+  if [[ -z "$already_present" && "$requested" =~ ^[0-9]+$ && "$uploaded" =~ ^[0-9]+$ ]]; then
+    already_present="$(( requested > uploaded ? requested - uploaded : 0 ))"
+  fi
+  if [[ -z "$requested$uploaded$already_present$uploaded_bytes" ]]; then
+    local final_export_status
+    final_export_status="$(jq -r '.publisher.final_export_status // empty' "$evidence_file" 2>/dev/null || true)"
+    if [[ "$final_export_status" == "1" ]]; then
+      write_metric oci_upload_requested_blobs 0
+      write_metric oci_new_blob_count 0
+      write_metric oci_upload_already_present 0
+      write_metric oci_new_blob_bytes 0
+      write_metric oci_upload_batch_seconds 0
+      return 0
+    fi
+  fi
+  [[ -n "$requested$uploaded$already_present$uploaded_bytes" ]] || return 1
+
+  write_metric oci_upload_requested_blobs "$requested"
+  write_metric oci_new_blob_count "$uploaded"
+  write_metric oci_upload_already_present "$already_present"
+  write_metric oci_new_blob_bytes "$uploaded_bytes"
+  write_metric oci_upload_batch_seconds "$final_save_seconds"
+}
+
 if [[ -n "${BENCHMARK_METRICS_OUTPUT:-}" ]]; then
   metrics_output="$BENCHMARK_METRICS_OUTPUT"
   mkdir -p "$(dirname "$metrics_output")"
@@ -266,13 +348,7 @@ if [[ -n "${BENCHMARK_METRICS_OUTPUT:-}" ]]; then
   write_metric docker_cache_import_seconds "$import_seconds"
   write_metric docker_cache_export_seconds "$final_publish_seconds"
   write_metric buildkit_backend native
-  if [[ -s "$native_tool_evidence_path" ]] && command -v jq >/dev/null 2>&1; then
-    write_metric oci_new_blob_count "$(jq -r '.publisher.final_publish_blob_count // empty' "$native_tool_evidence_path" 2>/dev/null || true)"
-    write_metric oci_new_blob_bytes "$(jq -r '.publisher.final_publish_layer_bytes // empty' "$native_tool_evidence_path" 2>/dev/null || true)"
-    write_metric oci_upload_requested_blobs "$(jq -r '.publisher.final_publish_blob_count // empty' "$native_tool_evidence_path" 2>/dev/null || true)"
-    write_metric oci_upload_already_present "$(jq -r '.publisher.upload_already_present // empty' "$native_tool_evidence_path" 2>/dev/null || true)"
-    write_metric oci_upload_batch_seconds "$final_publish_seconds"
-  fi
+  append_native_tool_metrics "$native_tool_evidence_path" || append_native_observability_metrics "$observability_path" || true
 fi
 
 if [[ -n "${BENCHMARK_DIAGNOSTICS_OUTPUT:-}" ]]; then
@@ -293,6 +369,7 @@ if [[ -n "${BENCHMARK_DIAGNOSTICS_OUTPUT:-}" ]]; then
     echo "wall_seconds=${wall_seconds}"
     echo "container_command_seconds=$(sed -nE 's/^boringcache timing: container command status=[0-9]+ seconds=([0-9]+)$/\1/p' "$build_log" | tail -n1 || true)"
     echo "native_tool_evidence=${native_tool_evidence_path}"
+    echo "observability_jsonl=${observability_path}"
     echo "buildctl_args<<EOF"
     printf '%q ' "${buildctl_command[@]}" "${dockerfile_opts[@]}"
     printf '\n'
@@ -309,6 +386,14 @@ if [[ -n "${BENCHMARK_DIAGNOSTICS_OUTPUT:-}" ]]; then
     if [[ -s "$native_tool_evidence_path" ]]; then
       echo "native_tool_summary<<EOF"
       jq -c '{restore, publisher, command, publish}' "$native_tool_evidence_path" 2>/dev/null || cat "$native_tool_evidence_path"
+      echo "EOF"
+    fi
+    if [[ -n "$observability_path" && -s "$observability_path" ]]; then
+      printf 'observability_events='
+      wc -l < "$observability_path" | tr -d ' '
+      printf '\n'
+      echo "observability_summary<<EOF"
+      grep -E 'cache_session_summary|oci_blob_upload|upload_session_commit|cache_finalize_publish|receipt|429|rate' "$observability_path" | tail -n 160 || true
       echo "EOF"
     fi
   } > "$diagnostics_output"

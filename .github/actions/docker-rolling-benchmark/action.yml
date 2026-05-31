@@ -39,6 +39,9 @@ inputs:
   cli_ref:
     required: false
     default: ""
+  cli_source_token:
+    required: false
+    default: ""
   blob_download_concurrency:
     required: false
     default: ""
@@ -93,16 +96,21 @@ runs:
       shell: bash
       env:
         CLI_REF: ${{ inputs.cli_ref }}
+        CLI_SOURCE_TOKEN: ${{ inputs.cli_source_token }}
       run: |
         set -euo pipefail
         if [[ "${GITHUB_REPOSITORY_OWNER}" != "boringcache" ]]; then
           echo "cli_ref is an internal BoringCache benchmark diagnostic and is disabled outside boringcache-owned benchmark repos." >&2
           exit 1
         fi
+        if [[ -z "${CLI_SOURCE_TOKEN}" ]]; then
+          echo "cli_ref now builds from the private boringcache/web monorepo; pass cli_source_token from a secret with contents:read access." >&2
+          exit 1
+        fi
         {
           echo "### Internal CLI ref diagnostic"
           echo
-          echo "Using boringcache/cli ref \`${CLI_REF}\` for the outer registry proxy only."
+          echo "Using boringcache/web ref \`${CLI_REF}\` for the outer registry proxy only."
           echo "Launch proof runs should leave \`cli_ref\` empty and use the CLI bundled by \`boringcache/one@v1\`."
         } >> "$GITHUB_STEP_SUMMARY"
 
@@ -110,10 +118,13 @@ runs:
       if: ${{ inputs.strategy == 'boringcache' && inputs.cli_ref != '' }}
       uses: actions/checkout@v6
       with:
-        repository: boringcache/cli
+        repository: boringcache/web
         ref: ${{ inputs.cli_ref }}
-        path: .boringcache-cli
+        path: .boringcache-web
         fetch-depth: 1
+        token: ${{ inputs.cli_source_token }}
+        sparse-checkout: |
+          cli
 
     - name: Build BoringCache CLI ref
       if: ${{ inputs.strategy == 'boringcache' && inputs.cli_ref != '' }}
@@ -124,9 +135,9 @@ runs:
         rustup target add x86_64-unknown-linux-musl
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends musl-tools
-        cargo build --release --locked --target x86_64-unknown-linux-musl --manifest-path .boringcache-cli/Cargo.toml --bin boringcache
+        cargo build --release --locked --target x86_64-unknown-linux-musl --manifest-path .boringcache-web/cli/Cargo.toml --bin boringcache
         mkdir -p "$HOME/.local/bin"
-        cp .boringcache-cli/target/x86_64-unknown-linux-musl/release/boringcache "$HOME/.local/bin/boringcache"
+        cp .boringcache-web/cli/target/x86_64-unknown-linux-musl/release/boringcache "$HOME/.local/bin/boringcache"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         "$HOME/.local/bin/boringcache" --version
 

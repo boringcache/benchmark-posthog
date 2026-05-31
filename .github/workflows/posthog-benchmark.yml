@@ -97,6 +97,7 @@ jobs:
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
           cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
+          cli_source_token: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
           blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
           blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
           oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
@@ -131,6 +132,7 @@ jobs:
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
           cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
+          cli_source_token: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
           blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
           blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
           oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}

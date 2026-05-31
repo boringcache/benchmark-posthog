@@ -1,0 +1,119 @@
+name: "PostHog Benchmark"
+run-name: >-
+  ${{ format('{0} | {1}', github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling' && 'Benchmark Rolling' || 'Benchmark Fresh', github.event_name == 'schedule' && 'Weekly fresh' || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name)) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      cache_lane:
+        description: "Benchmark lane"
+        required: false
+        type: choice
+        default: fresh
+        options:
+          - fresh
+          - rolling
+      cli_ref:
+        description: "Internal benchmark diagnostic only: build this boringcache/cli ref instead of using the released CLI"
+        required: false
+        type: string
+      blob_download_concurrency:
+        description: "Optional BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY override (blank = adaptive)"
+        required: false
+        type: string
+      blob_prefetch_concurrency:
+        description: "Optional BORINGCACHE_BLOB_PREFETCH_CONCURRENCY override (blank = match download concurrency)"
+        required: false
+        type: string
+      oci_stream_through_min_bytes:
+        description: "Optional BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES for Docker/OCI large blobs (blank = disabled)"
+        required: false
+        type: string
+  schedule:
+    - cron: "0 3 * * 3"
+  pull_request:
+    paths:
+      - ".gitmodules"
+      - ".github/workflows/posthog-benchmark.yml"
+      - ".github/workflows/posthog-boringcache.yml"
+      - ".github/workflows/posthog-actions-cache.yml"
+      - ".github/workflows/reusable-docker-buildkit-benchmark.yml"
+      - "README.md"
+      - "scenarios/**"
+      - "scripts/**"
+      - "upstream"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  github-actions-cache:
+    name: Build with GitHub Actions Cache
+    uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
+    with:
+      strategy: actions-cache
+      cache_lane: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
+      benchmark_id: posthog
+      project_repo: PostHog/posthog
+      dockerfile_path: upstream/Dockerfile
+      docker_context: upstream
+      image_tag: posthog-benchmark:latest
+      benchmark_workspace: ${{ github.repository }}
+      free_disk_space: true
+    secrets: inherit
+    permissions:
+      contents: read
+      actions: write
+
+  boringcache-oci:
+    name: Build with BoringCache OCI
+    uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
+    with:
+      strategy: boringcache
+      cache_lane: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
+      buildkit_backend: registry
+      benchmark_id: posthog
+      project_repo: PostHog/posthog
+      dockerfile_path: upstream/Dockerfile
+      docker_context: upstream
+      image_tag: posthog-benchmark:latest
+      cli_platform: linux-amd64
+      benchmark_workspace: ${{ github.repository }}
+      cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
+      blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
+      blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
+      oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
+      free_disk_space: true
+    secrets: inherit
+    permissions:
+      contents: read
+      actions: write
+
+  boringcache-native:
+    name: Build with BoringCache Native
+    uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
+    with:
+      strategy: boringcache
+      cache_lane: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
+      buildkit_backend: native
+      benchmark_id: posthog-native
+      project_repo: PostHog/posthog
+      dockerfile_path: upstream/Dockerfile
+      docker_context: upstream
+      image_tag: posthog-benchmark:latest
+      cli_platform: linux-amd64
+      benchmark_workspace: ${{ github.repository }}
+      cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
+      blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
+      blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
+      oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
+      free_disk_space: true
+    secrets: inherit
+    permissions:
+      contents: read
+      actions: write

@@ -13,19 +13,6 @@ on:
         options:
           - fresh
           - rolling
-  schedule:
-    - cron: "0 3 * * 3"
-  pull_request:
-    paths:
-      - ".gitmodules"
-      - ".github/workflows/posthog-boringcache.yml"
-      - ".github/workflows/posthog-actions-cache.yml"
-      - ".github/workflows/reusable-docker-buildkit-benchmark.yml"
-      - "README.md"
-      - "scenarios/**"
-      - "scripts/**"
-      - "upstream"
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
   cancel-in-progress: false

@@ -348,6 +348,7 @@ if [[ -n "${BENCHMARK_METRICS_OUTPUT:-}" ]]; then
   write_metric docker_cache_import_seconds "$import_seconds"
   write_metric docker_cache_export_seconds "$final_publish_seconds"
   write_metric buildkit_backend native
+  write_metric native_tool_evidence "$native_tool_evidence_path"
   append_native_tool_metrics "$native_tool_evidence_path" || append_native_observability_metrics "$observability_path" || true
 fi
 

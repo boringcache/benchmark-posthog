@@ -38,19 +38,6 @@ on:
         description: "Optional BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES for Docker/OCI large blobs (blank = disabled)"
         required: false
         type: string
-  schedule:
-    - cron: "0 3 * * 3"
-  pull_request:
-    paths:
-      - ".gitmodules"
-      - ".github/workflows/posthog-boringcache.yml"
-      - ".github/workflows/posthog-actions-cache.yml"
-      - ".github/workflows/reusable-docker-buildkit-benchmark.yml"
-      - "README.md"
-      - "scenarios/**"
-      - "scripts/**"
-      - "upstream"
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}-${{ github.event_name == 'workflow_dispatch' && inputs.buildkit_backend || 'both' }}
   cancel-in-progress: false

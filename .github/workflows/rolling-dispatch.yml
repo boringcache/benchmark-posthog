@@ -47,13 +47,11 @@ jobs:
             local attempt=1
             local max_attempts=3
             local fields=(-f cache_lane=rolling)
-            if [[ "$workflow" == *boringcache.yml ]]; then
-              fields+=(
-                -f "blob_download_concurrency=${{ inputs.blob_download_concurrency || '' }}"
-                -f "blob_prefetch_concurrency=${{ inputs.blob_prefetch_concurrency || '' }}"
-                -f "oci_stream_through_min_bytes=${{ inputs.oci_stream_through_min_bytes || '' }}"
-              )
-            fi
+            fields+=(
+              -f "blob_download_concurrency=${{ inputs.blob_download_concurrency || '' }}"
+              -f "blob_prefetch_concurrency=${{ inputs.blob_prefetch_concurrency || '' }}"
+              -f "oci_stream_through_min_bytes=${{ inputs.oci_stream_through_min_bytes || '' }}"
+            )
 
             until gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}" "${fields[@]}"; do
               if [[ "$attempt" -ge "$max_attempts" ]]; then
@@ -66,5 +64,4 @@ jobs:
             done
           }
 
-          dispatch_workflow "posthog-actions-cache.yml"
-          dispatch_workflow "posthog-boringcache.yml"
+          dispatch_workflow "posthog-benchmark.yml"

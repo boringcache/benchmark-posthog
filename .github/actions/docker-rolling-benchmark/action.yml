@@ -319,9 +319,7 @@ runs:
           mkdir -p "$(dirname "$diagnostics_file")"
 
           benchmark_script="./scripts/run-boringcache-buildkit-benchmark.sh"
-          if [[ "$BUILDKIT_BACKEND" == "native" ]]; then
-            benchmark_script="./scripts/run-boringcache-native-buildkit-benchmark.sh"
-          elif [[ "${BORINGCACHE_CACHE_IMPORT_READY:-}" != "true" || ( -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ) ]]; then
+          if [[ "${BORINGCACHE_CACHE_IMPORT_READY:-}" != "true" || ( -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ) ]]; then
             echo "Rolling BoringCache Docker import was not ready; continuing as a bootstrap/update sample." >&2
             echo "import ready: ${BORINGCACHE_CACHE_IMPORT_READY:-}" >&2
             echo "requested refs: ${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}" >&2
@@ -360,7 +358,7 @@ runs:
           if [[ -s "$metrics_file" ]]; then
             cat "$metrics_file" >> "$GITHUB_OUTPUT"
             native_tool_evidence="$(grep "^native_tool_evidence=" "$metrics_file" | head -n1 | cut -d= -f2- || true)"
-            if [[ "$BUILDKIT_BACKEND" =~ ^(native|auto)$ && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
+            if [[ "$BUILDKIT_BACKEND" == "auto" && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
               mkdir -p benchmark-native-tool
               cp "$native_tool_evidence" benchmark-native-tool/native-tool.json
             fi
@@ -434,7 +432,7 @@ runs:
         if-no-files-found: ignore
 
     - name: Upload native BuildKit evidence
-      if: ${{ inputs.strategy == 'boringcache' && (inputs.buildkit_backend == 'native' || inputs.buildkit_backend == 'auto') && always() }}
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto' && always() }}
       uses: actions/upload-artifact@v6
       with:
         name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-rolling-seed
@@ -456,7 +454,7 @@ runs:
           tags_csv="${{ steps.scope.outputs.tags_csv }}"
           breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
           exact_tags=""
-          if [[ "$BUILDKIT_BACKEND" =~ ^(native|auto)$ ]]; then
+          if [[ "$BUILDKIT_BACKEND" == "auto" ]]; then
             exact_tags="$tags_csv"
           fi
           bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" BORINGCACHE_EXACT_TAGS="$exact_tags" ./scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"

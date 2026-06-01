@@ -548,7 +548,7 @@ jobs:
           if [[ -n "$builder" ]]; then
             docker buildx prune -af --builder "$builder"
           else
-            docker buildx prune -af
+            docker buildx prune -af || true
           fi
           docker builder prune -af || true
 

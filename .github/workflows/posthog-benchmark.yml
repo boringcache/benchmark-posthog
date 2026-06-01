@@ -103,8 +103,8 @@ jobs:
           oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
           free_disk_space: "true"
 
-  boringcache-native:
-    name: Build with BoringCache Native
+  boringcache-auto:
+    name: Build with BoringCache Auto
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -119,12 +119,12 @@ jobs:
           fetch-depth: 1
           submodules: false
 
-      - name: Build with BoringCache Native
+      - name: Build with BoringCache Auto
         uses: ./.github/actions/docker-rolling-benchmark
         with:
           strategy: boringcache
-          buildkit_backend: native
-          benchmark_id: posthog-native
+          buildkit_backend: auto
+          benchmark_id: posthog-auto
           project_repo: PostHog/posthog
           dockerfile_path: upstream/Dockerfile
           docker_context: upstream

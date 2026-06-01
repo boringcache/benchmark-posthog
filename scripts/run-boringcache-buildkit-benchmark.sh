@@ -8,12 +8,17 @@ status_snapshot_path="$(mktemp /tmp/boringcache-status.XXXXXX.json)"
 max_attempts=1
 cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
 mode="${1:-full}"
+backend="${BUILDKIT_BACKEND:-registry}"
 cache_import_ready="${BORINGCACHE_CACHE_IMPORT_READY:-true}"
 cache_requested_from_refs="${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}"
 cache_used_from_refs="${BORINGCACHE_CACHE_USED_FROM_REFS:-}"
 cache_unreadable_from_refs="${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}"
 cache_promotion_refs="${BORINGCACHE_DOCKER_PROMOTION_REFS:-}"
 allow_rolling_bootstrap="${ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP:-false}"
+build_output="${BENCHMARK_BUILD_OUTPUT:-none}"
+oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
+native_tool_evidence_path="$(mktemp /tmp/boringcache-native-tool.XXXXXX.json)"
+export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS:-1}"
 start_proxy() { :; }
 stop_proxy() { :; }
 ensure_proxy_available() {
@@ -112,6 +117,13 @@ write_build_metrics() {
   if [[ -n "${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES:-}" ]]; then
     echo "oci_stream_through_min_bytes=${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES}" >> "$output_path"
   fi
+  if [[ "$backend" == "auto" ]]; then
+    echo "buildkit_backend=auto" >> "$output_path"
+    if [[ -s "$native_tool_evidence_path" ]]; then
+      echo "native_tool_evidence=$native_tool_evidence_path" >> "$output_path"
+      append_native_tool_metrics "$native_tool_evidence_path" || true
+    fi
+  fi
 
   if [[ -s "$status_snapshot_path" ]] && command -v jq >/dev/null 2>&1; then
     append_status_metric() {
@@ -189,6 +201,40 @@ write_build_metrics() {
   fi
 }
 
+append_native_tool_metrics() {
+  local evidence_file="$1"
+  [[ -s "$evidence_file" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  local requested uploaded already_present uploaded_bytes export_seconds save_seconds
+  requested="$(jq -r '.publisher.final_save_checked_blob_count // .publisher.final_save_graph_blob_count // empty' "$evidence_file" 2>/dev/null || true)"
+  uploaded="$(jq -r '.publisher.final_save_uploaded_blob_count // empty' "$evidence_file" 2>/dev/null || true)"
+  already_present="$(jq -r '.publisher.final_save_already_present_blob_count // empty' "$evidence_file" 2>/dev/null || true)"
+  uploaded_bytes="$(jq -r '.publisher.final_save_uploaded_blob_bytes // .publisher.final_save_missing_blob_bytes // empty' "$evidence_file" 2>/dev/null || true)"
+  export_seconds="$(jq -r '.publisher.final_export_seconds // empty' "$evidence_file" 2>/dev/null || true)"
+  save_seconds="$(jq -r '.publisher.final_save_seconds // empty' "$evidence_file" 2>/dev/null || true)"
+  if [[ -z "$already_present" && "$requested" =~ ^[0-9]+$ && "$uploaded" =~ ^[0-9]+$ ]]; then
+    already_present="$(( requested > uploaded ? requested - uploaded : 0 ))"
+  fi
+
+  append_metric() {
+    local key="$1"
+    local value="$2"
+    if [[ -n "$value" && "$value" != "null" ]]; then
+      echo "$key=$value" >> "$output_path"
+    fi
+  }
+
+  append_metric oci_upload_requested_blobs "$requested"
+  append_metric oci_new_blob_count "$uploaded"
+  append_metric oci_upload_already_present "$already_present"
+  append_metric oci_new_blob_bytes "$uploaded_bytes"
+  append_metric oci_upload_batch_seconds "$save_seconds"
+  if [[ "$export_seconds" =~ ^[0-9]+([.][0-9]+)?$ && "$save_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    awk -v export_s="$export_seconds" -v save_s="$save_seconds" 'BEGIN { printf "docker_cache_export_seconds=%.3f\n", export_s + save_s }' >> "$output_path"
+  fi
+}
+
 
 capture_proxy_status() {
   local output_path="${1:-$status_snapshot_path}"
@@ -256,6 +302,7 @@ write_build_diagnostics() {
   mkdir -p "$(dirname "$output_path")"
   {
     echo "strategy=boringcache"
+    echo "buildkit_backend=${backend}"
     echo "mode=${mode}"
     echo "builder=${BUILDER:-}"
     echo "cache_scope=${CACHE_SCOPE:-}"
@@ -293,6 +340,12 @@ write_build_diagnostics() {
     grep -E '^#[0-9]+ DONE [0-9]+(\.[0-9]+)?s$' "$build_log" | tail -n 80 || true
     echo "EOF"
     echo "observability_jsonl=${observability_path}"
+    echo "native_tool_evidence=${native_tool_evidence_path}"
+    if [[ -s "$native_tool_evidence_path" ]]; then
+      echo "native_tool_summary<<EOF"
+      jq -c '{restore, publisher, command, publish}' "$native_tool_evidence_path" 2>/dev/null || cat "$native_tool_evidence_path"
+      echo "EOF"
+    fi
     if [[ -n "$observability_path" && -s "$observability_path" ]]; then
       printf 'observability_events='
       wc -l < "$observability_path" | tr -d ' '
@@ -304,52 +357,131 @@ write_build_diagnostics() {
   } > "$output_path"
 }
 
+run_auto_build() {
+  local phase_hint="cold"
+  if [[ "$mode" == "partial-warm" ]]; then
+    phase_hint="warm"
+  elif [[ "${CACHE_LANE:-fresh}" == "rolling" ]]; then
+    phase_hint="commit"
+  fi
+
+  local boringcache_args=(
+    boringcache docker
+    --workspace "${BENCHMARK_WORKSPACE:?Set BENCHMARK_WORKSPACE}"
+    --tag "${CACHE_SCOPE:?Set CACHE_SCOPE}"
+    --backend auto
+    --port "$proxy_port"
+    --cache-mode max
+    --no-platform
+    --no-git
+    --oci-hydration "$oci_hydration"
+    --metadata-hint "benchmark=${BENCHMARK_ID:-docker}"
+    --metadata-hint "phase=${phase_hint}"
+    --metadata-hint "lane=${CACHE_LANE:-fresh}"
+    --metadata-hint "backend=auto"
+    --native-tool-evidence-json "$native_tool_evidence_path"
+    --fail-on-cache-error
+  )
+  if [[ "$mode" == "partial-warm" ]]; then
+    boringcache_args+=(--read-only)
+  fi
+
+  : > "$build_log"
+  set +e
+  DOCKER_BUILDKIT=1 BORINGCACHE_TIMING_TRACE=1 "${boringcache_args[@]}" -- \
+    docker buildx build \
+    --file "$DOCKERFILE_PATH" \
+    --tag "$IMAGE_TAG" \
+    --progress=plain \
+    "${extra_args[@]}" \
+    "${cache_args[@]}" \
+    "${output_args[@]}" \
+    "$BENCHMARK_DOCKER_CONTEXT" 2>&1 | tee "$build_log"
+  status=${PIPESTATUS[0]}
+  set -e
+}
+
 
 attempt=1
 while true; do
   cache_args=()
+  extra_args=()
+  output_args=()
+  while IFS= read -r arg; do
+    [[ -n "$arg" ]] || continue
+    extra_args+=("$arg")
+  done <<< "${DOCKER_BUILD_EXTRA_ARGS:-}"
+
+  case "$build_output" in
+    none)
+      ;;
+    load)
+      output_args+=(--load)
+      ;;
+    local-registry)
+      output_args+=(--push)
+      ;;
+    *)
+      echo "Unknown BENCHMARK_BUILD_OUTPUT: ${build_output}" >&2
+      exit 1
+      ;;
+  esac
+
   if [[ "$mode" == "full" ]]; then
-    [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
-    [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
+    if [[ "$backend" == "registry" ]]; then
+      [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
+      [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
+    fi
   elif [[ "$mode" == "seed-cache" ]]; then
     # --no-cache is required for type=registry export: without it, buildx
     # sees cached layers from the builder and skips pushing blobs to the
     # registry proxy, so the proxy never uploads to BoringCache backend.
     cache_args=(--no-cache)
-    [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
+    if [[ "$backend" == "registry" ]]; then
+      [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
+    fi
   elif [[ "$mode" == "partial-warm" ]]; then
     # Read-only: no --cache-to.
-    [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
+    if [[ "$backend" == "registry" ]]; then
+      [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
+    fi
   else
     echo "Unknown build mode: $mode" >&2
     exit 1
   fi
-  require_readable_cache_import
-  start_proxy
-  if ! ensure_proxy_available; then
-    echo "Registry proxy status was unavailable before build start (attempt ${attempt}/${max_attempts})" >&2
-    tail -n 200 "$proxy_log" || true
-    if [[ "$attempt" -ge "$max_attempts" ]]; then
-      write_build_diagnostics
-      exit 1
-    fi
-    stop_proxy
-    attempt=$((attempt + 1))
-    sleep 3
-    continue
-  fi
 
-  : > "$build_log"
-  set +e
-  DOCKER_BUILDKIT=1 docker buildx build \
-    --builder "$BUILDER" \
-    --file "$DOCKERFILE_PATH" \
-    --tag "$IMAGE_TAG" \
-    --progress=plain \
-    "${cache_args[@]}" \
-    "$BENCHMARK_DOCKER_CONTEXT" 2>&1 | tee "$build_log"
-  status=${PIPESTATUS[0]}
-  set -e
+  if [[ "$backend" == "auto" ]]; then
+    run_auto_build
+  else
+    require_readable_cache_import
+    start_proxy
+    if ! ensure_proxy_available; then
+      echo "Registry proxy status was unavailable before build start (attempt ${attempt}/${max_attempts})" >&2
+      tail -n 200 "$proxy_log" || true
+      if [[ "$attempt" -ge "$max_attempts" ]]; then
+        write_build_diagnostics
+        exit 1
+      fi
+      stop_proxy
+      attempt=$((attempt + 1))
+      sleep 3
+      continue
+    fi
+
+    : > "$build_log"
+    set +e
+    DOCKER_BUILDKIT=1 docker buildx build \
+      --builder "$BUILDER" \
+      --file "$DOCKERFILE_PATH" \
+      --tag "$IMAGE_TAG" \
+      --progress=plain \
+      "${extra_args[@]}" \
+      "${cache_args[@]}" \
+      "${output_args[@]}" \
+      "$BENCHMARK_DOCKER_CONTEXT" 2>&1 | tee "$build_log"
+    status=${PIPESTATUS[0]}
+    set -e
+  fi
 
   if [[ "$status" -eq 0 ]]; then
     import_status="$(build_import_status)"
@@ -373,7 +505,7 @@ while true; do
       exit 1
     fi
     capture_proxy_status
-    if [[ "$mode" =~ ^(seed-cache|full)$ ]]; then
+    if [[ "$backend" == "registry" && "$mode" =~ ^(seed-cache|full)$ ]]; then
       # Stop proxy gracefully so it can flush pending uploads.
       echo "Flushing proxy cache to backend..."
       flush_action_proxy

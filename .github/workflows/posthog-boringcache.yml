@@ -21,7 +21,7 @@ on:
         options:
           - both
           - registry
-          - native
+          - auto
       cli_ref:
         description: "Internal benchmark diagnostic only: build this boringcache/cli ref instead of using the released CLI"
         required: false
@@ -51,13 +51,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        buildkit_backend: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.buildkit_backend == 'registry') && '["registry"]' || (github.event_name == 'workflow_dispatch' && inputs.buildkit_backend == 'native') && '["native"]' || '["registry","native"]') }}
+        buildkit_backend: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.buildkit_backend == 'registry') && '["registry"]' || (github.event_name == 'workflow_dispatch' && inputs.buildkit_backend == 'auto') && '["auto"]' || '["registry","auto"]') }}
     uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
     with:
       strategy: boringcache
       cache_lane: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
       buildkit_backend: ${{ matrix.buildkit_backend }}
-      benchmark_id: ${{ matrix.buildkit_backend == 'native' && 'posthog-native' || 'posthog' }}
+      benchmark_id: ${{ matrix.buildkit_backend == 'auto' && 'posthog-auto' || 'posthog' }}
       project_repo: PostHog/posthog
       dockerfile_path: upstream/Dockerfile
       docker_context: upstream

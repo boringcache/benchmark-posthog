@@ -14,8 +14,9 @@ proxy_port="${BORINGCACHE_PROXY_PORT:-5100}"
 oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
 export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS:-1}"
 build_log="$(mktemp /tmp/boringcache-native-build.XXXXXX.log)"
-native_tool_evidence_path="$(mktemp /tmp/boringcache-native-tool.XXXXXX.json)"
-native_tool_evidence_dir="$(dirname "$native_tool_evidence_path")"
+native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
+chmod 0777 "$native_tool_evidence_dir" 2>/dev/null || true
+native_tool_evidence_path="${native_tool_evidence_dir}/native-tool.json"
 observability_container_path="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-/evidence/observability.jsonl}"
 buildctl_dir="$(mktemp -d /tmp/boringcache-buildctl.XXXXXX)"
 run_slug="$(printf '%s' "${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${benchmark_id}-${mode}-${cache_scope}" | shasum -a 256 | awk '{print substr($1, 1, 12)}')"
@@ -233,8 +234,6 @@ observability_path="$observability_container_path"
 case "$observability_container_path" in
   /evidence/*) observability_path="${native_tool_evidence_dir}/${observability_container_path#/evidence/}" ;;
 esac
-
-cp "${native_tool_evidence_dir}/native-tool.json" "$native_tool_evidence_path" 2>/dev/null || true
 
 cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
 if grep -Eq 'failed to configure .*cache importer|cache manifest.*(manifest unknown|not found)|importing cache manifest.*(manifest unknown|not found)' "$build_log"; then

@@ -49,7 +49,7 @@ This repo uses split BoringCache tokens as the standard CI shape:
 ## Repo Layout
 
 - [`scripts/prepare-source.sh`](scripts/prepare-source.sh)
-- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, BoringCache OCI, and BoringCache Native side by side.
+- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, BoringCache OCI, and BoringCache Auto side by side.
 - [`.github/workflows/posthog-boringcache.yml`](.github/workflows/posthog-boringcache.yml) is a manual provider-specific diagnostic.
 - [`.github/workflows/posthog-actions-cache.yml`](.github/workflows/posthog-actions-cache.yml) is a manual provider-specific diagnostic.
 - [`.github/workflows/posthog-depot-builder-investigation.yml`](.github/workflows/posthog-depot-builder-investigation.yml)

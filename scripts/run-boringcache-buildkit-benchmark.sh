@@ -17,8 +17,9 @@ cache_promotion_refs="${BORINGCACHE_DOCKER_PROMOTION_REFS:-}"
 allow_rolling_bootstrap="${ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP:-false}"
 build_output="${BENCHMARK_BUILD_OUTPUT:-none}"
 oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
-native_tool_evidence_path="$(mktemp /tmp/boringcache-native-tool.XXXXXX.json)"
-chmod 0666 "$native_tool_evidence_path" 2>/dev/null || true
+native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
+chmod 0777 "$native_tool_evidence_dir" 2>/dev/null || true
+native_tool_evidence_path="${native_tool_evidence_dir}/native-tool.json"
 export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS:-1}"
 start_proxy() { :; }
 stop_proxy() { :; }

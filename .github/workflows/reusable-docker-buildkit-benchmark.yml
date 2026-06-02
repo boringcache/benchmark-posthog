@@ -546,7 +546,7 @@ jobs:
             builder="${{ steps.warm_buildx.outputs.name }}"
           fi
           if [[ -n "$builder" ]]; then
-            docker buildx prune -af --builder "$builder"
+            docker buildx prune -af --builder "$builder" || true
           else
             docker buildx prune -af || true
           fi

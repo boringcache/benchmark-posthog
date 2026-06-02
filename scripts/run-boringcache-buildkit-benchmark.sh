@@ -396,10 +396,16 @@ run_auto_build() {
     boringcache_cmd=(sudo -E "$boringcache_bin")
   fi
 
+  local builder_args=()
+  if [[ -n "${BUILDER:-}" ]]; then
+    builder_args=(--builder "$BUILDER")
+  fi
+
   : > "$build_log"
   set +e
   DOCKER_BUILDKIT=1 BORINGCACHE_TIMING_TRACE=1 "${boringcache_cmd[@]}" "${boringcache_args[@]:1}" -- \
     docker buildx build \
+    "${builder_args[@]}" \
     --file "$DOCKERFILE_PATH" \
     --tag "$IMAGE_TAG" \
     --progress=plain \

@@ -164,7 +164,6 @@ boringcache_args=(
   --endpoint-host "$cli_name"
   --port "$proxy_port"
   --backend native
-  --buildkit-root /buildkit
   --buildkit-cache-root /cache
   --native-tool-evidence-json /evidence/native-tool.json
   --oci-hydration "$oci_hydration"
@@ -217,7 +216,7 @@ docker run --rm \
   -v "${boringcache_bin}:/usr/local/bin/boringcache:ro" \
   -v "${buildctl_dir}/buildctl:/usr/local/bin/buildctl:ro" \
   -v "${context_abs}:/src:ro" \
-  -v "${root_volume}:/buildkit" \
+  -v "${root_volume}:/var/lib/buildkit" \
   -v "${cache_volume}:/cache" \
   -v "${native_tool_evidence_dir}:/evidence" \
   "$cli_image" \
@@ -251,7 +250,7 @@ else
   import_seconds=""
 fi
 
-final_export_seconds="$(sed -nE 's/^buildkit-cache online-publish: final export status=[0-9]+ seconds=([0-9]+)$/\1/p' "$build_log" | tail -n1 || true)"
+final_export_seconds="$(sed -nE 's/^buildkit-cache online-publish: final export (status=[0-9]+|noop) seconds=([0-9]+)$/\2/p' "$build_log" | tail -n1 || true)"
 final_save_seconds="$(sed -nE 's/^buildkit-cache online-publish: final save status=[0-9]+ seconds=([0-9]+)$/\1/p' "$build_log" | tail -n1 || true)"
 final_publish_seconds=""
 if [[ -n "$final_export_seconds" && -n "$final_save_seconds" ]]; then

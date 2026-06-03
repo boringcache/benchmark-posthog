@@ -39,7 +39,7 @@ on:
         required: false
         type: string
       docker_tool_cache:
-        description: "Optional Dockerfile tool-cache bridge"
+        description: "Optional Dockerfile tool-cache bridge; turbo uses a separate Turbo tag for the Docker cache scope"
         required: false
         type: choice
         default: none

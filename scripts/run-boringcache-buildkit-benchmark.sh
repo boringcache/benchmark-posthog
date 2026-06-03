@@ -29,9 +29,21 @@ docker_tool_cache_enabled() {
   local requested_tool="$1"
   local tool
   for tool in ${docker_tool_cache//,/ }; do
+    tool="${tool%%:*}"
     [[ "$tool" == "$requested_tool" ]] && return 0
   done
   return 1
+}
+
+resolve_docker_tool_cache_value() {
+  local value="$1"
+  local tool="${value%%:*}"
+
+  if [[ "$value" == *:* ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s:%s-%s\n' "$tool" "${CACHE_SCOPE:?Set CACHE_SCOPE}" "$tool"
+  fi
 }
 
 enable_posthog_turbo_tool_cache() {
@@ -472,9 +484,11 @@ run_wrapped_boringcache_build() {
 
   if [[ -n "$docker_tool_cache" ]]; then
     local tool_cache_value
+    local resolved_tool_cache_value
     for tool_cache_value in ${docker_tool_cache//,/ }; do
       [[ -n "$tool_cache_value" ]] || continue
-      boringcache_args+=(--tool-cache "$tool_cache_value")
+      resolved_tool_cache_value="$(resolve_docker_tool_cache_value "$tool_cache_value")"
+      boringcache_args+=(--tool-cache "$resolved_tool_cache_value")
     done
   fi
 

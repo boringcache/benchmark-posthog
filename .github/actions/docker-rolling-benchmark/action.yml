@@ -313,7 +313,7 @@ runs:
         CACHE_SCOPE_PRIMARY: ${{ steps.scope.outputs.cache_scope_primary }}
         CACHE_SCOPE_FALLBACK: ${{ steps.scope.outputs.cache_scope_fallback }}
         BORINGCACHE_REGISTRY_PROXY_TAGS: ${{ steps.scope.outputs.registry_proxy_tags }}
-        BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-seed-observability.jsonl
+        BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-commit-observability.jsonl
         ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP: "true"
         IMAGE_TAG: ${{ inputs.image_tag }}
         DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
@@ -333,8 +333,8 @@ runs:
 
         if [[ "$STRATEGY" == "boringcache" ]]; then
           metrics_file="${RUNNER_TEMP}/rolling-build-metrics.env"
-          diagnostics_file="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-rolling-seed.txt"
-          observability_artifact="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-rolling-seed-observability.jsonl"
+          diagnostics_file="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-rolling-commit.txt"
+          observability_artifact="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-rolling-commit-observability.jsonl"
           rm -f "$metrics_file" "$diagnostics_file" "$observability_artifact"
           mkdir -p "$(dirname "$diagnostics_file")"
 
@@ -443,7 +443,7 @@ runs:
           echo "buildkit_cached_steps=${cached_steps}" >> "$GITHUB_OUTPUT"
         fi
 
-    - name: Upload seed diagnostics
+    - name: Upload commit diagnostics
       if: ${{ inputs.strategy == 'boringcache' && always() }}
       uses: actions/upload-artifact@v6
       with:
@@ -455,7 +455,7 @@ runs:
       if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto' && always() }}
       uses: actions/upload-artifact@v6
       with:
-        name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-rolling-seed
+        name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-rolling-commit
         path: benchmark-native-tool/native-tool.json
         if-no-files-found: ignore
 

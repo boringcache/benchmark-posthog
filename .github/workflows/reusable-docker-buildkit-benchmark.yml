@@ -204,7 +204,7 @@ jobs:
       - name: Prepare base benchmark source tree
         run: ./scripts/prepare-source.sh base
 
-      - name: Start seed timing
+      - name: Start build timing
         id: seed_timing_start
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
@@ -265,7 +265,7 @@ jobs:
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
-          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-seed-observability.jsonl
+          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-build-observability.jsonl
 
       - name: Set up Docker Buildx for BoringCache tool-cache
         if: inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache != ''
@@ -335,7 +335,7 @@ jobs:
           CACHE_SCOPE_PRIMARY: ${{ steps.scope.outputs.cache_scope_primary }}
           CACHE_SCOPE_FALLBACK: ${{ steps.scope.outputs.cache_scope_fallback }}
           BORINGCACHE_REGISTRY_PROXY_TAGS: ${{ steps.scope.outputs.registry_proxy_tags }}
-          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-seed-observability.jsonl
+          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-build-observability.jsonl
           ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP: ${{ inputs.cache_lane == 'rolling' && 'true' || '' }}
           IMAGE_TAG: ${{ inputs.image_tag }}
           DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
@@ -346,8 +346,8 @@ jobs:
 
           if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
             metrics_file="${RUNNER_TEMP}/cold-build-metrics.env"
-            diagnostics_file="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-${CACHE_LANE}-seed.txt"
-            observability_artifact="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-${CACHE_LANE}-seed-observability.jsonl"
+            diagnostics_file="benchmark-diagnostics/${BENCHMARK_ID}-boringcache--build.txt"
+            observability_artifact="benchmark-diagnostics/${BENCHMARK_ID}-boringcache--build-observability.jsonl"
             rm -f "$metrics_file"
             rm -f "$diagnostics_file"
             rm -f "$observability_artifact"
@@ -401,7 +401,7 @@ jobs:
               fi
             fi
           else
-            build_log="$(mktemp /tmp/${BENCHMARK_ID}-ac-seed.XXXXXX.log)"
+            build_log="$(mktemp /tmp/${BENCHMARK_ID}-ac-build.XXXXXX.log)"
             find_step_id() {
               local pattern="$1"
               sed -nE "s/^#([0-9]+) ${pattern}.*/\\1/p" "$build_log" | tail -n1
@@ -445,7 +445,7 @@ jobs:
               fi
 
               if [[ "$attempt" -ge 2 ]]; then
-                echo "Cold + seed cache build failed after retry" >&2
+                echo "Cold build cache build failed after retry" >&2
                 exit "$status"
               fi
 
@@ -471,7 +471,7 @@ jobs:
             done
 
             if [[ "$export_verified" -ne 1 ]]; then
-              echo "Cold + seed cache export probe failed: no index cache entry was touched for index-${selected_scope}" >&2
+              echo "Cold build cache export probe failed: no index cache entry was touched for index-${selected_scope}" >&2
               exit 1
             fi
 
@@ -493,7 +493,7 @@ jobs:
             echo "buildkit_cached_steps=${cached_steps}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload seed diagnostics
+      - name: Upload build diagnostics
         if: inputs.strategy == 'boringcache' && always()
         uses: actions/upload-artifact@v6
         with:
@@ -513,7 +513,7 @@ jobs:
         if: inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto' && always()
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}-seed
+          name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}-build
           path: benchmark-native-tool/native-tool.json
           if-no-files-found: ignore
 
@@ -612,7 +612,7 @@ jobs:
           CACHE_FROM: ${{ steps.warm_docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.warm_docker_cache.outputs.cache-to }}
           CACHE_SCOPE: ${{ inputs.strategy == 'actions-cache' && steps.cold_baseline_build.outputs.cache_scope || steps.scope.outputs.cache_scope }}
-          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-warm1-observability.jsonl
+          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-warm-observability.jsonl
           IMAGE_TAG: ${{ inputs.image_tag }}
           DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
           BENCHMARK_DOCKER_CONTEXT: ${{ inputs.docker_context }}
@@ -620,7 +620,7 @@ jobs:
           set -euo pipefail
 
           if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
-            metrics_file="${RUNNER_TEMP}/warm1-build-metrics.env"
+            metrics_file="${RUNNER_TEMP}/warm-build-metrics.env"
             rm -f "$metrics_file"
             if [[ "$BUILDKIT_BACKEND" == "registry" ]] && { [[ "${BORINGCACHE_CACHE_IMPORT_READY:-}" != "true" ]] || [[ -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ]]; }; then
               echo "BoringCache Docker warm import was not ready; refusing invalid warm sample." >&2
@@ -655,7 +655,7 @@ jobs:
               fi
             fi
           else
-            build_log="$(mktemp /tmp/${BENCHMARK_ID}-ac-warm1.XXXXXX.log)"
+            build_log="$(mktemp /tmp/${BENCHMARK_ID}-ac-warm.XXXXXX.log)"
             find_step_id() {
               local pattern="$1"
               sed -nE "s/^#([0-9]+) ${pattern}.*/\\1/p" "$build_log" | tail -n1
@@ -738,7 +738,7 @@ jobs:
           startup_oci_body_cold_blobs="${{ steps.warm1_build.outputs.startup_oci_body_cold_blobs }}"
           startup_oci_body_duration_ms="${{ steps.warm1_build.outputs.startup_oci_body_duration_ms }}"
           if [[ -z "${seconds}" ]]; then
-            echo "No timing captured for warm1" >&2
+            echo "No timing captured for warm" >&2
             exit 1
           fi
           echo "seconds=${seconds}" >> "$GITHUB_OUTPUT"
@@ -788,7 +788,7 @@ jobs:
         if: inputs.cache_lane != 'rolling'
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-phase-${{ inputs.benchmark_id }}-${{ inputs.strategy }}-warm1
+          name: benchmark-phase-${{ inputs.benchmark_id }}-${{ inputs.strategy }}-warm
           path: benchmark-phase/warm1.env
           if-no-files-found: error
 
@@ -796,7 +796,7 @@ jobs:
         if: inputs.cache_lane != 'rolling' && inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto'
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}-warm1
+          name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}-warm
           path: benchmark-native-tool/native-tool.json
           if-no-files-found: ignore
 
@@ -1027,7 +1027,7 @@ jobs:
             if [[ "$CACHE_LANE" == "rolling" ]]; then
               emit hit_behavior_note "Rolling lane: one continuous-commit build imports the prior branch/default OCI cache, exports/promotes the updated cache, and records that commit build only. Fresh lane owns the separate cold-build plus warm-rerun parity check."
             else
-              emit hit_behavior_note "Fresh lane: the cold build starts from empty BoringCache tags and empty Docker layer cache, uses --no-cache + cache-to via the BoringCache registry proxy (mode=max), and records cold timing while populating the shared cache. Warm1 rebuilds the same pinned base tree after local BuildKit state is pruned, with cache-from only, no helper mounted inside Docker RUN steps, and no synthetic mutations."
+              emit hit_behavior_note "Fresh lane: the cold build starts from empty BoringCache tags and empty Docker layer cache, uses --no-cache + cache-to via the BoringCache registry proxy (mode=max), and records cold timing while populating the shared cache. Warm rebuilds the same pinned base tree after local BuildKit state is pruned, with cache-from only, no helper mounted inside Docker RUN steps, and no synthetic mutations."
             fi
           else
             emit cache_import_status ""
@@ -1057,7 +1057,7 @@ jobs:
             if [[ "$CACHE_LANE" == "rolling" ]]; then
               emit hit_behavior_note "Rolling lane: one continuous-commit build imports the prior GitHub Actions cache, exports the updated cache, and records that commit build only. Fresh lane owns the separate cold-build plus warm-rerun parity check."
             else
-              emit hit_behavior_note "Fresh lane: the cold build runs the pinned base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while populating remote cache. Warm1 rebuilds the same pinned base tree after local BuildKit state is pruned, with cache-from only and no synthetic mutations."
+              emit hit_behavior_note "Fresh lane: the cold build runs the pinned base tree with --no-cache + cache-to type=gha (mode=max) and records cold timing while populating remote cache. Warm rebuilds the same pinned base tree after local BuildKit state is pruned, with cache-from only and no synthetic mutations."
             fi
           fi
 

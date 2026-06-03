@@ -25,13 +25,13 @@ on:
         required: true
         type: boolean
         default: true
-      seed_from_cache_tag:
+      prime_from_cache_tag:
         description: "Optional source cache tag to copy into this lane before measuring. Use blank to restore only this lane tag."
         required: false
         type: string
         default: ''
       cache_tag_platform_suffix:
-        description: "Platform suffix used by the Docker proxy tag resolver. Blank disables suffixing for the seed step."
+        description: "Platform suffix used by the Docker proxy tag resolver. Blank disables suffixing for the prime step."
         required: false
         type: string
         default: ubuntu-24-x86_64
@@ -61,26 +61,26 @@ permissions:
   actions: write
 
 jobs:
-  seed-cache-tag:
-    name: Seed lane cache tag
+  prime-cache-tag:
+    name: Prime lane cache tag
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
       BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
-      SEED_FROM_CACHE_TAG: ${{ inputs.seed_from_cache_tag }}
+      PRIME_FROM_CACHE_TAG: ${{ inputs.prime_from_cache_tag }}
       CACHE_TAG_PLATFORM_SUFFIX: ${{ inputs.cache_tag_platform_suffix }}
       RUNNER_SLUG: ${{ inputs.runner_slug }}
     steps:
       - name: Copy source pointer to lane tag
         run: |
           set -euo pipefail
-          if [[ -z "${SEED_FROM_CACHE_TAG}" ]]; then
-            echo "No seed_from_cache_tag provided; this lane will restore only its own rolling tag." >> "$GITHUB_STEP_SUMMARY"
+          if [[ -z "${PRIME_FROM_CACHE_TAG}" ]]; then
+            echo "No prime_from_cache_tag provided; this lane will restore only its own rolling tag." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           if [[ -z "${BORINGCACHE_RESTORE_TOKEN}" || -z "${BORINGCACHE_SAVE_TOKEN}" ]]; then
-            echo "Missing BoringCache restore/save token for seeding investigation cache tag." >&2
+            echo "Missing BoringCache restore/save token for priming investigation cache tag." >&2
             exit 1
           fi
 
@@ -102,10 +102,10 @@ jobs:
           fi
           pointer_url="${api_base}/workspaces/${namespace}/${repo}/caches/tags"
 
-          if [[ -n "${CACHE_TAG_PLATFORM_SUFFIX}" && "${SEED_FROM_CACHE_TAG}" != *"-${CACHE_TAG_PLATFORM_SUFFIX}" ]]; then
-            source_candidates=("${SEED_FROM_CACHE_TAG}-${CACHE_TAG_PLATFORM_SUFFIX}" "${SEED_FROM_CACHE_TAG}")
+          if [[ -n "${CACHE_TAG_PLATFORM_SUFFIX}" && "${PRIME_FROM_CACHE_TAG}" != *"-${CACHE_TAG_PLATFORM_SUFFIX}" ]]; then
+            source_candidates=("${PRIME_FROM_CACHE_TAG}-${CACHE_TAG_PLATFORM_SUFFIX}" "${PRIME_FROM_CACHE_TAG}")
           else
-            source_candidates=("${SEED_FROM_CACHE_TAG}")
+            source_candidates=("${PRIME_FROM_CACHE_TAG}")
           fi
 
           source_body="${RUNNER_TEMP}/source-pointer.json"
@@ -149,7 +149,7 @@ jobs:
           if [[ "${dest_status}" == "200" ]]; then
             dest_entry_id="$(jq -r '.cache_entry_id // empty' "${dest_body}")"
             if [[ "${dest_entry_id}" == "${source_entry_id}" ]]; then
-              echo "Lane tag ${lane_tag} already points at ${source_entry_id}; seed was a no-op." >> "$GITHUB_STEP_SUMMARY"
+              echo "Lane tag ${lane_tag} already points at ${source_entry_id}; prime was a no-op." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             if_match="$(awk 'tolower($1) == "etag:" {print $2}' "${dest_headers}" | tr -d '\r' | tail -n1)"
@@ -177,13 +177,13 @@ jobs:
 
           published_entry_id="$(jq -r '.cache_entry_id // empty' "${publish_body}")"
           if [[ "${published_entry_id}" != "${source_entry_id}" ]]; then
-            echo "Seed publish did not land on expected cache entry." >&2
+            echo "Prime publish did not land on expected cache entry." >&2
             jq '{tag, cache_entry_id, requested_cache_entry_id, promotion_status, promotion_reason, error}' "${publish_body}" >&2 || true
             exit 1
           fi
 
           {
-            echo "### Investigation cache seed"
+            echo "### Investigation cache prime"
             echo
             echo "Copied \`${source_tag}\` to \`${lane_tag}\` before measuring."
             echo
@@ -192,7 +192,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   benchmark:
-    needs: seed-cache-tag
+    needs: prime-cache-tag
     uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
     with:
       strategy: boringcache

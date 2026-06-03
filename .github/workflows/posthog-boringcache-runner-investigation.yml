@@ -1,4 +1,4 @@
-name: "PostHog - BoringCache Runner Investigation"
+name: "PostHog - BC Runner Investigation"
 run-name: >-
   ${{ format('BoringCache Runner Investigation ({0}) | {1}', inputs.runner_slug, github.ref_name) }}
 

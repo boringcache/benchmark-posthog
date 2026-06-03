@@ -94,7 +94,7 @@ env:
 
 jobs:
   benchmark:
-    name: ${{ format('Docker {0} ({1}, {2}, {3})', inputs.cache_lane == 'rolling' && 'Commit Build' || 'Fresh Benchmark', inputs.strategy == 'actions-cache' && 'GitHub Actions Cache' || 'BoringCache', inputs.strategy == 'boringcache' && inputs.buildkit_backend || 'gha', inputs.cache_lane == 'rolling' && 'rolling' || 'fresh') }}
+    name: ${{ inputs.cache_lane == 'rolling' && 'Commit' || 'Fresh' }}
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 180
     env:

@@ -71,6 +71,7 @@ on:
         type: string
         default: ''
       docker_tool_cache:
+        description: 'Optional Dockerfile tool-cache bridge. Use turbo shorthand or TOOL:TAG.'
         required: false
         type: string
         default: ''

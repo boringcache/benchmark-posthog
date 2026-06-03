@@ -48,6 +48,7 @@ permissions:
 
 jobs:
   benchmark:
+    name: ${{ matrix.buildkit_backend == 'auto' && 'BC auto' || 'BC' }}
     strategy:
       fail-fast: false
       matrix:

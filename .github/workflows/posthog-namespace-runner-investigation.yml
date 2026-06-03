@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   namespace-build:
-    name: Docker Build (Namespace runner)
+    name: Namespace runner
     runs-on: namespace-profile-posthog
     timeout-minutes: 120
     env:

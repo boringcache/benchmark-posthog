@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   local-buildkit:
-    name: Docker Build (local BuildKit, no external cache)
+    name: Local BuildKit
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 120
     steps:

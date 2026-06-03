@@ -43,7 +43,7 @@ permissions:
 
 jobs:
   depot-build:
-    name: Docker Build (Depot builder)
+    name: Depot builder
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 120
     env:
@@ -84,7 +84,7 @@ jobs:
         id: timing_start
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
-      - name: Build Docker image with Depot (OIDC)
+      - name: Depot build / OIDC
         if: inputs.auth_mode == 'oidc' && inputs.cache_backend == 'depot'
         id: depot_build_oidc
         uses: depot/build-push-action@v1
@@ -96,7 +96,7 @@ jobs:
           provenance: false
           buildx-fallback: false
 
-      - name: Build Docker image with Depot (token)
+      - name: Depot build / token
         if: inputs.auth_mode == 'token' && inputs.cache_backend == 'depot'
         id: depot_build_token
         uses: depot/build-push-action@v1
@@ -109,7 +109,7 @@ jobs:
           provenance: false
           buildx-fallback: false
 
-      - name: Build Docker image with Depot and GHA cache export (OIDC)
+      - name: Depot + GHA / OIDC
         if: inputs.auth_mode == 'oidc' && inputs.cache_backend == 'gha'
         id: depot_build_oidc_gha
         uses: depot/build-push-action@v1
@@ -123,7 +123,7 @@ jobs:
           cache-from: type=gha,scope=${{ env.DEPOT_CACHE_SCOPE }}
           cache-to: type=gha,mode=max,scope=${{ env.DEPOT_CACHE_SCOPE }}
 
-      - name: Build Docker image with Depot and GHA cache export (token)
+      - name: Depot + GHA / token
         if: inputs.auth_mode == 'token' && inputs.cache_backend == 'gha'
         id: depot_build_token_gha
         uses: depot/build-push-action@v1

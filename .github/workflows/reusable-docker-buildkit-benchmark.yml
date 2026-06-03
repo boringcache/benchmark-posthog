@@ -595,7 +595,7 @@ jobs:
           fi
           docker builder prune -af || true
 
-      - name: Run warm build 1
+      - name: Run warm build
         if: inputs.cache_lane != 'rolling'
         id: warm1_build
         env:
@@ -687,7 +687,7 @@ jobs:
               fi
 
               if [[ "$attempt" -ge 2 ]]; then
-                echo "Warm build 1 failed after retry" >&2
+                echo "Warm build failed after retry" >&2
                 exit "$status"
               fi
 

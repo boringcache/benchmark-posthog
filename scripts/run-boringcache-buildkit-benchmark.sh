@@ -17,6 +17,7 @@ cache_promotion_refs="${BORINGCACHE_DOCKER_PROMOTION_REFS:-}"
 allow_rolling_bootstrap="${ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP:-false}"
 build_output="${BENCHMARK_BUILD_OUTPUT:-none}"
 oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
+docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
 native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
 chmod 0777 "$native_tool_evidence_dir" 2>/dev/null || true
 native_tool_evidence_path="${native_tool_evidence_dir}/native-tool.json"
@@ -118,6 +119,9 @@ write_build_metrics() {
   fi
   if [[ -n "${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES:-}" ]]; then
     echo "oci_stream_through_min_bytes=${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES}" >> "$output_path"
+  fi
+  if [[ -n "$docker_tool_cache" ]]; then
+    echo "docker_tool_cache=${docker_tool_cache}" >> "$output_path"
   fi
   if [[ "$backend" == "auto" ]]; then
     echo "buildkit_backend=auto" >> "$output_path"
@@ -319,6 +323,7 @@ write_build_diagnostics() {
     echo "blob_download_concurrency_override=${BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY:-}"
     echo "blob_prefetch_concurrency_override=${BORINGCACHE_BLOB_PREFETCH_CONCURRENCY:-}"
     echo "oci_stream_through_min_bytes=${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES:-}"
+    echo "docker_tool_cache=${docker_tool_cache}"
     printf 'cache_args='
     printf '%q ' "${cache_args[@]}"
     printf '\n'
@@ -359,7 +364,7 @@ write_build_diagnostics() {
   } > "$output_path"
 }
 
-run_auto_build() {
+run_wrapped_boringcache_build() {
   local phase_hint="cold"
   if [[ "$mode" == "partial-warm" ]]; then
     phase_hint="warm"
@@ -371,7 +376,7 @@ run_auto_build() {
     boringcache docker
     --workspace "${BENCHMARK_WORKSPACE:?Set BENCHMARK_WORKSPACE}"
     --tag "${CACHE_SCOPE:?Set CACHE_SCOPE}"
-    --backend auto
+    --backend "$backend"
     --port "$proxy_port"
     --cache-mode max
     --no-platform
@@ -380,10 +385,22 @@ run_auto_build() {
     --metadata-hint "benchmark=${BENCHMARK_ID:-docker}"
     --metadata-hint "phase=${phase_hint}"
     --metadata-hint "lane=${CACHE_LANE:-fresh}"
-    --metadata-hint "backend=auto"
-    --native-tool-evidence-json "$native_tool_evidence_path"
+    --metadata-hint "backend=${backend}"
     --fail-on-cache-error
   )
+
+  if [[ "$backend" == "auto" ]]; then
+    boringcache_args+=(--native-tool-evidence-json "$native_tool_evidence_path")
+  fi
+
+  if [[ -n "$docker_tool_cache" ]]; then
+    local tool_cache_value
+    for tool_cache_value in ${docker_tool_cache//,/ }; do
+      [[ -n "$tool_cache_value" ]] || continue
+      boringcache_args+=(--tool-cache "$tool_cache_value")
+    done
+  fi
+
   if [[ "$mode" == "partial-warm" ]]; then
     boringcache_args+=(--read-only)
   fi
@@ -397,6 +414,14 @@ run_auto_build() {
     builder_args=(--builder "$BUILDER")
   fi
 
+  local wrapped_cache_args=()
+  local cache_arg
+  for cache_arg in "${cache_args[@]}"; do
+    if [[ "$cache_arg" == "--no-cache" ]]; then
+      wrapped_cache_args+=("$cache_arg")
+    fi
+  done
+
   : > "$build_log"
   set +e
   DOCKER_BUILDKIT=1 BORINGCACHE_TIMING_TRACE=1 "${boringcache_cmd[@]}" "${boringcache_args[@]:1}" -- \
@@ -406,7 +431,7 @@ run_auto_build() {
     --tag "$IMAGE_TAG" \
     --progress=plain \
     "${extra_args[@]}" \
-    "${cache_args[@]}" \
+    "${wrapped_cache_args[@]}" \
     "${output_args[@]}" \
     "$BENCHMARK_DOCKER_CONTEXT" 2>&1 | tee "$build_log"
   status=${PIPESTATUS[0]}
@@ -462,8 +487,8 @@ while true; do
     exit 1
   fi
 
-  if [[ "$backend" == "auto" ]]; then
-    run_auto_build
+  if [[ "$backend" == "auto" || -n "$docker_tool_cache" ]]; then
+    run_wrapped_boringcache_build
   else
     require_readable_cache_import
     start_proxy

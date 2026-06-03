@@ -38,6 +38,14 @@ on:
         description: "Optional BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES for Docker/OCI large blobs (blank = disabled)"
         required: false
         type: string
+      docker_tool_cache:
+        description: "Optional Dockerfile tool-cache bridge"
+        required: false
+        type: choice
+        default: none
+        options:
+          - none
+          - turbo
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}-${{ github.event_name == 'workflow_dispatch' && inputs.buildkit_backend || 'both' }}
   cancel-in-progress: false
@@ -69,6 +77,7 @@ jobs:
       blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
       blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
       oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
+      docker_tool_cache: ${{ github.event_name == 'workflow_dispatch' && inputs.docker_tool_cache != 'none' && inputs.docker_tool_cache || '' }}
       free_disk_space: true
     secrets: inherit
     permissions:

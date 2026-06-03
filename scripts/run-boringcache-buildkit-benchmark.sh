@@ -3,6 +3,7 @@ set -euo pipefail
 
 proxy_port="${BORINGCACHE_PROXY_PORT:-5000}"
 proxy_log="${BORINGCACHE_PROXY_LOG_PATH:-/tmp/boringcache-proxy-${proxy_port}.log}"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
 status_snapshot_path="$(mktemp /tmp/boringcache-status.XXXXXX.json)"
 max_attempts=1
@@ -24,6 +25,82 @@ native_tool_evidence_path="${native_tool_evidence_dir}/native-tool.json"
 export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS:-1}"
 start_proxy() { :; }
 stop_proxy() { :; }
+docker_tool_cache_enabled() {
+  local requested_tool="$1"
+  local tool
+  for tool in ${docker_tool_cache//,/ }; do
+    [[ "$tool" == "$requested_tool" ]] && return 0
+  done
+  return 1
+}
+
+enable_posthog_turbo_tool_cache() {
+  docker_tool_cache_enabled turbo || return 0
+
+  local dockerfile_path="${DOCKERFILE_PATH:-}"
+  if [[ "$dockerfile_path" != "upstream/Dockerfile" ]]; then
+    echo "warning: docker tool-cache turbo requested, but ${dockerfile_path:-no Dockerfile} is not the PostHog Dockerfile; leaving Dockerfile unchanged" >&2
+    return 0
+  fi
+
+  local dockerfile="${repo_root}/${dockerfile_path}"
+  if grep -q "boringcache-tool-cache-env" "$dockerfile"; then
+    return 0
+  fi
+
+  local patched_dockerfile
+  patched_dockerfile="$(mktemp)"
+  awk '
+    BEGIN { replacements = 0; in_node_scripts = 0 }
+    /^FROM .* AS node-scripts-build$/ { in_node_scripts = 1 }
+    $0 == "RUN bin/turbo --filter=@posthog/frontend build" {
+      print "RUN --mount=type=secret,id=boringcache-tool-cache-env \\"
+      print "    . /run/secrets/boringcache-tool-cache-env && \\"
+      print "    bin/turbo --filter=@posthog/frontend build"
+      replacements += 1
+      next
+    }
+    in_node_scripts && $0 == "RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \\" {
+      print
+      print "    --mount=type=secret,id=boringcache-tool-cache-env \\"
+      print "    . /run/secrets/boringcache-tool-cache-env && \\"
+      replacements += 1
+      next
+    }
+    { print }
+    END {
+      if (replacements != 2) {
+        printf "expected 2 PostHog Turbo tool-cache Dockerfile edits, applied %d\n", replacements > "/dev/stderr"
+        exit 1
+      }
+    }
+  ' "$dockerfile" > "$patched_dockerfile"
+  mv "$patched_dockerfile" "$dockerfile"
+  echo "Enabled BoringCache Turbo remote cache secret mounts in ${dockerfile_path}"
+}
+
+assert_turbo_remote_cache_used() {
+  docker_tool_cache_enabled turbo || return 0
+
+  if grep -q "Remote caching disabled" "$build_log"; then
+    capture_proxy_status
+    write_build_metrics
+    write_build_diagnostics
+    echo "Turbo tool-cache was requested, but Turbo reported remote caching disabled." >&2
+    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env" "$build_log" | tail -n 120 >&2 || true
+    exit 1
+  fi
+
+  if ! grep -q "Remote caching enabled" "$build_log"; then
+    capture_proxy_status
+    write_build_metrics
+    write_build_diagnostics
+    echo "Turbo tool-cache was requested, but the build log did not show Turbo remote caching enabled." >&2
+    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env" "$build_log" | tail -n 120 >&2 || true
+    exit 1
+  fi
+}
+
 ensure_proxy_available() {
   local started elapsed
   started="$(date +%s)"
@@ -440,6 +517,7 @@ run_wrapped_boringcache_build() {
 
 
 attempt=1
+enable_posthog_turbo_tool_cache
 while true; do
   cache_args=()
   extra_args=()
@@ -521,6 +599,7 @@ while true; do
   fi
 
   if [[ "$status" -eq 0 ]]; then
+    assert_turbo_remote_cache_used
     import_status="$(build_import_status)"
     if [[ "$mode" == "partial-warm" && "$import_status" != "ok" ]]; then
       capture_proxy_status

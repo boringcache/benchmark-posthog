@@ -104,6 +104,11 @@ assert_turbo_remote_cache_used() {
   fi
 
   if ! grep -q "Remote caching enabled" "$build_log"; then
+    if turbo_tool_cache_layers_restored_from_docker_cache; then
+      echo "Turbo tool-cache was requested; Turbo RUN layers were restored from Docker cache before Turbo executed."
+      return 0
+    fi
+
     capture_proxy_status
     write_build_metrics
     write_build_diagnostics
@@ -111,6 +116,40 @@ assert_turbo_remote_cache_used() {
     grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env" "$build_log" | tail -n 120 >&2 || true
     exit 1
   fi
+}
+
+turbo_tool_cache_layers_restored_from_docker_cache() {
+  local frontend_step=""
+  local plugin_step=""
+  local line
+
+  while IFS= read -r line; do
+    [[ "$line" == *"RUN "* ]] || continue
+    [[ "$line" == *"boringcache-tool-cache-env"* ]] || continue
+    [[ "$line" == *"bin/turbo"* ]] || continue
+    [[ "$line" =~ ^#([0-9]+)[[:space:]] ]] || continue
+
+    if [[ "$line" == *"@posthog/frontend build"* ]]; then
+      frontend_step="${BASH_REMATCH[1]}"
+    elif [[ "$line" == *"@posthog/plugin-transpiler build"* ]]; then
+      plugin_step="${BASH_REMATCH[1]}"
+    fi
+  done < "$build_log"
+
+  [[ -n "$frontend_step" && -n "$plugin_step" ]] || return 1
+  turbo_tool_cache_step_restored_from_docker_cache "$frontend_step" &&
+    turbo_tool_cache_step_restored_from_docker_cache "$plugin_step"
+}
+
+turbo_tool_cache_step_restored_from_docker_cache() {
+  local step_id="$1"
+
+  if grep -qE "^#${step_id} CACHED$" "$build_log"; then
+    return 0
+  fi
+
+  grep -qE "^#${step_id} (sha256:|extracting )" "$build_log" &&
+    ! grep -qE "^#${step_id} [0-9]+(\\.[0-9]+)?[[:space:]]" "$build_log"
 }
 
 ensure_proxy_available() {

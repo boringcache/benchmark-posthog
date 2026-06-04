@@ -96,7 +96,11 @@ enable_posthog_turbo_layer_bust() {
 
   local docker_context="${BENCHMARK_DOCKER_CONTEXT:-upstream}"
   local context_dir="${repo_root}/${docker_context}"
+  local dockerignore="${context_dir}/.dockerignore"
   printf '%s\n' "$layer_bust_value" > "${context_dir}/.boringcache-turbo-layer-bust"
+  if [[ -f "$dockerignore" ]] && ! grep -qxF '!.boringcache-turbo-layer-bust' "$dockerignore"; then
+    printf '\n!.boringcache-turbo-layer-bust\n' >> "$dockerignore"
+  fi
 
   local patched_dockerfile
   patched_dockerfile="$(mktemp)"

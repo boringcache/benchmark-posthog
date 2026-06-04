@@ -304,7 +304,7 @@ jobs:
             if [[ -s "$metrics_file" ]]; then
               cat "$metrics_file" >> "$GITHUB_OUTPUT"
               native_tool_evidence="$(grep "^native_tool_evidence=" "$metrics_file" | head -n1 | cut -d= -f2- || true)"
-              if [[ "$BUILDKIT_BACKEND" == "auto" && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
+              if [[ "$BUILDKIT_BACKEND" == "native" && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
                 mkdir -p benchmark-native-tool
                 cp "$native_tool_evidence" benchmark-native-tool/native-tool.json
               fi
@@ -419,7 +419,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload native BuildKit evidence
-        if: inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto' && always()
+        if: inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'native' && always()
         uses: actions/upload-artifact@v6
         with:
           name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}-build
@@ -535,7 +535,7 @@ jobs:
             if [[ -s "$metrics_file" ]]; then
               cat "$metrics_file" >> "$GITHUB_OUTPUT"
               native_tool_evidence="$(grep "^native_tool_evidence=" "$metrics_file" | head -n1 | cut -d= -f2- || true)"
-              if [[ "$BUILDKIT_BACKEND" == "auto" && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
+              if [[ "$BUILDKIT_BACKEND" == "native" && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
                 mkdir -p benchmark-native-tool
                 cp "$native_tool_evidence" benchmark-native-tool/native-tool.json
               fi
@@ -679,7 +679,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload native BuildKit evidence
-        if: inputs.cache_lane != 'rolling' && inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto'
+        if: inputs.cache_lane != 'rolling' && inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'native'
         uses: actions/upload-artifact@v6
         with:
           name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}-warm
@@ -754,7 +754,7 @@ jobs:
           mkdir -p benchmark-storage
           breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
           exact_tags=""
-          if [[ "$BUILDKIT_BACKEND" == "auto" ]]; then
+          if [[ "$BUILDKIT_BACKEND" == "native" ]]; then
             exact_tags="$tags_csv"
           fi
           bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" BORINGCACHE_EXACT_TAGS="$exact_tags" .benchmark-config/scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"

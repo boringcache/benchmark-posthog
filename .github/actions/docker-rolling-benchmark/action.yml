@@ -264,7 +264,7 @@ runs:
         BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
         BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
         BORINGCACHE_DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
-        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache != '' && steps.tool_cache_buildx.outputs.name || steps.buildx.outputs.name }}
+        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache != '' && steps.tool_cache_buildx.outputs.name || inputs.strategy == 'actions-cache' && steps.buildx.outputs.name || '' }}
         CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
         CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
         CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
@@ -336,7 +336,7 @@ runs:
           if [[ -s "$metrics_file" ]]; then
             cat "$metrics_file" >> "$GITHUB_OUTPUT"
             native_tool_evidence="$(grep "^native_tool_evidence=" "$metrics_file" | head -n1 | cut -d= -f2- || true)"
-            if [[ "$BUILDKIT_BACKEND" == "auto" && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
+            if [[ "$BUILDKIT_BACKEND" == "native" && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
               mkdir -p benchmark-native-tool
               cp "$native_tool_evidence" benchmark-native-tool/native-tool.json
             fi
@@ -410,7 +410,7 @@ runs:
         if-no-files-found: ignore
 
     - name: Upload native BuildKit evidence
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto' && always() }}
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'native' && always() }}
       uses: actions/upload-artifact@v6
       with:
         name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-rolling-commit
@@ -432,7 +432,7 @@ runs:
           tags_csv="${{ steps.scope.outputs.tags_csv }}"
           breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
           exact_tags=""
-          if [[ "$BUILDKIT_BACKEND" == "auto" ]]; then
+          if [[ "$BUILDKIT_BACKEND" == "native" ]]; then
             exact_tags="$tags_csv"
           elif [[ -n "${{ inputs.docker_tool_cache }}" ]]; then
             exact_tags="${{ steps.scope.outputs.tool_cache_tags_csv }}"

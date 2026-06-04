@@ -50,11 +50,8 @@ This repo uses split BoringCache tokens as the standard CI shape:
 
 - [`scripts/prepare-source.sh`](scripts/prepare-source.sh)
 - [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, BoringCache OCI, and BoringCache Auto side by side.
-- [`.github/workflows/posthog-boringcache.yml`](.github/workflows/posthog-boringcache.yml) is a manual provider-specific diagnostic.
-- [`.github/workflows/posthog-actions-cache.yml`](.github/workflows/posthog-actions-cache.yml) is a manual provider-specific diagnostic.
-- [`.github/workflows/posthog-depot-builder-investigation.yml`](.github/workflows/posthog-depot-builder-investigation.yml)
-- [`.github/workflows/posthog-local-buildkit-investigation.yml`](.github/workflows/posthog-local-buildkit-investigation.yml)
-- [`.github/workflows/posthog-namespace-runner-investigation.yml`](.github/workflows/posthog-namespace-runner-investigation.yml)
+- [`.github/workflows/rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml) runs the rolling lane after upstream sync.
+- [`.github/workflows/sync.yml`](.github/workflows/sync.yml) keeps the pinned upstream source current.
 
 ## Output
 

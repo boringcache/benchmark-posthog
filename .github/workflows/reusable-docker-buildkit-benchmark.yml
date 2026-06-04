@@ -54,27 +54,6 @@ on:
         required: false
         type: string
         default: ""
-      cli_ref:
-        required: false
-        type: string
-        default: ''
-      blob_download_concurrency:
-        required: false
-        type: string
-        default: ''
-      blob_prefetch_concurrency:
-        required: false
-        type: string
-        default: ''
-      oci_stream_through_min_bytes:
-        required: false
-        type: string
-        default: ''
-      docker_tool_cache:
-        description: 'Optional Dockerfile tool-cache bridge. Use turbo shorthand or TOOL:TAG.'
-        required: false
-        type: string
-        default: ''
       free_disk_space:
         description: 'Reclaim runner disk before the Docker build. Required for very large images (PostHog) that exceed the default GitHub Actions hosted-runner free space mid-build.'
         required: false
@@ -93,10 +72,6 @@ env:
   CACHE_LANE: ${{ inputs.cache_lane }}
   BUILDKIT_BACKEND: ${{ inputs.buildkit_backend }}
   CACHE_SCOPE_SUFFIX: ${{ inputs.cache_scope_suffix }}
-  BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY: ${{ inputs.blob_download_concurrency }}
-  BORINGCACHE_BLOB_PREFETCH_CONCURRENCY: ${{ inputs.blob_prefetch_concurrency }}
-  BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES: ${{ inputs.oci_stream_through_min_bytes }}
-  BORINGCACHE_DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
 
 jobs:
   benchmark:
@@ -139,56 +114,6 @@ jobs:
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cli-platform: ${{ inputs.cli_platform }}
           cache-runtime: false
-
-      - name: Validate internal CLI ref diagnostic
-        if: inputs.strategy == 'boringcache' && inputs.cli_ref != ''
-        env:
-          CLI_REF: ${{ inputs.cli_ref }}
-          CLI_SOURCE_TOKEN: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
-          REPOSITORY_OWNER: ${{ github.repository_owner }}
-        run: |
-          set -euo pipefail
-          if [[ "${REPOSITORY_OWNER}" != "boringcache" ]]; then
-            echo "cli_ref is an internal BoringCache benchmark diagnostic and is disabled outside boringcache-owned benchmark repos." >&2
-            exit 1
-          fi
-          if [[ -z "${CLI_SOURCE_TOKEN}" ]]; then
-            echo "cli_ref now builds from the private boringcache/web monorepo; configure CLI_SOURCE_GITHUB_TOKEN or CLI_RELEASE_GITHUB_TOKEN with contents:read access." >&2
-            exit 1
-          fi
-          {
-            echo "### Internal CLI ref diagnostic"
-            echo
-            echo "Using boringcache/web ref \`${CLI_REF}\` for the outer registry proxy only."
-            echo "Launch proof runs should leave \`cli_ref\` empty and use the CLI bundled by \`boringcache/one@v1\`."
-            echo "The Dockerfile and build context remain the pinned upstream source; no BoringCache helper is mounted into Docker RUN steps."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Checkout BoringCache CLI ref
-        if: inputs.strategy == 'boringcache' && inputs.cli_ref != ''
-        uses: actions/checkout@v6
-        with:
-          repository: boringcache/web
-          ref: ${{ inputs.cli_ref }}
-          path: .boringcache-web
-          fetch-depth: 1
-          token: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
-          sparse-checkout: |
-            cli
-
-      - name: Build BoringCache CLI ref
-        if: inputs.strategy == 'boringcache' && inputs.cli_ref != ''
-        run: |
-          set -euo pipefail
-          rustup toolchain install stable --profile minimal
-          rustup target add x86_64-unknown-linux-musl
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends musl-tools
-          cargo build --release --locked --target x86_64-unknown-linux-musl --manifest-path .boringcache-web/cli/Cargo.toml --bin boringcache
-          mkdir -p "$HOME/.local/bin"
-          cp .boringcache-web/cli/target/x86_64-unknown-linux-musl/release/boringcache "$HOME/.local/bin/boringcache"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/boringcache" --version
 
       - name: Checkout benchmark repo
         uses: actions/checkout@v6
@@ -247,11 +172,10 @@ jobs:
 
 
       - name: Configure boringcache/one for Docker
-        if: inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == ''
+        if: inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry'
         id: docker_cache
         uses: boringcache/one@v1
         with:
-          cli-version: ${{ inputs.cli_ref != '' && 'skip' || '' }}
           setup: none
           cache-runtime: false
           mode: docker
@@ -267,14 +191,6 @@ jobs:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
           BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-build-observability.jsonl
-
-      - name: Set up Docker Buildx for BoringCache tool-cache
-        if: inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache != ''
-        id: tool_cache_buildx
-        uses: docker/setup-buildx-action@v4
-        with:
-          driver-opts: |
-            network=host
 
       - name: Set up Docker Buildx for BoringCache auto
         if: inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto'
@@ -329,7 +245,7 @@ jobs:
           BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
           BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
           BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
-          BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache != '' && steps.tool_cache_buildx.outputs.name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto' && steps.auto_buildx.outputs.name || steps.buildx.outputs.name }}
+          BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto' && steps.auto_buildx.outputs.name || steps.buildx.outputs.name }}
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
           CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
@@ -528,11 +444,10 @@ jobs:
         run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Configure warm BoringCache Docker cache
-        if: inputs.cache_lane != 'rolling' && inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == ''
+        if: inputs.cache_lane != 'rolling' && inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry'
         id: warm_docker_cache
         uses: boringcache/one@v1
         with:
-          cli-version: ${{ inputs.cli_ref != '' && 'skip' || '' }}
           setup: none
           cache-runtime: false
           mode: docker
@@ -547,14 +462,6 @@ jobs:
           verbose: true
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-
-      - name: Set up warm Docker Buildx for BoringCache tool-cache
-        if: inputs.cache_lane != 'rolling' && inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache != ''
-        id: warm_tool_cache_buildx
-        uses: docker/setup-buildx-action@v4
-        with:
-          driver-opts: |
-            network=host
 
       - name: Set up warm Docker Buildx for BoringCache auto
         if: inputs.cache_lane != 'rolling' && inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto'
@@ -579,11 +486,7 @@ jobs:
           set -euo pipefail
           builder=""
           if [[ "${{ inputs.strategy }}" == "boringcache" && "${{ inputs.buildkit_backend }}" == "registry" ]]; then
-            if [[ "${{ inputs.docker_tool_cache }}" == "" ]]; then
-              builder="${{ steps.warm_docker_cache.outputs.buildx-name }}"
-            else
-              builder="${{ steps.warm_tool_cache_buildx.outputs.name }}"
-            fi
+            builder="${{ steps.warm_docker_cache.outputs.buildx-name }}"
           elif [[ "${{ inputs.strategy }}" == "boringcache" && "${{ inputs.buildkit_backend }}" == "auto" ]]; then
             builder="${{ steps.warm_auto_buildx.outputs.name }}"
           elif [[ "${{ inputs.strategy }}" == "actions-cache" ]]; then
@@ -609,7 +512,7 @@ jobs:
           BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.warm_docker_cache.outputs.docker-cache-from-refs }}
           BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.warm_docker_cache.outputs.docker-cache-unreadable-from-refs }}
           BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.warm_docker_cache.outputs.docker-cache-promotion-refs }}
-          BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && steps.warm_docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache != '' && steps.warm_tool_cache_buildx.outputs.name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto' && steps.warm_auto_buildx.outputs.name || inputs.strategy == 'actions-cache' && steps.warm_buildx.outputs.name || '' }}
+          BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.warm_docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto' && steps.warm_auto_buildx.outputs.name || inputs.strategy == 'actions-cache' && steps.warm_buildx.outputs.name || '' }}
           CACHE_FROM: ${{ steps.warm_docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.warm_docker_cache.outputs.cache-to }}
           CACHE_SCOPE: ${{ inputs.strategy == 'actions-cache' && steps.cold_baseline_build.outputs.cache_scope || steps.scope.outputs.cache_scope }}

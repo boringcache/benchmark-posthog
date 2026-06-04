@@ -214,14 +214,6 @@ runs:
         driver-opts: |
           network=host
 
-    - name: Set up Docker Buildx for BoringCache auto
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto' }}
-      id: auto_buildx
-      uses: docker/setup-buildx-action@v4
-      with:
-        driver-opts: |
-          network=host
-
     - name: Set up Docker Buildx
       if: ${{ inputs.strategy == 'actions-cache' }}
       id: buildx
@@ -272,7 +264,7 @@ runs:
         BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
         BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
         BORINGCACHE_DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
-        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache != '' && steps.tool_cache_buildx.outputs.name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'auto' && steps.auto_buildx.outputs.name || steps.buildx.outputs.name }}
+        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache != '' && steps.tool_cache_buildx.outputs.name || steps.buildx.outputs.name }}
         CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
         CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
         CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}

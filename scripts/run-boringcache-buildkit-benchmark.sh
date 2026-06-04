@@ -3,7 +3,6 @@ set -euo pipefail
 
 proxy_port="${BORINGCACHE_PROXY_PORT:-5000}"
 proxy_log="${BORINGCACHE_PROXY_LOG_PATH:-/tmp/boringcache-proxy-${proxy_port}.log}"
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
 status_snapshot_path="$(mktemp /tmp/boringcache-status.XXXXXX.json)"
 max_attempts=1
@@ -18,140 +17,12 @@ cache_promotion_refs="${BORINGCACHE_DOCKER_PROMOTION_REFS:-}"
 allow_rolling_bootstrap="${ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP:-false}"
 build_output="${BENCHMARK_BUILD_OUTPUT:-none}"
 oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
-docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
 native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
 chmod 0777 "$native_tool_evidence_dir" 2>/dev/null || true
 native_tool_evidence_path="${native_tool_evidence_dir}/native-tool.json"
 export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS:-1}"
 start_proxy() { :; }
 stop_proxy() { :; }
-docker_tool_cache_enabled() {
-  local requested_tool="$1"
-  local tool
-  for tool in ${docker_tool_cache//,/ }; do
-    tool="${tool%%:*}"
-    [[ "$tool" == "$requested_tool" ]] && return 0
-  done
-  return 1
-}
-
-resolve_docker_tool_cache_value() {
-  local value="$1"
-  local tool="${value%%:*}"
-
-  if [[ "$value" == *:* ]]; then
-    printf '%s\n' "$value"
-  else
-    printf '%s:%s-%s\n' "$tool" "${CACHE_SCOPE:?Set CACHE_SCOPE}" "$tool"
-  fi
-}
-
-enable_posthog_turbo_tool_cache() {
-  docker_tool_cache_enabled turbo || return 0
-
-  local dockerfile_path="${DOCKERFILE_PATH:-}"
-  if [[ "$dockerfile_path" != "upstream/Dockerfile" ]]; then
-    echo "warning: docker tool-cache turbo requested, but ${dockerfile_path:-no Dockerfile} is not the PostHog Dockerfile; leaving Dockerfile unchanged" >&2
-    return 0
-  fi
-
-  local dockerfile="${repo_root}/${dockerfile_path}"
-  if grep -q "boringcache-tool-cache-env" "$dockerfile"; then
-    return 0
-  fi
-
-  local patched_dockerfile
-  patched_dockerfile="$(mktemp)"
-  awk '
-    BEGIN { replacements = 0; in_node_scripts = 0 }
-    /^FROM .* AS node-scripts-build$/ { in_node_scripts = 1 }
-    $0 == "RUN bin/turbo --filter=@posthog/frontend build" {
-      print "RUN --mount=type=secret,id=boringcache-tool-cache-env \\"
-      print "    . /run/secrets/boringcache-tool-cache-env && \\"
-      print "    bin/turbo --filter=@posthog/frontend build"
-      replacements += 1
-      next
-    }
-    in_node_scripts && $0 == "RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \\" {
-      print
-      print "    --mount=type=secret,id=boringcache-tool-cache-env \\"
-      print "    . /run/secrets/boringcache-tool-cache-env && \\"
-      replacements += 1
-      next
-    }
-    { print }
-    END {
-      if (replacements != 2) {
-        printf "expected 2 PostHog Turbo tool-cache Dockerfile edits, applied %d\n", replacements > "/dev/stderr"
-        exit 1
-      }
-    }
-  ' "$dockerfile" > "$patched_dockerfile"
-  mv "$patched_dockerfile" "$dockerfile"
-  echo "Enabled BoringCache Turbo remote cache secret mounts in ${dockerfile_path}"
-}
-
-assert_turbo_remote_cache_used() {
-  docker_tool_cache_enabled turbo || return 0
-
-  if grep -q "Remote caching disabled" "$build_log"; then
-    capture_proxy_status
-    write_build_metrics
-    write_build_diagnostics
-    echo "Turbo tool-cache was requested, but Turbo reported remote caching disabled." >&2
-    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env" "$build_log" | tail -n 120 >&2 || true
-    exit 1
-  fi
-
-  if ! grep -q "Remote caching enabled" "$build_log"; then
-    if turbo_tool_cache_layers_restored_from_docker_cache; then
-      echo "Turbo tool-cache was requested; Turbo RUN layers were restored from Docker cache before Turbo executed."
-      return 0
-    fi
-
-    capture_proxy_status
-    write_build_metrics
-    write_build_diagnostics
-    echo "Turbo tool-cache was requested, but the build log did not show Turbo remote caching enabled." >&2
-    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env" "$build_log" | tail -n 120 >&2 || true
-    exit 1
-  fi
-}
-
-turbo_tool_cache_layers_restored_from_docker_cache() {
-  local frontend_step=""
-  local plugin_step=""
-  local line
-
-  while IFS= read -r line; do
-    [[ "$line" == *"RUN "* ]] || continue
-    [[ "$line" == *"boringcache-tool-cache-env"* ]] || continue
-    [[ "$line" == *"bin/turbo"* ]] || continue
-    [[ "$line" =~ ^#([0-9]+)[[:space:]] ]] || continue
-
-    if [[ "$line" == *"@posthog/frontend build"* ]]; then
-      frontend_step="${BASH_REMATCH[1]}"
-    elif [[ "$line" == *"@posthog/plugin-transpiler build"* ]]; then
-      plugin_step="${BASH_REMATCH[1]}"
-    fi
-  done < "$build_log"
-
-  [[ -n "$frontend_step" && -n "$plugin_step" ]] || return 1
-  turbo_tool_cache_step_restored_from_docker_cache "$frontend_step" &&
-    turbo_tool_cache_step_restored_from_docker_cache "$plugin_step"
-}
-
-turbo_tool_cache_step_restored_from_docker_cache() {
-  local step_id="$1"
-
-  if grep -qE "^#${step_id} CACHED$" "$build_log"; then
-    return 0
-  fi
-
-  grep -qE "^#${step_id} (sha256:|extracting )" "$build_log" &&
-    ! grep -qE "^#${step_id} [0-9]+(\\.[0-9]+)?[[:space:]]" "$build_log"
-}
-
 ensure_proxy_available() {
   local started elapsed
   started="$(date +%s)"
@@ -238,18 +109,6 @@ write_build_metrics() {
   fi
   if [[ -n "$export_seconds" ]]; then
     echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
-  fi
-  if [[ -n "${BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY:-}" ]]; then
-    echo "blob_download_concurrency_override=${BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY}" >> "$output_path"
-  fi
-  if [[ -n "${BORINGCACHE_BLOB_PREFETCH_CONCURRENCY:-}" ]]; then
-    echo "blob_prefetch_concurrency_override=${BORINGCACHE_BLOB_PREFETCH_CONCURRENCY}" >> "$output_path"
-  fi
-  if [[ -n "${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES:-}" ]]; then
-    echo "oci_stream_through_min_bytes=${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES}" >> "$output_path"
-  fi
-  if [[ -n "$docker_tool_cache" ]]; then
-    echo "docker_tool_cache=${docker_tool_cache}" >> "$output_path"
   fi
   if [[ "$backend" == "auto" ]]; then
     echo "buildkit_backend=auto" >> "$output_path"
@@ -448,10 +307,6 @@ write_build_diagnostics() {
     echo "cache_promotion_refs=${cache_promotion_refs}"
     echo "cache_to=${CACHE_TO:-}"
     echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
-    echo "blob_download_concurrency_override=${BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY:-}"
-    echo "blob_prefetch_concurrency_override=${BORINGCACHE_BLOB_PREFETCH_CONCURRENCY:-}"
-    echo "oci_stream_through_min_bytes=${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES:-}"
-    echo "docker_tool_cache=${docker_tool_cache}"
     printf 'cache_args='
     printf '%q ' "${cache_args[@]}"
     printf '\n'
@@ -521,16 +376,6 @@ run_wrapped_boringcache_build() {
     boringcache_args+=(--native-tool-evidence-json "$native_tool_evidence_path")
   fi
 
-  if [[ -n "$docker_tool_cache" ]]; then
-    local tool_cache_value
-    local resolved_tool_cache_value
-    for tool_cache_value in ${docker_tool_cache//,/ }; do
-      [[ -n "$tool_cache_value" ]] || continue
-      resolved_tool_cache_value="$(resolve_docker_tool_cache_value "$tool_cache_value")"
-      boringcache_args+=(--tool-cache "$resolved_tool_cache_value")
-    done
-  fi
-
   if [[ "$mode" == "partial-warm" ]]; then
     boringcache_args+=(--read-only)
   fi
@@ -570,7 +415,6 @@ run_wrapped_boringcache_build() {
 
 
 attempt=1
-enable_posthog_turbo_tool_cache
 while true; do
   cache_args=()
   extra_args=()
@@ -618,7 +462,7 @@ while true; do
     exit 1
   fi
 
-  if [[ "$backend" == "auto" || -n "$docker_tool_cache" ]]; then
+  if [[ "$backend" == "auto" ]]; then
     run_wrapped_boringcache_build
   else
     require_readable_cache_import
@@ -652,7 +496,6 @@ while true; do
   fi
 
   if [[ "$status" -eq 0 ]]; then
-    assert_turbo_remote_cache_used
     import_status="$(build_import_status)"
     if [[ "$mode" == "partial-warm" && "$import_status" != "ok" ]]; then
       capture_proxy_status

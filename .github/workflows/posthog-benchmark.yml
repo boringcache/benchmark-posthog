@@ -21,6 +21,11 @@ on:
         description: "Optional BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES for Docker/OCI large blobs (blank = disabled)"
         required: false
         type: string
+      turbo_layer_bust:
+        description: "Run only proof lanes that bust Docker layers before Turbo while preserving Turbo task inputs"
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "0 3 * * 3"
   pull_request:
@@ -45,6 +50,7 @@ permissions:
 jobs:
   github-actions-cache:
     name: GHA
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.turbo_layer_bust != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -70,6 +76,7 @@ jobs:
 
   boringcache-oci:
     name: BC
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.turbo_layer_bust != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -105,6 +112,7 @@ jobs:
 
   boringcache-auto:
     name: BC auto
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.turbo_layer_bust != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -140,6 +148,7 @@ jobs:
 
   boringcache-auto-toolcache:
     name: BC auto toolcache
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.turbo_layer_bust != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -174,8 +183,86 @@ jobs:
           docker_tool_cache: turbo
           free_disk_space: "true"
 
+  boringcache-auto-layer-bust:
+    name: BC auto layer bust
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.turbo_layer_bust == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+      BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
+    steps:
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: BC auto layer bust
+        uses: ./.github/actions/docker-rolling-benchmark
+        with:
+          strategy: boringcache
+          buildkit_backend: auto
+          benchmark_id: posthog-auto-layer-bust
+          project_repo: PostHog/posthog
+          dockerfile_path: upstream/Dockerfile
+          docker_context: upstream
+          docker_build_args: |
+            --build-arg=BORINGCACHE_TURBO_LAYER_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+          image_tag: posthog-benchmark:latest
+          cli_platform: linux-amd64
+          benchmark_workspace: ${{ github.repository }}
+          cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
+          cli_source_token: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
+          blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
+          blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
+          oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
+          free_disk_space: "true"
+
+  boringcache-auto-toolcache-layer-bust:
+    name: BC auto toolcache layer bust
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.turbo_layer_bust == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+      BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
+    steps:
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: BC auto toolcache layer bust
+        uses: ./.github/actions/docker-rolling-benchmark
+        with:
+          strategy: boringcache
+          buildkit_backend: auto
+          benchmark_id: posthog-auto-toolcache-layer-bust
+          project_repo: PostHog/posthog
+          dockerfile_path: upstream/Dockerfile
+          docker_context: upstream
+          docker_build_args: |
+            --build-arg=BORINGCACHE_TURBO_LAYER_BUST=${{ github.run_id }}-${{ github.run_attempt }}
+          image_tag: posthog-benchmark:latest
+          cli_platform: linux-amd64
+          benchmark_workspace: ${{ github.repository }}
+          cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
+          cli_source_token: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
+          blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
+          blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
+          oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
+          docker_tool_cache: turbo
+          free_disk_space: "true"
+
   boringcache-oci-toolcache:
     name: BC oci toolcache
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.turbo_layer_bust != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:

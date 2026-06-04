@@ -35,6 +35,20 @@ docker_tool_cache_enabled() {
   return 1
 }
 
+docker_build_arg_requested() {
+  local requested_arg="$1"
+  local arg
+  while IFS= read -r arg; do
+    [[ -n "$arg" ]] || continue
+    case "$arg" in
+      --build-arg="${requested_arg}"=* | --build-arg\ "${requested_arg}"=*)
+        return 0
+        ;;
+    esac
+  done <<< "${DOCKER_BUILD_EXTRA_ARGS:-}"
+  return 1
+}
+
 resolve_docker_tool_cache_value() {
   local value="$1"
   local tool="${value%%:*}"
@@ -44,6 +58,51 @@ resolve_docker_tool_cache_value() {
   else
     printf '%s:%s-%s\n' "$tool" "${CACHE_SCOPE:?Set CACHE_SCOPE}" "$tool"
   fi
+}
+
+enable_posthog_turbo_layer_bust() {
+  docker_build_arg_requested BORINGCACHE_TURBO_LAYER_BUST || return 0
+
+  local dockerfile_path="${DOCKERFILE_PATH:-}"
+  if [[ "$dockerfile_path" != "upstream/Dockerfile" ]]; then
+    echo "warning: Docker Turbo layer-bust requested, but ${dockerfile_path:-no Dockerfile} is not the PostHog Dockerfile; leaving Dockerfile unchanged" >&2
+    return 0
+  fi
+
+  local dockerfile="${repo_root}/${dockerfile_path}"
+  if grep -q "boringcache-frontend-turbo-layer-bust" "$dockerfile"; then
+    return 0
+  fi
+
+  local patched_dockerfile
+  patched_dockerfile="$(mktemp)"
+  awk '
+    BEGIN { replacements = 0; in_node_scripts = 0 }
+    /^FROM .* AS node-scripts-build$/ { in_node_scripts = 1 }
+    $0 == "RUN bin/turbo --filter=@posthog/frontend build" {
+      print "ARG BORINGCACHE_TURBO_LAYER_BUST=stable"
+      print "RUN printf '\''%s\\n'\'' \"${BORINGCACHE_TURBO_LAYER_BUST}\" > /tmp/boringcache-frontend-turbo-layer-bust"
+      print
+      replacements += 1
+      next
+    }
+    in_node_scripts && $0 == "RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \\" {
+      print "ARG BORINGCACHE_TURBO_LAYER_BUST=stable"
+      print "RUN printf '\''%s\\n'\'' \"${BORINGCACHE_TURBO_LAYER_BUST}\" > /tmp/boringcache-node-scripts-turbo-layer-bust"
+      print
+      replacements += 1
+      next
+    }
+    { print }
+    END {
+      if (replacements != 2) {
+        printf "expected 2 PostHog Turbo layer-bust Dockerfile edits, applied %d\n", replacements > "/dev/stderr"
+        exit 1
+      }
+    }
+  ' "$dockerfile" > "$patched_dockerfile"
+  mv "$patched_dockerfile" "$dockerfile"
+  echo "Enabled benchmark Docker layer busts before PostHog Turbo RUNs in ${dockerfile_path}"
 }
 
 enable_posthog_turbo_tool_cache() {
@@ -251,6 +310,9 @@ write_build_metrics() {
   if [[ -n "$docker_tool_cache" ]]; then
     echo "docker_tool_cache=${docker_tool_cache}" >> "$output_path"
   fi
+  if docker_build_arg_requested BORINGCACHE_TURBO_LAYER_BUST; then
+    echo "docker_turbo_layer_bust=true" >> "$output_path"
+  fi
   if [[ "$backend" == "auto" ]]; then
     echo "buildkit_backend=auto" >> "$output_path"
     if [[ -s "$native_tool_evidence_path" ]]; then
@@ -452,6 +514,7 @@ write_build_diagnostics() {
     echo "blob_prefetch_concurrency_override=${BORINGCACHE_BLOB_PREFETCH_CONCURRENCY:-}"
     echo "oci_stream_through_min_bytes=${BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES:-}"
     echo "docker_tool_cache=${docker_tool_cache}"
+    echo "docker_turbo_layer_bust=$(docker_build_arg_requested BORINGCACHE_TURBO_LAYER_BUST && echo true || echo false)"
     printf 'cache_args='
     printf '%q ' "${cache_args[@]}"
     printf '\n'
@@ -570,6 +633,7 @@ run_wrapped_boringcache_build() {
 
 
 attempt=1
+enable_posthog_turbo_layer_bust
 enable_posthog_turbo_tool_cache
 while true; do
   cache_args=()

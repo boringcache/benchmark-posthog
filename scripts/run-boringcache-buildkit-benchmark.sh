@@ -243,8 +243,8 @@ write_build_metrics() {
   if [[ -n "$docker_tool_cache" ]]; then
     echo "docker_tool_cache=${docker_tool_cache}" >> "$output_path"
   fi
-  if [[ "$backend" == "auto" ]]; then
-    echo "buildkit_backend=auto" >> "$output_path"
+  if [[ "$backend" == "native" ]]; then
+    echo "buildkit_backend=native" >> "$output_path"
     if [[ -s "$native_tool_evidence_path" ]]; then
       echo "native_tool_evidence=$native_tool_evidence_path" >> "$output_path"
       append_native_tool_metrics "$native_tool_evidence_path" || true
@@ -506,7 +506,7 @@ run_wrapped_boringcache_build() {
     --fail-on-cache-error
   )
 
-  if [[ "$backend" == "auto" ]]; then
+  if [[ "$backend" == "native" ]]; then
     boringcache_args+=(--native-tool-evidence-json "$native_tool_evidence_path")
   fi
 
@@ -607,7 +607,7 @@ while true; do
     exit 1
   fi
 
-  if [[ "$backend" == "auto" || -n "$docker_tool_cache" ]]; then
+  if [[ "$backend" == "native" || -n "$docker_tool_cache" ]]; then
     run_wrapped_boringcache_build
   else
     require_readable_cache_import

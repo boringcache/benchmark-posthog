@@ -36,16 +36,35 @@ docker_tool_cache_enabled() {
 }
 
 docker_build_arg_requested() {
+  docker_build_arg_value "$1" >/dev/null
+}
+
+docker_build_arg_value() {
   local requested_arg="$1"
   local arg
   while IFS= read -r arg; do
     [[ -n "$arg" ]] || continue
     case "$arg" in
-      --build-arg="${requested_arg}"=* | --build-arg\ "${requested_arg}"=*)
+      --build-arg="${requested_arg}"=*)
+        printf '%s\n' "${arg#--build-arg=${requested_arg}=}"
+        return 0
+        ;;
+      --build-arg\ "${requested_arg}"=*)
+        printf '%s\n' "${arg#--build-arg ${requested_arg}=}"
         return 0
         ;;
     esac
   done <<< "${DOCKER_BUILD_EXTRA_ARGS:-}"
+  return 1
+}
+
+docker_build_arg_is_consumed_by_benchmark() {
+  local arg="$1"
+  case "$arg" in
+    --build-arg=BORINGCACHE_TURBO_LAYER_BUST=* | --build-arg\ BORINGCACHE_TURBO_LAYER_BUST=*)
+      return 0
+      ;;
+  esac
   return 1
 }
 
@@ -61,7 +80,8 @@ resolve_docker_tool_cache_value() {
 }
 
 enable_posthog_turbo_layer_bust() {
-  docker_build_arg_requested BORINGCACHE_TURBO_LAYER_BUST || return 0
+  local layer_bust_value=""
+  layer_bust_value="$(docker_build_arg_value BORINGCACHE_TURBO_LAYER_BUST)" || return 0
 
   local dockerfile_path="${DOCKERFILE_PATH:-}"
   if [[ "$dockerfile_path" != "upstream/Dockerfile" ]]; then
@@ -74,21 +94,23 @@ enable_posthog_turbo_layer_bust() {
     return 0
   fi
 
+  local docker_context="${BENCHMARK_DOCKER_CONTEXT:-upstream}"
+  local context_dir="${repo_root}/${docker_context}"
+  printf '%s\n' "$layer_bust_value" > "${context_dir}/.boringcache-turbo-layer-bust"
+
   local patched_dockerfile
   patched_dockerfile="$(mktemp)"
   awk '
     BEGIN { replacements = 0; in_node_scripts = 0 }
     /^FROM .* AS node-scripts-build$/ { in_node_scripts = 1 }
     $0 == "RUN bin/turbo --filter=@posthog/frontend build" {
-      print "ARG BORINGCACHE_TURBO_LAYER_BUST=stable"
-      print "RUN printf '\''%s\\n'\'' \"${BORINGCACHE_TURBO_LAYER_BUST}\" > /tmp/boringcache-frontend-turbo-layer-bust"
+      print "COPY .boringcache-turbo-layer-bust /tmp/boringcache-frontend-turbo-layer-bust"
       print
       replacements += 1
       next
     }
     in_node_scripts && $0 == "RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \\" {
-      print "ARG BORINGCACHE_TURBO_LAYER_BUST=stable"
-      print "RUN printf '\''%s\\n'\'' \"${BORINGCACHE_TURBO_LAYER_BUST}\" > /tmp/boringcache-node-scripts-turbo-layer-bust"
+      print "COPY .boringcache-turbo-layer-bust /tmp/boringcache-node-scripts-turbo-layer-bust"
       print
       replacements += 1
       next
@@ -102,7 +124,7 @@ enable_posthog_turbo_layer_bust() {
     }
   ' "$dockerfile" > "$patched_dockerfile"
   mv "$patched_dockerfile" "$dockerfile"
-  echo "Enabled benchmark Docker layer busts before PostHog Turbo RUNs in ${dockerfile_path}"
+  echo "Enabled benchmark Docker context layer busts before PostHog Turbo RUNs in ${dockerfile_path}"
 }
 
 enable_posthog_turbo_tool_cache() {
@@ -641,6 +663,7 @@ while true; do
   output_args=()
   while IFS= read -r arg; do
     [[ -n "$arg" ]] || continue
+    docker_build_arg_is_consumed_by_benchmark "$arg" && continue
     extra_args+=("$arg")
   done <<< "${DOCKER_BUILD_EXTRA_ARGS:-}"
 

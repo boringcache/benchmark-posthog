@@ -26,7 +26,7 @@ Fresh runs use the scenario set:
 - `cold`: empty remote cache, empty local Docker cache
 - `warm1`
 
-BoringCache uses the outer BuildKit registry/OCI cache path only. It does not call BoringCache inside Dockerfile `RUN` steps, and upstream Dockerfile cache mounts stay native to BuildKit.
+BoringCache uses the outer BuildKit registry/OCI cache path for the `BC` row. The `BC tool` row also exercises the Docker tool-cache bridge for PostHog's Turbo `RUN` steps, with BoringCache still running outside the Dockerfile through the CLI-owned BuildKit secret.
 
 Rolling runs record the upstream commit build as-is after upstream sync against the stable rolling cache tags. They do not run a separate `warm1` follow-up.
 

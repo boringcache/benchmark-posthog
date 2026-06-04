@@ -35,23 +35,6 @@ on:
         required: false
         type: string
         default: ubuntu-24-x86_64
-      cli_ref:
-        description: "Internal benchmark diagnostic only: build this boringcache/cli ref instead of using the released CLI"
-        required: false
-        type: string
-      blob_download_concurrency:
-        description: "Optional BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY override (blank = adaptive)"
-        required: false
-        type: string
-      blob_prefetch_concurrency:
-        description: "Optional BORINGCACHE_BLOB_PREFETCH_CONCURRENCY override (blank = match download concurrency)"
-        required: false
-        type: string
-      oci_stream_through_min_bytes:
-        description: "Optional BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES for Docker/OCI large blobs (blank = disabled)"
-        required: false
-        type: string
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}-${{ inputs.runner_slug }}
   cancel-in-progress: false
@@ -207,10 +190,6 @@ jobs:
       image_tag: posthog-benchmark:latest
       cli_platform: linux-amd64
       benchmark_workspace: ${{ github.repository }}
-      cli_ref: ${{ inputs.cli_ref }}
-      blob_download_concurrency: ${{ inputs.blob_download_concurrency }}
-      blob_prefetch_concurrency: ${{ inputs.blob_prefetch_concurrency }}
-      oci_stream_through_min_bytes: ${{ inputs.oci_stream_through_min_bytes }}
       free_disk_space: ${{ inputs.free_disk_space }}
     secrets: inherit
     permissions:

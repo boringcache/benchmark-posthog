@@ -5,22 +5,6 @@ run-name: >-
 on:
   workflow_dispatch:
     inputs:
-      cli_ref:
-        description: "Internal benchmark diagnostic only: build this boringcache/cli ref instead of using the released CLI"
-        required: false
-        type: string
-      blob_download_concurrency:
-        description: "Optional BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY override (blank = adaptive)"
-        required: false
-        type: string
-      blob_prefetch_concurrency:
-        description: "Optional BORINGCACHE_BLOB_PREFETCH_CONCURRENCY override (blank = match download concurrency)"
-        required: false
-        type: string
-      oci_stream_through_min_bytes:
-        description: "Optional BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES for Docker/OCI large blobs (blank = disabled)"
-        required: false
-        type: string
       turbo_layer_bust:
         description: "Run only proof lanes that bust Docker layers before Turbo while preserving Turbo task inputs"
         required: false
@@ -103,11 +87,6 @@ jobs:
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
-          cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
-          cli_source_token: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
-          blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
-          blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
-          oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
           free_disk_space: "true"
 
   boringcache-auto:
@@ -139,11 +118,6 @@ jobs:
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
-          cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
-          cli_source_token: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
-          blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
-          blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
-          oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
           free_disk_space: "true"
 
   boringcache-auto-toolcache:
@@ -175,11 +149,6 @@ jobs:
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
-          cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
-          cli_source_token: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
-          blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
-          blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
-          oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
           docker_tool_cache: turbo
           free_disk_space: "true"
 
@@ -214,11 +183,6 @@ jobs:
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
-          cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
-          cli_source_token: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
-          blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
-          blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
-          oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
           free_disk_space: "true"
 
   boringcache-auto-toolcache-layer-bust:
@@ -252,11 +216,6 @@ jobs:
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
-          cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
-          cli_source_token: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
-          blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
-          blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
-          oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
           docker_tool_cache: turbo
           free_disk_space: "true"
 
@@ -289,10 +248,5 @@ jobs:
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
-          cli_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.cli_ref || '' }}
-          cli_source_token: ${{ secrets.CLI_SOURCE_GITHUB_TOKEN || secrets.CLI_RELEASE_GITHUB_TOKEN || '' }}
-          blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
-          blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
-          oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
           docker_tool_cache: turbo
           free_disk_space: "true"

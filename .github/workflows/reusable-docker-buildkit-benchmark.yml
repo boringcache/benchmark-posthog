@@ -59,6 +59,11 @@ on:
         required: false
         type: boolean
         default: false
+      native_publish_intensity:
+        description: 'Optional native BuildKit publisher intensity for benchmark proof lanes.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -247,6 +252,7 @@ jobs:
           BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
           BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
           BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
+          BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
           BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name }}
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
@@ -504,6 +510,7 @@ jobs:
           BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.warm_docker_cache.outputs.docker-cache-from-refs }}
           BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.warm_docker_cache.outputs.docker-cache-unreadable-from-refs }}
           BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.warm_docker_cache.outputs.docker-cache-promotion-refs }}
+          BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
           BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.warm_docker_cache.outputs.buildx-name || inputs.strategy == 'actions-cache' && steps.warm_buildx.outputs.name || '' }}
           CACHE_FROM: ${{ steps.warm_docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.warm_docker_cache.outputs.cache-to }}

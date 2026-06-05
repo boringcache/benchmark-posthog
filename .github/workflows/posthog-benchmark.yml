@@ -60,7 +60,6 @@ jobs:
       BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
       BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
       BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
-      BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: aggressive
     steps:
       - name: Checkout benchmark repo
         uses: actions/checkout@v6
@@ -80,7 +79,6 @@ jobs:
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
-          native_publish_intensity: aggressive
           free_disk_space: "true"
 
   boringcache-native:
@@ -92,6 +90,7 @@ jobs:
       BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
       BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
       BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: aggressive
     steps:
       - name: Checkout benchmark repo
         uses: actions/checkout@v6
@@ -111,6 +110,7 @@ jobs:
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
+          native_publish_intensity: aggressive
           free_disk_space: "true"
 
   boringcache-toolcache:

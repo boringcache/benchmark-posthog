@@ -50,6 +50,15 @@ on:
         required: false
         type: string
         default: linux-amd64
+      cli_version:
+        required: false
+        type: string
+        default: v1.13.41
+      buildkit_image:
+        description: 'BuildKit daemon image used by benchmark-created builders.'
+        required: false
+        type: string
+        default: mirror.gcr.io/moby/buildkit:buildx-stable-1
       benchmark_workspace:
         required: false
         type: string
@@ -127,6 +136,7 @@ jobs:
           setup: none
           mode: archive
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
+          cli-version: ${{ inputs.cli_version }}
           cli-platform: ${{ inputs.cli_platform }}
           cache-runtime: false
 
@@ -196,10 +206,12 @@ jobs:
           mode: docker
           docker-command: setup
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
+          cli-version: ${{ inputs.cli_version }}
           cache-tag: ${{ steps.scope.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
           proxy-no-git: 'true'
           driver-opts: |
+            image=${{ inputs.buildkit_image }}
             network=host
           verbose: true
         env:
@@ -211,6 +223,9 @@ jobs:
         if: inputs.strategy == 'actions-cache'
         id: buildx
         uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: |
+            image=${{ inputs.buildkit_image }}
 
       - name: Expose GitHub runtime for Buildx cache
         if: inputs.strategy == 'actions-cache'
@@ -252,6 +267,8 @@ jobs:
           BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
           BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
           BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
+          BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+          BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
           BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name }}
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
@@ -461,11 +478,13 @@ jobs:
           mode: docker
           docker-command: setup
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
+          cli-version: ${{ inputs.cli_version }}
           cache-tag: ${{ steps.scope.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
           proxy-no-git: 'true'
           read-only: true
           driver-opts: |
+            image=${{ inputs.buildkit_image }}
             network=host
           verbose: true
         env:
@@ -475,6 +494,9 @@ jobs:
         if: inputs.cache_lane != 'rolling' && inputs.strategy == 'actions-cache'
         id: warm_buildx
         uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: |
+            image=${{ inputs.buildkit_image }}
 
       - name: Expose GitHub runtime for warm Buildx cache
         if: inputs.cache_lane != 'rolling' && inputs.strategy == 'actions-cache'
@@ -510,6 +532,8 @@ jobs:
           BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.warm_docker_cache.outputs.docker-cache-from-refs }}
           BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.warm_docker_cache.outputs.docker-cache-unreadable-from-refs }}
           BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.warm_docker_cache.outputs.docker-cache-promotion-refs }}
+          BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+          BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
           BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.warm_docker_cache.outputs.buildx-name || inputs.strategy == 'actions-cache' && steps.warm_buildx.outputs.name || '' }}
           CACHE_FROM: ${{ steps.warm_docker_cache.outputs.cache-from }}
@@ -771,8 +795,8 @@ jobs:
           mkdir -p benchmark-storage
           breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
           exact_tags=""
-          if [[ "$BUILDKIT_BACKEND" == "native" ]]; then
-            exact_tags="$tags_csv"
+          if [[ "$BUILDKIT_BACKEND" == "native" || "$BUILDKIT_BACKEND" == "registry" ]]; then
+            exact_tags="${{ steps.scope.outputs.registry_proxy_tags }}"
           fi
           bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" BORINGCACHE_EXACT_TAGS="$exact_tags" .benchmark-config/scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
           echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"

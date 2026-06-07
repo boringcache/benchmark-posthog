@@ -34,6 +34,13 @@ inputs:
   cli_platform:
     required: false
     default: linux-amd64
+  cli_version:
+    required: false
+    default: v1.13.41
+  buildkit_image:
+    description: "BuildKit daemon image used by benchmark-created builders."
+    required: false
+    default: mirror.gcr.io/moby/buildkit:buildx-stable-1
   benchmark_workspace:
     required: true
   artifact_strategy:
@@ -41,6 +48,10 @@ inputs:
     default: ""
   docker_tool_cache:
     description: "Optional Dockerfile tool-cache bridge. Use turbo shorthand or TOOL:TAG."
+    required: false
+    default: ""
+  docker_mount_cache:
+    description: "Optional Docker cache-mount sidecar profile. Use posthog-mounts for PostHog pnpm, uv, and Playwright cache mounts."
     required: false
     default: ""
   native_publish_intensity:
@@ -94,6 +105,7 @@ runs:
         setup: none
         mode: archive
         workspace: ${{ inputs.benchmark_workspace }}
+        cli-version: ${{ inputs.cli_version }}
         cli-platform: ${{ inputs.cli_platform }}
         cache-runtime: false
 
@@ -155,6 +167,7 @@ runs:
         STRATEGY: ${{ inputs.strategy }}
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
         DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
+        DOCKER_MOUNT_CACHE: ${{ inputs.docker_mount_cache }}
       run: |
         set -euo pipefail
         tool_cache_tags_csv() {
@@ -178,6 +191,31 @@ runs:
           printf '%s\n' "${tags[*]}"
         }
 
+        mount_cache_tags_csv() {
+          local cache_scope="$1"
+          local requested="$2"
+          local profile
+          local tags=()
+
+          for profile in ${requested//,/ }; do
+            [[ -n "$profile" ]] || continue
+            case "$profile" in
+              posthog-mounts)
+                tags+=("${cache_scope}-mount-pnpm-store")
+                tags+=("${cache_scope}-mount-uv-cache")
+                tags+=("${cache_scope}-mount-playwright-browsers")
+                ;;
+              *)
+                echo "Unknown Docker mount-cache profile: ${profile}" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          local IFS=,
+          printf '%s\n' "${tags[*]}"
+        }
+
         ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
         ref_slug="${ref_slug#-}"
         ref_slug="${ref_slug%-}"
@@ -188,14 +226,19 @@ runs:
         if [[ "$STRATEGY" == "boringcache" ]]; then
           cache_scope="${BENCHMARK_ID}-run-rolling-${ref_slug}"
           tool_cache_tags="$(tool_cache_tags_csv "$cache_scope" "$DOCKER_TOOL_CACHE")"
+          mount_cache_tags="$(mount_cache_tags_csv "$cache_scope" "$DOCKER_MOUNT_CACHE")"
           tags_csv="${cache_scope}"
           if [[ -n "$tool_cache_tags" ]]; then
             tags_csv="${tags_csv},${tool_cache_tags}"
+          fi
+          if [[ -n "$mount_cache_tags" ]]; then
+            tags_csv="${tags_csv},${mount_cache_tags}"
           fi
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "registry_proxy_tags=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
           echo "tool_cache_tags_csv=${tool_cache_tags}" >> "$GITHUB_OUTPUT"
+          echo "mount_cache_tags_csv=${mount_cache_tags}" >> "$GITHUB_OUTPUT"
         else
           cache_scope_primary="${BENCHMARK_ID}-rolling-${ref_slug}"
           cache_scope_fallback="${BENCHMARK_ID}-rolling-${ref_slug}-fallback"
@@ -204,7 +247,7 @@ runs:
         fi
 
     - name: Configure boringcache/one for Docker
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' }}
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && inputs.docker_mount_cache == '' }}
       id: docker_cache
       uses: boringcache/one@v1
       with:
@@ -213,25 +256,31 @@ runs:
         mode: docker
         docker-command: setup
         workspace: ${{ inputs.benchmark_workspace }}
+        cli-version: ${{ inputs.cli_version }}
         cache-tag: ${{ steps.scope.outputs.cache_scope }}
         registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
         proxy-no-git: "true"
         driver-opts: |
+          image=${{ inputs.buildkit_image }}
           network=host
         verbose: true
 
-    - name: Set up Docker Buildx for BoringCache tool-cache
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache != '' }}
+    - name: Set up Docker Buildx for BoringCache wrapped build
+      if: ${{ inputs.strategy == 'boringcache' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') }}
       id: tool_cache_buildx
       uses: docker/setup-buildx-action@v4
       with:
         driver-opts: |
+          image=${{ inputs.buildkit_image }}
           network=host
 
     - name: Set up Docker Buildx
       if: ${{ inputs.strategy == 'actions-cache' }}
       id: buildx
       uses: docker/setup-buildx-action@v4
+      with:
+        driver-opts: |
+          image=${{ inputs.buildkit_image }}
 
     - name: Expose GitHub runtime for Buildx cache
       if: ${{ inputs.strategy == 'actions-cache' }}
@@ -278,8 +327,11 @@ runs:
         BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
         BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
         BORINGCACHE_DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
+        BORINGCACHE_DOCKER_MOUNT_CACHE: ${{ inputs.docker_mount_cache }}
+        BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+        BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
-        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache != '' && steps.tool_cache_buildx.outputs.name || inputs.strategy == 'actions-cache' && steps.buildx.outputs.name || '' }}
+        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && inputs.docker_mount_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') && steps.tool_cache_buildx.outputs.name || inputs.strategy == 'actions-cache' && steps.buildx.outputs.name || '' }}
         CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
         CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
         CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
@@ -449,10 +501,8 @@ runs:
           tags_csv="${{ steps.scope.outputs.tags_csv }}"
           breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
           exact_tags=""
-          if [[ "$BUILDKIT_BACKEND" == "native" ]]; then
-            exact_tags="$tags_csv"
-          elif [[ -n "${{ inputs.docker_tool_cache }}" ]]; then
-            exact_tags="${{ steps.scope.outputs.tool_cache_tags_csv }}"
+          if [[ "$BUILDKIT_BACKEND" == "native" || "$BUILDKIT_BACKEND" == "registry" ]]; then
+            exact_tags="${{ steps.scope.outputs.registry_proxy_tags }}"
           fi
           bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" BORINGCACHE_EXACT_TAGS="$exact_tags" ./scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
           source="boringcache-check"

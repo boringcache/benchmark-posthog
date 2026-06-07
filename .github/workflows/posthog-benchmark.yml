@@ -111,6 +111,39 @@ jobs:
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
           native_publish_intensity: aggressive
+          docker_tool_cache: turbo
+          docker_mount_cache: posthog-mounts
+          free_disk_space: "true"
+
+  boringcache-mountcache:
+    name: BC mount
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+      BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
+    steps:
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: BC mount
+        uses: ./.github/actions/docker-rolling-benchmark
+        with:
+          strategy: boringcache
+          buildkit_backend: registry
+          benchmark_id: posthog-mountcache
+          project_repo: PostHog/posthog
+          dockerfile_path: upstream/Dockerfile
+          docker_context: upstream
+          image_tag: posthog-benchmark:latest
+          cli_platform: linux-amd64
+          benchmark_workspace: ${{ github.repository }}
+          docker_mount_cache: posthog-mounts
           free_disk_space: "true"
 
   boringcache-toolcache:

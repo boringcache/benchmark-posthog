@@ -19,9 +19,12 @@ allow_rolling_bootstrap="${ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP:-false}"
 build_output="${BENCHMARK_BUILD_OUTPUT:-none}"
 oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
 docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
+docker_mount_cache="${BORINGCACHE_DOCKER_MOUNT_CACHE:-}"
 native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
 chmod 0777 "$native_tool_evidence_dir" 2>/dev/null || true
 native_tool_evidence_path="${native_tool_evidence_dir}/native-tool.json"
+boringcache_config="${repo_root}/.boringcache.toml"
+boringcache_config_backup=""
 export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS:-1}"
 start_proxy() { :; }
 stop_proxy() { :; }
@@ -45,6 +48,56 @@ resolve_docker_tool_cache_value() {
   else
     printf '%s:%s-%s\n' "$tool" "${CACHE_SCOPE:?Set CACHE_SCOPE}" "$tool"
   fi
+}
+
+docker_mount_cache_enabled() {
+  local requested_profile="$1"
+  local profile
+  for profile in ${docker_mount_cache//,/ }; do
+    [[ "$profile" == "$requested_profile" ]] && return 0
+  done
+  return 1
+}
+
+append_posthog_mount_cache_profile() {
+  docker_mount_cache_enabled posthog-mounts || return 0
+
+  local dockerfile_path="${DOCKERFILE_PATH:-}"
+  if [[ "$dockerfile_path" != "upstream/Dockerfile" ]]; then
+    echo "Docker mount-cache profile posthog-mounts requires upstream/Dockerfile, got ${dockerfile_path:-none}" >&2
+    exit 1
+  fi
+
+  if [[ -z "$boringcache_config_backup" ]]; then
+    boringcache_config_backup="$(mktemp /tmp/boringcache-config.XXXXXX.toml)"
+    cp "$boringcache_config" "$boringcache_config_backup"
+  fi
+
+  cat >> "$boringcache_config" <<EOF
+
+[entries.posthog-pnpm-mount]
+tag = "${CACHE_SCOPE:?Set CACHE_SCOPE}-mount-pnpm-store"
+path = ".bc-sidecars/posthog/pnpm-store"
+docker-cache-id = "pnpm"
+docker-cache-target = "/tmp/pnpm-store-v24"
+
+[entries.posthog-uv-mount]
+tag = "${CACHE_SCOPE:?Set CACHE_SCOPE}-mount-uv-cache"
+path = ".bc-sidecars/posthog/uv-cache"
+docker-cache-id = "uv-libxmlsec1.2.37-2"
+docker-cache-target = "/root/.cache/uv"
+
+[entries.posthog-playwright-mount]
+tag = "${CACHE_SCOPE:?Set CACHE_SCOPE}-mount-playwright-browsers"
+path = ".bc-sidecars/posthog/playwright-browsers"
+docker-cache-id = "playwright-browsers"
+docker-cache-target = "/tmp/playwright-cache"
+
+[profiles.posthog-docker-mounts]
+entries = ["posthog-pnpm-mount", "posthog-uv-mount", "posthog-playwright-mount"]
+EOF
+
+  echo "Enabled BoringCache Docker cache-mount sidecars for PostHog pnpm, uv, and Playwright package stores"
 }
 
 enable_posthog_turbo_tool_cache() {
@@ -198,7 +251,11 @@ flush_action_proxy() {
   elapsed=$(($(date +%s) - started))
   echo "Registry proxy exited gracefully after ${elapsed}s"
 }
-cleanup() { :; }
+cleanup() {
+  if [[ -n "$boringcache_config_backup" && -f "$boringcache_config_backup" ]]; then
+    cp "$boringcache_config_backup" "$boringcache_config"
+  fi
+}
 trap cleanup EXIT
 
 find_step_id() {
@@ -242,6 +299,9 @@ write_build_metrics() {
   fi
   if [[ -n "$docker_tool_cache" ]]; then
     echo "docker_tool_cache=${docker_tool_cache}" >> "$output_path"
+  fi
+  if [[ -n "$docker_mount_cache" ]]; then
+    echo "docker_mount_cache=${docker_mount_cache}" >> "$output_path"
   fi
   if [[ "$backend" == "native" ]]; then
     echo "buildkit_backend=native" >> "$output_path"
@@ -441,6 +501,12 @@ write_build_diagnostics() {
     echo "cache_to=${CACHE_TO:-}"
     echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
     echo "docker_tool_cache=${docker_tool_cache}"
+    echo "docker_mount_cache=${docker_mount_cache}"
+    echo "docker_mount_cache_paths<<EOF"
+    if [[ -d "${repo_root}/.bc-sidecars/posthog" ]]; then
+      du -sh "${repo_root}/.bc-sidecars/posthog"/* 2>/dev/null || true
+    fi
+    echo "EOF"
     printf 'cache_args='
     printf '%q ' "${cache_args[@]}"
     printf '\n'
@@ -520,6 +586,15 @@ run_wrapped_boringcache_build() {
     done
   fi
 
+  if [[ -n "$docker_mount_cache" ]]; then
+    if ! docker_mount_cache_enabled posthog-mounts; then
+      echo "Unknown Docker mount-cache profile: ${docker_mount_cache}" >&2
+      exit 1
+    fi
+    boringcache_args+=(--profile posthog-docker-mounts)
+    boringcache_args+=(--cache-mount-dockerfile "$DOCKERFILE_PATH")
+  fi
+
   if [[ "$mode" == "partial-warm" ]]; then
     boringcache_args+=(--read-only)
   fi
@@ -559,6 +634,7 @@ run_wrapped_boringcache_build() {
 
 
 attempt=1
+append_posthog_mount_cache_profile
 enable_posthog_turbo_tool_cache
 while true; do
   cache_args=()
@@ -607,7 +683,7 @@ while true; do
     exit 1
   fi
 
-  if [[ "$backend" == "native" || -n "$docker_tool_cache" ]]; then
+  if [[ "$backend" == "native" || -n "$docker_tool_cache" || -n "$docker_mount_cache" ]]; then
     run_wrapped_boringcache_build
   else
     require_readable_cache_import

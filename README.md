@@ -26,13 +26,11 @@ Fresh runs use the scenario set:
 - `cold`: empty remote cache, empty local Docker cache
 - `warm1`
 
-BoringCache uses the outer BuildKit registry/OCI cache path for the `BC` row.
-`BC mount` adds persisted BuildKit cache-mount sidecars for PostHog's pnpm, uv,
-and Playwright package stores while keeping the OCI registry cache as the Docker
-control lane. `BC tool` exercises the Docker tool-cache bridge for PostHog's
-Turbo `RUN` steps. `BC native` is the product dogfood lane for this release:
-native BuildKit export plus Turbo tool-cache plus the same persisted mount
-sidecars, with BoringCache still running outside the Dockerfile.
+BoringCache uses the outer BuildKit registry/OCI cache path for the `BC OCI`
+row. `BC Native` is the product dogfood lane for this release: native BuildKit
+export plus Turbo tool-cache plus persisted BuildKit cache-mount sidecars for
+PostHog's pnpm, uv, and Playwright package stores, with BoringCache still
+running outside the Dockerfile.
 Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not
 blocked by Docker Hub anonymous pull limits.
@@ -58,7 +56,7 @@ This repo uses split BoringCache tokens as the standard CI shape:
 ## Repo Layout
 
 - [`scripts/prepare-source.sh`](scripts/prepare-source.sh)
-- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, BoringCache OCI, BoringCache mount-cache, BoringCache tool-cache, and BoringCache Native side by side.
+- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, BoringCache OCI, and BoringCache Native side by side.
 - [`.github/workflows/rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml) runs the rolling lane after upstream sync.
 - [`.github/workflows/sync.yml`](.github/workflows/sync.yml) keeps the pinned upstream source current.
 

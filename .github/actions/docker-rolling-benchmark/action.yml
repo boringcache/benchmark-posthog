@@ -35,8 +35,9 @@ inputs:
     required: false
     default: linux-amd64
   cli_version:
+    description: "Optional diagnostic CLI version override. Empty uses boringcache/one@v1's bundled default."
     required: false
-    default: v1.13.43
+    default: ""
   buildkit_image:
     description: "BuildKit daemon image used by benchmark-created builders."
     required: false

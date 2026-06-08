@@ -28,7 +28,9 @@ Fresh runs use the scenario set:
 
 BoringCache lanes are split so product capabilities are visible instead of
 mixed into one number: `BC OCI`, `BC Native`, `BC Native + toolcache`,
-`BC Native + mountcache`, `BC OCI + toolcache`, and `BC OCI + mountcache`.
+`BC Native + mountcache`, `BC Native + toolcache + mountcache`,
+`BC OCI + toolcache`, `BC OCI + mountcache`, and
+`BC OCI + toolcache + mountcache`.
 Tool-cache uses PostHog's Turbo build steps; mount-cache persists PostHog's
 pnpm, uv, and Playwright package stores while BoringCache still runs outside the
 Dockerfile.

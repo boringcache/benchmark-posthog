@@ -89,6 +89,12 @@ jobs:
             native_publish_intensity: aggressive
             docker_tool_cache: ""
             docker_mount_cache: posthog-mounts
+          - label: BC Native + toolcache + mountcache
+            buildkit_backend: native
+            benchmark_id: posthog-native-toolcache-mountcache
+            native_publish_intensity: aggressive
+            docker_tool_cache: turbo
+            docker_mount_cache: posthog-mounts
           - label: BC OCI + toolcache
             buildkit_backend: registry
             benchmark_id: posthog-oci-toolcache
@@ -100,6 +106,12 @@ jobs:
             benchmark_id: posthog-oci-mountcache
             native_publish_intensity: ""
             docker_tool_cache: ""
+            docker_mount_cache: posthog-mounts
+          - label: BC OCI + toolcache + mountcache
+            buildkit_backend: registry
+            benchmark_id: posthog-oci-toolcache-mountcache
+            native_publish_intensity: ""
+            docker_tool_cache: turbo
             docker_mount_cache: posthog-mounts
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

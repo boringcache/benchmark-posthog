@@ -53,7 +53,7 @@ on:
       cli_version:
         required: false
         type: string
-        default: v1.13.41
+        default: v1.13.43
       buildkit_image:
         description: 'BuildKit daemon image used by benchmark-created builders.'
         required: false

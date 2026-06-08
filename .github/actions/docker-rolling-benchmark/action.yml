@@ -36,7 +36,7 @@ inputs:
     default: linux-amd64
   cli_version:
     required: false
-    default: v1.13.41
+    default: v1.13.43
   buildkit_image:
     description: "BuildKit daemon image used by benchmark-created builders."
     required: false

@@ -1754,6 +1754,7 @@ JSON
       remote_cas_bytes="$(jq -r '.summary.remote_cas_bytes // empty' <<< "$storage_breakdown_payload")"
       dependency_archive_bytes="$(jq -r '.summary.dependency_archive_bytes // empty' <<< "$storage_breakdown_payload")"
       tool_runtime_archive_bytes="$(jq -r '.summary.tool_runtime_archive_bytes // empty' <<< "$storage_breakdown_payload")"
+      tool_cache_bytes="$(jq -r '.summary.tool_cache_bytes // empty' <<< "$storage_breakdown_payload")"
       if [[ -n "$remote_cas_bytes" ]]; then
         remote_cas_mib="$(awk -v bytes="$remote_cas_bytes" 'BEGIN { printf "%.2f", bytes / 1048576 }')"
         echo "| Remote CAS storage | ${remote_cas_mib} MiB |"
@@ -1765,6 +1766,10 @@ JSON
       if [[ -n "$tool_runtime_archive_bytes" ]]; then
         tool_runtime_archive_mib="$(awk -v bytes="$tool_runtime_archive_bytes" 'BEGIN { printf "%.2f", bytes / 1048576 }')"
         echo "| Tool runtime archive storage | ${tool_runtime_archive_mib} MiB |"
+      fi
+      if [[ -n "$tool_cache_bytes" ]]; then
+        tool_cache_mib="$(awk -v bytes="$tool_cache_bytes" 'BEGIN { printf "%.2f", bytes / 1048576 }')"
+        echo "| Tool cache storage | ${tool_cache_mib} MiB |"
       fi
     fi
   fi

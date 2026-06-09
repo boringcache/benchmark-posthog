@@ -20,6 +20,7 @@ build_output="${BENCHMARK_BUILD_OUTPUT:-none}"
 oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
 docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
 docker_mount_cache="${BORINGCACHE_DOCKER_MOUNT_CACHE:-}"
+docker_wrapper_mode="${BORINGCACHE_DOCKER_WRAPPER:-auto}"
 native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
 chmod 0777 "$native_tool_evidence_dir" 2>/dev/null || true
 native_tool_evidence_path="${native_tool_evidence_dir}/native-tool.json"
@@ -57,6 +58,26 @@ docker_mount_cache_enabled() {
     [[ "$profile" == "$requested_profile" ]] && return 0
   done
   return 1
+}
+
+use_wrapped_boringcache_build() {
+  case "$docker_wrapper_mode" in
+    always)
+      return 0
+      ;;
+    never)
+      return 1
+      ;;
+    auto)
+      [[ "$backend" == "native" || -n "$docker_tool_cache" || -n "$docker_mount_cache" ]] && return 0
+      [[ -z "${CACHE_FROM:-}" && -z "${CACHE_TO:-}" ]] && return 0
+      return 1
+      ;;
+    *)
+      echo "Unknown BORINGCACHE_DOCKER_WRAPPER: ${docker_wrapper_mode}" >&2
+      exit 1
+      ;;
+  esac
 }
 
 append_posthog_mount_cache_profile() {
@@ -683,7 +704,7 @@ while true; do
     exit 1
   fi
 
-  if [[ "$backend" == "native" || -n "$docker_tool_cache" || -n "$docker_mount_cache" ]]; then
+  if use_wrapped_boringcache_build; then
     run_wrapped_boringcache_build
   else
     require_readable_cache_import

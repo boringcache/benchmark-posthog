@@ -1,2 +1,10 @@
 .DS_Store
 .bc-sidecars/
+benchmark-diagnostics/
+benchmark-native-tool/
+benchmark-results/
+benchmark-session-summary/
+benchmark-storage/
+boringbuild/
+boringcache-linux-musl-amd64.local
+config/*.local.yml

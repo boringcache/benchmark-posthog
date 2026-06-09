@@ -797,7 +797,7 @@ jobs:
           breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
           exact_tags=""
           if [[ "$BUILDKIT_BACKEND" == "native" || "$BUILDKIT_BACKEND" == "registry" ]]; then
-            exact_tags="${{ steps.scope.outputs.registry_proxy_tags }}"
+            exact_tags="${tags_csv}"
           fi
           bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" BORINGCACHE_EXACT_TAGS="$exact_tags" .benchmark-config/scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
           echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"

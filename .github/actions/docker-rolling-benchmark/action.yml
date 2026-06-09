@@ -59,6 +59,10 @@ inputs:
     description: "Optional native BuildKit publisher intensity for benchmark proof lanes."
     required: false
     default: ""
+  materialize_compression:
+    description: "Optional native BuildKit materialized export compression, for example zstd-fast."
+    required: false
+    default: ""
   free_disk_space:
     required: false
     default: "false"
@@ -332,6 +336,7 @@ runs:
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
+        BORINGCACHE_BUILDKIT_MATERIALIZE_COMPRESSION: ${{ inputs.materialize_compression }}
         BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && inputs.docker_mount_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') && steps.tool_cache_buildx.outputs.name || inputs.strategy == 'actions-cache' && steps.buildx.outputs.name || '' }}
         CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
         CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}

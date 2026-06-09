@@ -21,6 +21,7 @@ oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
 docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
 docker_mount_cache="${BORINGCACHE_DOCKER_MOUNT_CACHE:-}"
 docker_wrapper_mode="${BORINGCACHE_DOCKER_WRAPPER:-auto}"
+materialize_compression="${BORINGCACHE_BUILDKIT_MATERIALIZE_COMPRESSION:-}"
 native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
 chmod 0777 "$native_tool_evidence_dir" 2>/dev/null || true
 native_tool_evidence_path="${native_tool_evidence_dir}/native-tool.json"
@@ -326,6 +327,9 @@ write_build_metrics() {
   fi
   if [[ "$backend" == "native" ]]; then
     echo "buildkit_backend=native" >> "$output_path"
+    if [[ -n "$materialize_compression" ]]; then
+      echo "materialize_compression=$materialize_compression" >> "$output_path"
+    fi
     if [[ -s "$native_tool_evidence_path" ]]; then
       echo "native_tool_evidence=$native_tool_evidence_path" >> "$output_path"
       append_native_tool_metrics "$native_tool_evidence_path" || true
@@ -523,6 +527,7 @@ write_build_diagnostics() {
     echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
     echo "docker_tool_cache=${docker_tool_cache}"
     echo "docker_mount_cache=${docker_mount_cache}"
+    echo "materialize_compression=${materialize_compression}"
     echo "docker_mount_cache_paths<<EOF"
     if [[ -d "${repo_root}/.bc-sidecars/posthog" ]]; then
       du -sh "${repo_root}/.bc-sidecars/posthog"/* 2>/dev/null || true
@@ -595,6 +600,9 @@ run_wrapped_boringcache_build() {
 
   if [[ "$backend" == "native" ]]; then
     boringcache_args+=(--native-tool-evidence-json "$native_tool_evidence_path")
+  fi
+  if [[ -n "$materialize_compression" ]]; then
+    boringcache_args+=(--metadata-hint "materialize_compression=${materialize_compression}")
   fi
 
   if [[ -n "$docker_tool_cache" ]]; then

@@ -12,6 +12,7 @@ buildkit_image="${BUILDKIT_IMAGE:-mirror.gcr.io/moby/buildkit:buildx-stable-1}"
 cli_image="${BORINGCACHE_NATIVE_CLI_IMAGE:-buildpack-deps:noble-curl}"
 proxy_port="${BORINGCACHE_PROXY_PORT:-5100}"
 oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
+materialize_compression="${BORINGCACHE_BUILDKIT_MATERIALIZE_COMPRESSION:-}"
 export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS:-1}"
 build_log="$(mktemp /tmp/boringcache-native-build.XXXXXX.log)"
 native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
@@ -173,6 +174,9 @@ boringcache_args=(
   --metadata-hint "backend=native"
   --fail-on-cache-error
 )
+if [[ -n "$materialize_compression" ]]; then
+  boringcache_args+=(--metadata-hint "materialize_compression=${materialize_compression}")
+fi
 
 if [[ "$mode" == "partial-warm" ]]; then
   boringcache_args+=(--read-only)
@@ -210,6 +214,7 @@ docker run --rm \
   -e BORINGCACHE_SAVE_TOKEN \
   -e BORINGCACHE_OCI_BODY_PREFETCH_MAX_MB \
   -e BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY \
+  -e BORINGCACHE_BUILDKIT_MATERIALIZE_COMPRESSION \
   -e "BORINGCACHE_OBSERVABILITY_JSONL_PATH=${observability_container_path}" \
   -e BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS \
   -e BORINGCACHE_TIMING_TRACE=1 \
@@ -347,6 +352,7 @@ if [[ -n "${BENCHMARK_METRICS_OUTPUT:-}" ]]; then
   write_metric docker_cache_import_seconds "$import_seconds"
   write_metric docker_cache_export_seconds "$final_publish_seconds"
   write_metric buildkit_backend native
+  write_metric materialize_compression "$materialize_compression"
   write_metric native_tool_evidence "$native_tool_evidence_path"
   append_native_tool_metrics "$native_tool_evidence_path" || append_native_observability_metrics "$observability_path" || true
 fi
@@ -364,6 +370,7 @@ if [[ -n "${BENCHMARK_DIAGNOSTICS_OUTPUT:-}" ]]; then
     echo "dockerfile_path=${dockerfile_path}"
     echo "docker_context=${docker_context}"
     echo "dockerfile_rel=${dockerfile_rel}"
+    echo "materialize_compression=${materialize_compression}"
     echo "import_status=${import_status}"
     echo "cached_steps=${cached_steps}"
     echo "wall_seconds=${wall_seconds}"

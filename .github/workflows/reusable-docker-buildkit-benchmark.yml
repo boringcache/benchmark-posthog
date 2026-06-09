@@ -957,7 +957,7 @@ jobs:
             emit cache_storage_bytes "$BC_BYTES"
             emit cache_storage_source "boringcache-check"
             emit cache_storage_breakdown_json "$BC_STORAGE_BREAKDOWN_PATH"
-            emit bytes_uploaded "$BC_BYTES"
+            emit network_bytes_uploaded "$SEED_OCI_NEW_BLOB_BYTES"
 
             if [[ "$CACHE_LANE" == "rolling" ]]; then
               emit hit_behavior_note "Rolling lane: one continuous-commit build imports the prior branch/default OCI cache, exports/promotes the updated cache, and records that commit build only. Fresh lane owns the separate cold-build plus warm-rerun parity check."
@@ -1029,7 +1029,7 @@ jobs:
             --cache-storage-bytes "${{ steps.normalize.outputs.cache_storage_bytes }}" \
             --cache-storage-source "${{ steps.normalize.outputs.cache_storage_source }}" \
             --storage-breakdown-json "${{ steps.normalize.outputs.cache_storage_breakdown_json }}" \
-            --bytes-uploaded "${{ steps.normalize.outputs.bytes_uploaded }}" \
+            --network-bytes-uploaded "${{ steps.normalize.outputs.network_bytes_uploaded }}" \
             --oci-hydration-policy "${{ steps.normalize.outputs.oci_hydration_policy }}" \
             --oci-body-local-hits "${{ steps.normalize.outputs.oci_body_local_hits }}" \
             --oci-body-remote-fetches "${{ steps.normalize.outputs.oci_body_remote_fetches }}" \

@@ -514,7 +514,7 @@ runs:
           --cache-storage-bytes "${{ steps.storage.outputs.bytes }}" \
           --cache-storage-source "${{ steps.storage.outputs.source }}" \
           --storage-breakdown-json "${{ steps.storage.outputs.breakdown_path }}" \
-          --bytes-uploaded "${{ steps.storage.outputs.bytes }}" \
+          --network-bytes-uploaded "${{ steps.build.outputs.oci_new_blob_bytes }}" \
           --oci-hydration-policy "${{ steps.build.outputs.oci_hydration_policy }}" \
           --oci-body-local-hits "${{ steps.build.outputs.oci_body_local_hits }}" \
           --oci-body-remote-fetches "${{ steps.build.outputs.oci_body_remote_fetches }}" \

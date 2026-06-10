@@ -111,11 +111,11 @@ jobs:
             materialize_compression: ""
             docker_tool_cache: ""
             docker_mount_cache: ""
-          - label: BC Native zstd
+          - label: BC Native gzip
             buildkit_backend: native
-            benchmark_id: posthog-native-zstd
+            benchmark_id: posthog-native-gzip
             native_publish_intensity: aggressive
-            materialize_compression: zstd-fast
+            materialize_compression: gzip-fast
             docker_tool_cache: ""
             docker_mount_cache: ""
           - label: BC Native + toolcache

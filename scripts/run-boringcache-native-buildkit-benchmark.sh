@@ -309,6 +309,15 @@ append_native_observability_metrics() {
   fi
 }
 
+append_network_upload_metric() {
+  local evidence_file="$1" final_save_bytes="$2"
+  local writethrough_bytes
+  writethrough_bytes="$(jq -r '.publisher.publish_blob_bytes // 0' "$evidence_file" 2>/dev/null || echo 0)"
+  [[ "$writethrough_bytes" =~ ^[0-9]+$ ]] || writethrough_bytes=0
+  [[ "$final_save_bytes" =~ ^[0-9]+$ ]] || final_save_bytes=0
+  write_metric network_upload_bytes "$((writethrough_bytes + final_save_bytes))"
+}
+
 append_native_tool_metrics() {
   local evidence_file="$1"
   [[ -s "$evidence_file" ]] || return 1
@@ -331,6 +340,7 @@ append_native_tool_metrics() {
       write_metric oci_upload_already_present 0
       write_metric oci_new_blob_bytes 0
       write_metric oci_upload_batch_seconds 0
+      append_network_upload_metric "$evidence_file" 0
       return 0
     fi
   fi
@@ -341,6 +351,7 @@ append_native_tool_metrics() {
   write_metric oci_upload_already_present "$already_present"
   write_metric oci_new_blob_bytes "$uploaded_bytes"
   write_metric oci_upload_batch_seconds "$final_save_seconds"
+  append_network_upload_metric "$evidence_file" "$uploaded_bytes"
 }
 
 if [[ -n "${BENCHMARK_METRICS_OUTPUT:-}" ]]; then

@@ -441,6 +441,11 @@ append_native_tool_metrics() {
   append_metric oci_upload_already_present "$already_present"
   append_metric oci_new_blob_bytes "$uploaded_bytes"
   append_metric oci_upload_batch_seconds "$save_seconds"
+  local writethrough_bytes
+  writethrough_bytes="$(jq -r '.publisher.publish_blob_bytes // 0' "$evidence_file" 2>/dev/null || echo 0)"
+  [[ "$writethrough_bytes" =~ ^[0-9]+$ ]] || writethrough_bytes=0
+  [[ "$uploaded_bytes" =~ ^[0-9]+$ ]] || uploaded_bytes=0
+  append_metric network_upload_bytes "$((writethrough_bytes + uploaded_bytes))"
   if [[ "$export_seconds" =~ ^[0-9]+([.][0-9]+)?$ && "$save_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
     awk -v export_s="$export_seconds" -v save_s="$save_seconds" 'BEGIN { printf "docker_cache_export_seconds=%.3f\n", export_s + save_s }' >> "$output_path"
   fi

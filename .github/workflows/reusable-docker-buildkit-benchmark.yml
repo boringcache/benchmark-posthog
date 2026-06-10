@@ -847,6 +847,7 @@ jobs:
           SEED_STARTUP_OCI_BODY_DURATION_MS: ${{ steps.cold_baseline_build.outputs.startup_oci_body_duration_ms }}
           SEED_OCI_NEW_BLOB_COUNT: ${{ steps.cold_baseline_build.outputs.oci_new_blob_count }}
           SEED_OCI_NEW_BLOB_BYTES: ${{ steps.cold_baseline_build.outputs.oci_new_blob_bytes }}
+          SEED_NETWORK_UPLOAD_BYTES: ${{ steps.cold_baseline_build.outputs.network_upload_bytes }}
           SEED_OCI_UPLOAD_REQUESTED_BLOBS: ${{ steps.cold_baseline_build.outputs.oci_upload_requested_blobs }}
           SEED_OCI_UPLOAD_ALREADY_PRESENT: ${{ steps.cold_baseline_build.outputs.oci_upload_already_present }}
           SEED_OCI_UPLOAD_BATCH_SECONDS: ${{ steps.cold_baseline_build.outputs.oci_upload_batch_seconds }}
@@ -957,7 +958,7 @@ jobs:
             emit cache_storage_bytes "$BC_BYTES"
             emit cache_storage_source "boringcache-check"
             emit cache_storage_breakdown_json "$BC_STORAGE_BREAKDOWN_PATH"
-            emit network_bytes_uploaded "$SEED_OCI_NEW_BLOB_BYTES"
+            emit network_bytes_uploaded "${SEED_NETWORK_UPLOAD_BYTES:-$SEED_OCI_NEW_BLOB_BYTES}"
 
             if [[ "$CACHE_LANE" == "rolling" ]]; then
               emit hit_behavior_note "Rolling lane: one continuous-commit build imports the prior branch/default OCI cache, exports/promotes the updated cache, and records that commit build only. Fresh lane owns the separate cold-build plus warm-rerun parity check."

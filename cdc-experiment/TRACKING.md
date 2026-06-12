@@ -25,3 +25,11 @@ zstd-3). `bugs`: `clean` or comma-separated signatures (see CYCLE.md step 7).
 | 2026-06-12T19:35Z | 252->253 | oci | 53/87 | 19882 | 5130 | 65.4% | 79.6% | 1374 | 3.7x | chronic-put-noise |
 | 2026-06-12T20:25Z | 253->254 | native | 43/85 | 14149 | 3784 | 77.8% | 92.6% | 760 | 5.0x | chronic-put-noise |
 | 2026-06-12T20:25Z | 253->254 | oci | 33/87 | 13128 | 3202 | 76.4% | 92.0% | 748 | 4.3x | chronic-put-noise |
+
+**Tracking window closed 2026-06-12T20:55Z** — 10 consecutive run-pairs
+(#244->#254), 19 pair-lane rows, 317GB analyzed. Final aggregates:
+weighted naive 64K = 71.2%; measured wire reduction = 4.02x avg
+(72.2GB -> 18.0GB, range 2.9-5.0x across all commit types); cross-producer
+dedup 76.9% naive / 93.0% file-aware. No new bug signatures beyond the
+chronic publish put-error noise (every run, known class). To resume
+tracking: follow CYCLE.md (needs a fresh restore token).

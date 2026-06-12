@@ -33,9 +33,30 @@ chunking is NOT required for viability.
 | 244->245 | OCI | 13.07 GB (33/88 blobs) | 3.20 GB | 75.8% | 83.7% | 90.0% (64K) / 91.0% (16K) |
 | 245->246 | OCI | 13.07 GB (33/88 blobs) | 3.20 GB | 73.0% | 82.7% | 86.4% (64K) / 89.7% (16K) |
 | 245->246 | native | 14.60 GB (50/90 blobs) | 3.94 GB | 74.6% | 83.6% | 87.5% (64K) / 90.4% (16K) |
+| 246->247 | native | 20.49 GB (56/83 blobs) | 5.56 GB | 70.0% | 79.8% | 82.8% (64K) / 87.8% (16K) |
+| 246->247 | OCI | 19.94 GB (53/86 blobs) | 5.15 GB | 69.3% | 79.3% | 82.3% (64K) / 87.4% (16K) |
 
-Sizing: naive CDC cuts re-uploaded bytes ~4x at 64K (~5-6x at 16K),
-approximating compressed savings by uncompressed dedup share.
+Pair 246->247 is a HEAVY upstream diff (~60% of blobs churned, ~1.6x the
+re-upload of typical pairs) and maps the lower edge of the band: 64K naive
+sits at the ~70% threshold; 16K stays comfortably above on every pair.
+Design implication: favor ~16K chunks (or dual-tier) - heavy-commit runs
+are exactly where the transfer savings matter most.
+
+## Product-path wire bytes (measured, pair 246->247, 64K)
+
+`wire_bytes.sh`: novel chunks (absent from the previous run's store)
+batched per blob through zstd-3 - the bytes a CDC upload would actually
+transfer:
+
+| lane | full re-upload today | wire bytes | reduction |
+|------|---------------------|-----------|-----------|
+| native | 5.56 GB | 1.40 GB | 4.0x |
+| OCI | 5.15 GB | 1.39 GB | 3.7x |
+
+Measured on the WORST pair: novel content still compresses ~4.4:1, so the
+wire reduction beats the uncompressed-share approximation (~3.3x). Typical
+pairs (73-76% naive) project ~5x+ at 64K, more at 16K. Rolling per-pair
+tracking continues in `TRACKING.md` (procedure: `CYCLE.md`).
 
 Reading notes:
 - frontend-assets dominates churn (~75-80% of changed bytes) and dedups
@@ -461,4 +482,360 @@ compressed bytes: free-today 3024MB, re-uploaded 3199MB
   TOTAL                13065.9MB  naive  82.7%  file-aware  89.7%
 
 verdict guide: naive>=70% -> CDC pays as-is; naive<40% but file-aware high -> needs tar-aware chunking; both low -> content truly churns, CDC does not pay
+```
+## Full output: native-246-247-64k
+
+```
+run A blobs: 90  run B blobs: 83  identical digests: 27
+changed blobs in B (re-uploaded today): 56
+compressed bytes: free-today 867MB, re-uploaded 5560MB
+  02f2710fa959 frontend-assets    uncomp=  2659.2MB naive= 74.5% file-aware= 80.1%
+  0537b7c033f0 frontend-assets    uncomp=  1710.4MB naive= 61.1% file-aware= 65.8%
+  192d76e7b2ad other(code/common) uncomp=    24.7MB naive= 97.8% file-aware=100.0%
+  1f1fe7ef5d17 other(code/ee)     uncomp=    18.1MB naive= 46.0% file-aware= 99.0%
+  21aa9e6291bd frontend-assets    uncomp=  1320.2MB naive= 74.7% file-aware= 80.3%
+  3180758b5b2d other(code/common) uncomp=     0.3MB naive=  0.0% file-aware= 94.0%
+  35b43b4bf188 node_modules       uncomp=     1.7MB naive= 67.2% file-aware= 69.9%
+  3abbbfe28f46 other(code/products) uncomp=    40.7MB naive=  6.1% file-aware= 96.3%
+  3d6be4c0ad01 other(code/manage.py) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  52c1aebc475a frontend-assets    uncomp=  1320.2MB naive= 74.7% file-aware= 80.3%
+  55bcebab2778 other(code/bin)    uncomp=     0.8MB naive=  5.9% file-aware= 99.4%
+  56b48d0aebcb other(code/patches) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  5e830770e6d4 other(docker-entrypoint.d/unit.json.tpl) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  643dc455e9e6 other(code/common) uncomp=     0.5MB naive=  0.0% file-aware=100.0%
+  6ba50bbcff8e node_modules       uncomp=   478.9MB naive= 73.6% file-aware= 99.4%
+  738449c80a33 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  7afb20df0738 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  7cd1d05b083c frontend-assets    uncomp=  1320.2MB naive= 74.7% file-aware= 80.3%
+  827c9fa18101 os/apt             uncomp=    76.6MB naive= 94.1% file-aware= 99.4%
+  850604f28392 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  862f1f4624be other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  89bf7c8f504d frontend-assets    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  8fa895469bf3 other(tmp/.sourcemaps-status) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  947394262b8f other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  9e818dd66659 frontend-assets    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  a0da208e4aa1 other(code/common) uncomp=     0.3MB naive=  0.0% file-aware=100.0%
+  a3e34ec55622 python             uncomp=  3120.2MB naive= 68.2% file-aware= 87.8%
+  a73af309daa7 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  a775f72c5b8e other(tmp/.sourcemaps-status) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  ab29cd9cc597 other(code/posthog) uncomp=    89.3MB naive= 41.8% file-aware= 95.5%
+  addfae223fd6 other(code/ee)     uncomp=    18.1MB naive= 46.0% file-aware= 99.0%
+  b14c2e6febcc node_modules       uncomp=  1650.0MB naive= 58.5% file-aware= 99.9%
+  b4bb919b54cc os/apt             uncomp=   471.9MB naive= 94.0% file-aware=100.0%
+  c0e830c2ff2b frontend-assets    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  c3ab81a8ec83 other(home/posthog) uncomp=     0.1MB naive=  0.0% file-aware= 44.1%
+  c5e5b7c328d0 python             uncomp=  3124.6MB naive= 68.1% file-aware= 87.8%
+  c69f010600a2 other(code/rust)   uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  cc831165973b frontend-assets    uncomp=  2647.9MB naive= 74.8% file-aware= 80.3%
+  d049d91c005a other(code/common) uncomp=     0.5MB naive=  0.0% file-aware=100.0%
+  d0a029ce1548 other(code/bin)    uncomp=     0.8MB naive=  5.9% file-aware= 99.4%
+  d0eb3219f43d other(code/share)  uncomp=    66.0MB naive= 99.9% file-aware=100.0%
+  d2e33298a6ed other(code/common) uncomp=    24.7MB naive= 97.8% file-aware=100.0%
+  d35049f67d6f other(code)        uncomp=     0.0MB naive=  0.0% file-aware=  0.0%
+  d49a351f7a48 other(code/bin)    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  d5348651986b other(code/docs)   uncomp=     1.3MB naive=  0.0% file-aware=100.0%
+  dec84bbc3bdf other(code/products) uncomp=    40.7MB naive=  6.1% file-aware= 96.3%
+  e2620d328492 other(code/common) uncomp=    10.5MB naive= 98.7% file-aware=100.0%
+  e2f95dd84b70 other(code/posthog) uncomp=    89.3MB naive= 41.9% file-aware= 95.5%
+  ee65655bcdd5 other(code/products) uncomp=    40.7MB naive=  6.1% file-aware= 96.3%
+  efefe08515a7 frontend-assets    uncomp=     0.1MB naive=  0.0% file-aware= 88.4%
+  f4614195aeb1 other(tmp)         uncomp=     0.0MB naive=  0.0% file-aware=  0.0%
+  f6562055930f other(usr/bin)     uncomp=    58.1MB naive= 99.9% file-aware=100.0%
+  fb7542612e21 other(code/packages) uncomp=     2.2MB naive=  3.1% file-aware=100.0%
+  fe2ddf6da2a8 frontend-assets    uncomp=    63.3MB naive= 24.1% file-aware= 94.6%
+  fe8484e2d8e9 other(code/manage.py) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  ffa9b260c219 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+
+== per-class dedup of changed blobs (avg chunk 64K) ==
+  frontend-assets      11041.3MB  naive  72.3%  file-aware  77.9%
+  python                6244.8MB  naive  68.1%  file-aware  85.7%
+  node_modules          2130.5MB  naive  61.9%  file-aware  92.9%
+  os/apt                 548.5MB  naive  94.1%  file-aware  98.9%
+  other(code/posthog)     178.6MB  naive  41.8%  file-aware  90.6%
+  other(code/products)     122.1MB  naive   6.1%  file-aware  86.2%
+  other(code/share)       66.0MB  naive  99.9%  file-aware 100.0%
+  other(code/common)      61.5MB  naive  95.2%  file-aware  99.5%
+  other(usr/bin)          58.1MB  naive  99.9%  file-aware 100.0%
+  other(code/ee)          36.2MB  naive  46.0%  file-aware  94.5%
+  other(code/packages)       2.2MB  naive   3.1%  file-aware  86.2%
+  other(code/bin)          1.6MB  naive   5.9%  file-aware  85.7%
+  other(code/docs)         1.3MB  naive   0.0%  file-aware  84.0%
+  other(home/posthog)       0.1MB  naive   0.0%  file-aware  38.2%
+  other(code/patches)       0.0MB  naive   0.0%  file-aware  86.8%
+  other(code/rust)         0.0MB  naive   0.0%  file-aware  70.1%
+  other(code/manage.py)       0.0MB  naive   0.0%  file-aware  49.5%
+  other(tmp/.sourcemaps-status)       0.0MB  naive   0.0%  file-aware   0.3%
+  other(docker-entrypoint.d/unit.json.tpl)       0.0MB  naive   0.0%  file-aware  42.7%
+  other(tmp)               0.0MB  naive   0.0%  file-aware   0.0%
+  other(code)              0.0MB  naive   0.0%  file-aware   0.0%
+  TOTAL                20492.7MB  naive  70.0%  file-aware  82.8%
+
+verdict guide: naive>=70% -> CDC pays as-is; naive<40% but file-aware high -> needs tar-aware chunking; both low -> content truly churns, CDC does not pay
+```
+
+## Full output: native-246-247-16k
+
+```
+run A blobs: 90  run B blobs: 83  identical digests: 27
+changed blobs in B (re-uploaded today): 56
+compressed bytes: free-today 867MB, re-uploaded 5560MB
+  02f2710fa959 frontend-assets    uncomp=  2659.2MB naive= 84.7% file-aware= 87.3%
+  0537b7c033f0 frontend-assets    uncomp=  1710.4MB naive= 70.3% file-aware= 72.4%
+  192d76e7b2ad other(code/common) uncomp=    24.7MB naive= 99.7% file-aware=100.0%
+  1f1fe7ef5d17 other(code/ee)     uncomp=    18.1MB naive= 56.3% file-aware= 99.1%
+  21aa9e6291bd frontend-assets    uncomp=  1320.2MB naive= 85.0% file-aware= 87.5%
+  3180758b5b2d other(code/common) uncomp=     0.3MB naive=  0.0% file-aware= 94.0%
+  35b43b4bf188 node_modules       uncomp=     1.7MB naive= 89.2% file-aware= 92.9%
+  3abbbfe28f46 other(code/products) uncomp=    40.7MB naive= 24.1% file-aware= 97.3%
+  3d6be4c0ad01 other(code/manage.py) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  52c1aebc475a frontend-assets    uncomp=  1320.2MB naive= 85.0% file-aware= 87.5%
+  55bcebab2778 other(code/bin)    uncomp=     0.8MB naive= 12.3% file-aware= 99.4%
+  56b48d0aebcb other(code/patches) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  5e830770e6d4 other(docker-entrypoint.d/unit.json.tpl) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  643dc455e9e6 other(code/common) uncomp=     0.5MB naive= 20.9% file-aware=100.0%
+  6ba50bbcff8e node_modules       uncomp=   478.9MB naive= 79.6% file-aware= 99.5%
+  738449c80a33 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  7afb20df0738 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  7cd1d05b083c frontend-assets    uncomp=  1320.2MB naive= 85.0% file-aware= 87.5%
+  827c9fa18101 os/apt             uncomp=    76.6MB naive= 97.3% file-aware= 99.7%
+  850604f28392 other(code/common) uncomp=     0.0MB naive= 20.7% file-aware=100.0%
+  862f1f4624be other(code/common) uncomp=     0.0MB naive= 20.7% file-aware=100.0%
+  89bf7c8f504d frontend-assets    uncomp=     0.0MB naive= 76.3% file-aware=100.0%
+  8fa895469bf3 other(tmp/.sourcemaps-status) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  947394262b8f other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  9e818dd66659 frontend-assets    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  a0da208e4aa1 other(code/common) uncomp=     0.3MB naive= 30.3% file-aware=100.0%
+  a3e34ec55622 python             uncomp=  3120.2MB naive= 77.7% file-aware= 91.8%
+  a73af309daa7 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  a775f72c5b8e other(tmp/.sourcemaps-status) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  ab29cd9cc597 other(code/posthog) uncomp=    89.3MB naive= 55.0% file-aware= 97.3%
+  addfae223fd6 other(code/ee)     uncomp=    18.1MB naive= 56.1% file-aware= 99.1%
+  b14c2e6febcc node_modules       uncomp=  1650.0MB naive= 69.5% file-aware= 99.9%
+  b4bb919b54cc os/apt             uncomp=   471.9MB naive= 97.3% file-aware=100.0%
+  c0e830c2ff2b frontend-assets    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  c3ab81a8ec83 other(home/posthog) uncomp=     0.1MB naive=  0.0% file-aware= 44.1%
+  c5e5b7c328d0 python             uncomp=  3124.6MB naive= 77.7% file-aware= 91.8%
+  c69f010600a2 other(code/rust)   uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  cc831165973b frontend-assets    uncomp=  2647.9MB naive= 85.0% file-aware= 87.5%
+  d049d91c005a other(code/common) uncomp=     0.5MB naive= 20.9% file-aware=100.0%
+  d0a029ce1548 other(code/bin)    uncomp=     0.8MB naive= 12.3% file-aware= 99.4%
+  d0eb3219f43d other(code/share)  uncomp=    66.0MB naive=100.0% file-aware=100.0%
+  d2e33298a6ed other(code/common) uncomp=    24.7MB naive= 99.6% file-aware=100.0%
+  d35049f67d6f other(code)        uncomp=     0.0MB naive=  0.0% file-aware=  0.0%
+  d49a351f7a48 other(code/bin)    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  d5348651986b other(code/docs)   uncomp=     1.3MB naive=  0.0% file-aware=100.0%
+  dec84bbc3bdf other(code/products) uncomp=    40.7MB naive= 24.2% file-aware= 97.3%
+  e2620d328492 other(code/common) uncomp=    10.5MB naive= 99.2% file-aware=100.0%
+  e2f95dd84b70 other(code/posthog) uncomp=    89.3MB naive= 54.9% file-aware= 97.3%
+  ee65655bcdd5 other(code/products) uncomp=    40.7MB naive= 24.2% file-aware= 97.3%
+  efefe08515a7 frontend-assets    uncomp=     0.1MB naive=  0.0% file-aware= 88.4%
+  f4614195aeb1 other(tmp)         uncomp=     0.0MB naive=  0.0% file-aware=  0.0%
+  f6562055930f other(usr/bin)     uncomp=    58.1MB naive=100.0% file-aware=100.0%
+  fb7542612e21 other(code/packages) uncomp=     2.2MB naive=  7.4% file-aware=100.0%
+  fe2ddf6da2a8 frontend-assets    uncomp=    63.3MB naive= 42.5% file-aware= 96.7%
+  fe8484e2d8e9 other(code/manage.py) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  ffa9b260c219 other(code/common) uncomp=     0.0MB naive= 38.5% file-aware=100.0%
+
+== per-class dedup of changed blobs (avg chunk 16K) ==
+  frontend-assets      11041.3MB  naive  82.4%  file-aware  84.9%
+  python                6244.8MB  naive  77.7%  file-aware  89.5%
+  node_modules          2130.5MB  naive  71.8%  file-aware  92.9%
+  os/apt                 548.5MB  naive  97.3%  file-aware  98.9%
+  other(code/posthog)     178.6MB  naive  54.9%  file-aware  92.3%
+  other(code/products)     122.1MB  naive  24.2%  file-aware  87.1%
+  other(code/share)       66.0MB  naive 100.0%  file-aware 100.0%
+  other(code/common)      61.5MB  naive  97.4%  file-aware  99.5%
+  other(usr/bin)          58.1MB  naive 100.0%  file-aware 100.0%
+  other(code/ee)          36.2MB  naive  56.2%  file-aware  94.6%
+  other(code/packages)       2.2MB  naive   7.4%  file-aware  86.2%
+  other(code/bin)          1.6MB  naive  12.3%  file-aware  85.7%
+  other(code/docs)         1.3MB  naive   0.0%  file-aware  84.0%
+  other(home/posthog)       0.1MB  naive   0.0%  file-aware  38.2%
+  other(code/patches)       0.0MB  naive   0.0%  file-aware  86.8%
+  other(code/rust)         0.0MB  naive   0.0%  file-aware  70.1%
+  other(code/manage.py)       0.0MB  naive   0.0%  file-aware  49.5%
+  other(tmp/.sourcemaps-status)       0.0MB  naive   0.0%  file-aware   0.3%
+  other(docker-entrypoint.d/unit.json.tpl)       0.0MB  naive   0.0%  file-aware  42.7%
+  other(tmp)               0.0MB  naive   0.0%  file-aware   0.0%
+  other(code)              0.0MB  naive   0.0%  file-aware   0.0%
+  TOTAL                20492.7MB  naive  79.8%  file-aware  87.8%
+
+verdict guide: naive>=70% -> CDC pays as-is; naive<40% but file-aware high -> needs tar-aware chunking; both low -> content truly churns, CDC does not pay
+```
+
+## Full output: oci-246-247-64k
+
+```
+run A blobs: 88  run B blobs: 86  identical digests: 33
+changed blobs in B (re-uploaded today): 53
+compressed bytes: free-today 1095MB, re-uploaded 5153MB
+  0161826f2730 other(code/manage.py) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  023e8741752e other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  05ae3782d1c0 python             uncomp=  3124.6MB naive= 68.0% file-aware= 87.8%
+  06b0752af5a0 frontend-assets    uncomp=  1320.2MB naive= 74.7% file-aware= 80.3%
+  06f8486b879b frontend-assets    uncomp=    63.3MB naive= 24.1% file-aware= 94.6%
+  0c711442cbd0 other(code/bin)    uncomp=     0.8MB naive=  5.9% file-aware= 99.4%
+  128c320fc39f other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  1b221df60bc1 other(code/common) uncomp=     0.5MB naive=  0.0% file-aware=100.0%
+  260837116a11 node_modules       uncomp=  1650.0MB naive= 58.5% file-aware= 99.9%
+  286d1244e526 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  2d640d180097 other(code/ee)     uncomp=    18.1MB naive= 46.0% file-aware= 99.0%
+  2e2c6528bacc node_modules       uncomp=     1.7MB naive= 67.2% file-aware= 69.9%
+  2ea3368b6068 other(tmp)         uncomp=     0.0MB naive=  0.0% file-aware=  0.0%
+  30deb386c663 other(code/common) uncomp=     0.5MB naive=  0.0% file-aware=100.0%
+  30f35b91871c frontend-assets    uncomp=  1320.2MB naive= 74.7% file-aware= 80.3%
+  3e2f907eeec3 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  4a19734e5f7f other(code/rust)   uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  6013ff46ca4e other(tmp/.sourcemaps-status) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  61004849125d other(code/common) uncomp=     0.3MB naive=  0.0% file-aware=100.0%
+  6155a2eb6d68 frontend-assets    uncomp=     0.1MB naive=  0.0% file-aware= 88.4%
+  673cae4c7b5b frontend-assets    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  690850c4307c os/apt             uncomp=    76.6MB naive= 94.2% file-aware= 99.5%
+  6c1d3208c02f other(code/posthog) uncomp=    89.3MB naive= 41.9% file-aware= 95.5%
+  6e1981370110 other(code/common) uncomp=    24.7MB naive= 97.8% file-aware=100.0%
+  705411aeee87 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  77e37462204f other(code/bin)    uncomp=     0.8MB naive=  5.9% file-aware= 99.4%
+  7960074ad9c0 other(code/products) uncomp=    40.7MB naive=  6.1% file-aware= 96.3%
+  7d721261a24e python             uncomp=  3120.2MB naive= 68.1% file-aware= 87.8%
+  913cfb1a248b frontend-assets    uncomp=  2647.9MB naive= 74.8% file-aware= 80.3%
+  a367a3012f4a other(code/ee)     uncomp=    18.1MB naive= 46.0% file-aware= 99.0%
+  a6495ff58578 other(code/common) uncomp=    10.5MB naive= 98.7% file-aware=100.0%
+  a663401af177 other(home/posthog) uncomp=     0.1MB naive=  0.0% file-aware= 44.1%
+  ad7a2d12f457 other(docker-entrypoint.d/unit.json.tpl) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  b8eac73f9b87 node_modules       uncomp=   478.9MB naive= 73.7% file-aware= 99.4%
+  d1da1819dd8e other(code/bin)    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  d32a8df7a06b other(code/manage.py) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  da03898e0c22 frontend-assets    uncomp=  2659.2MB naive= 74.5% file-aware= 80.1%
+  dae42a5788c4 other(code/patches) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  db6d2a53e8e1 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  dc3ddd4bcf7f other(code/products) uncomp=    40.7MB naive=  6.1% file-aware= 96.3%
+  dddf18bc1b46 other(code/common) uncomp=     0.3MB naive=  0.0% file-aware= 94.0%
+  e5021361e542 frontend-assets    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  e6ea08fd709b other(code/common) uncomp=    24.7MB naive= 97.8% file-aware=100.0%
+  e803c34da212 frontend-assets    uncomp=  1320.2MB naive= 74.7% file-aware= 80.3%
+  eea9b1a5442e other(tmp/.sourcemaps-status) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  f0bb2a12cfd7 other(code/posthog) uncomp=    89.3MB naive= 41.8% file-aware= 95.5%
+  f56497209b8a other(code/share)  uncomp=    43.9MB naive= 99.8% file-aware=100.0%
+  f6b7d043f13d frontend-assets    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  f836107d04c1 other(code/packages) uncomp=     2.2MB naive=  3.1% file-aware=100.0%
+  f9704c9ad14c other(code/docs)   uncomp=     1.3MB naive=  0.0% file-aware=100.0%
+  fb5036b859ef other(code/products) uncomp=    40.7MB naive=  6.1% file-aware= 96.3%
+  fd9aa183dd18 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  fee9fd8ca06e frontend-assets    uncomp=  1710.4MB naive= 61.1% file-aware= 65.8%
+
+== per-class dedup of changed blobs (avg chunk 64K) ==
+  frontend-assets      11041.3MB  naive  72.3%  file-aware  77.9%
+  python                6244.8MB  naive  68.1%  file-aware  85.6%
+  node_modules          2130.5MB  naive  61.9%  file-aware  92.9%
+  other(code/posthog)     178.6MB  naive  41.8%  file-aware  90.6%
+  other(code/products)     122.1MB  naive   6.1%  file-aware  86.2%
+  os/apt                  76.6MB  naive  94.2%  file-aware  99.1%
+  other(code/common)      61.5MB  naive  95.2%  file-aware  99.5%
+  other(code/share)       43.9MB  naive  99.8%  file-aware 100.0%
+  other(code/ee)          36.2MB  naive  46.0%  file-aware  94.5%
+  other(code/packages)       2.2MB  naive   3.1%  file-aware  86.2%
+  other(code/bin)          1.6MB  naive   5.9%  file-aware  85.7%
+  other(code/docs)         1.3MB  naive   0.0%  file-aware  84.0%
+  other(home/posthog)       0.1MB  naive   0.0%  file-aware  38.2%
+  other(code/patches)       0.0MB  naive   0.0%  file-aware  86.8%
+  other(code/rust)         0.0MB  naive   0.0%  file-aware  70.1%
+  other(code/manage.py)       0.0MB  naive   0.0%  file-aware  49.5%
+  other(tmp/.sourcemaps-status)       0.0MB  naive   0.0%  file-aware   0.3%
+  other(docker-entrypoint.d/unit.json.tpl)       0.0MB  naive   0.0%  file-aware  42.7%
+  other(tmp)               0.0MB  naive   0.0%  file-aware   0.0%
+  TOTAL                19940.7MB  naive  69.3%  file-aware  82.3%
+
+verdict guide: naive>=70% -> CDC pays as-is; naive<40% but file-aware high -> needs tar-aware chunking; both low -> content truly churns, CDC does not pay
+```
+
+## Full output: oci-246-247-16k
+
+```
+run A blobs: 88  run B blobs: 86  identical digests: 33
+changed blobs in B (re-uploaded today): 53
+compressed bytes: free-today 1095MB, re-uploaded 5153MB
+  0161826f2730 other(code/manage.py) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  023e8741752e other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  05ae3782d1c0 python             uncomp=  3124.6MB naive= 77.7% file-aware= 91.8%
+  06b0752af5a0 frontend-assets    uncomp=  1320.2MB naive= 85.0% file-aware= 87.5%
+  06f8486b879b frontend-assets    uncomp=    63.3MB naive= 42.5% file-aware= 96.7%
+  0c711442cbd0 other(code/bin)    uncomp=     0.8MB naive= 12.3% file-aware= 99.4%
+  128c320fc39f other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  1b221df60bc1 other(code/common) uncomp=     0.5MB naive= 20.9% file-aware=100.0%
+  260837116a11 node_modules       uncomp=  1650.0MB naive= 69.5% file-aware= 99.9%
+  286d1244e526 other(code/common) uncomp=     0.0MB naive= 20.7% file-aware=100.0%
+  2d640d180097 other(code/ee)     uncomp=    18.1MB naive= 56.3% file-aware= 99.1%
+  2e2c6528bacc node_modules       uncomp=     1.7MB naive= 89.2% file-aware= 92.9%
+  2ea3368b6068 other(tmp)         uncomp=     0.0MB naive=  0.0% file-aware=  0.0%
+  30deb386c663 other(code/common) uncomp=     0.5MB naive= 20.9% file-aware=100.0%
+  30f35b91871c frontend-assets    uncomp=  1320.2MB naive= 85.0% file-aware= 87.5%
+  3e2f907eeec3 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  4a19734e5f7f other(code/rust)   uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  6013ff46ca4e other(tmp/.sourcemaps-status) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  61004849125d other(code/common) uncomp=     0.3MB naive= 30.3% file-aware=100.0%
+  6155a2eb6d68 frontend-assets    uncomp=     0.1MB naive=  0.0% file-aware= 88.4%
+  673cae4c7b5b frontend-assets    uncomp=     0.0MB naive= 76.3% file-aware=100.0%
+  690850c4307c os/apt             uncomp=    76.6MB naive= 97.3% file-aware= 99.7%
+  6c1d3208c02f other(code/posthog) uncomp=    89.3MB naive= 54.9% file-aware= 97.3%
+  6e1981370110 other(code/common) uncomp=    24.7MB naive= 99.6% file-aware=100.0%
+  705411aeee87 other(code/common) uncomp=     0.0MB naive= 20.7% file-aware=100.0%
+  77e37462204f other(code/bin)    uncomp=     0.8MB naive= 12.3% file-aware= 99.4%
+  7960074ad9c0 other(code/products) uncomp=    40.7MB naive= 24.1% file-aware= 97.3%
+  7d721261a24e python             uncomp=  3120.2MB naive= 77.7% file-aware= 91.8%
+  913cfb1a248b frontend-assets    uncomp=  2647.9MB naive= 85.0% file-aware= 87.5%
+  a367a3012f4a other(code/ee)     uncomp=    18.1MB naive= 56.1% file-aware= 99.1%
+  a6495ff58578 other(code/common) uncomp=    10.5MB naive= 99.2% file-aware=100.0%
+  a663401af177 other(home/posthog) uncomp=     0.1MB naive=  0.0% file-aware= 44.1%
+  ad7a2d12f457 other(docker-entrypoint.d/unit.json.tpl) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  b8eac73f9b87 node_modules       uncomp=   478.9MB naive= 79.7% file-aware= 99.5%
+  d1da1819dd8e other(code/bin)    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  d32a8df7a06b other(code/manage.py) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  da03898e0c22 frontend-assets    uncomp=  2659.2MB naive= 84.7% file-aware= 87.3%
+  dae42a5788c4 other(code/patches) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  db6d2a53e8e1 other(code/common) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  dc3ddd4bcf7f other(code/products) uncomp=    40.7MB naive= 24.2% file-aware= 97.3%
+  dddf18bc1b46 other(code/common) uncomp=     0.3MB naive=  0.0% file-aware= 94.0%
+  e5021361e542 frontend-assets    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  e6ea08fd709b other(code/common) uncomp=    24.7MB naive= 99.7% file-aware=100.0%
+  e803c34da212 frontend-assets    uncomp=  1320.2MB naive= 85.0% file-aware= 87.5%
+  eea9b1a5442e other(tmp/.sourcemaps-status) uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  f0bb2a12cfd7 other(code/posthog) uncomp=    89.3MB naive= 55.0% file-aware= 97.3%
+  f56497209b8a other(code/share)  uncomp=    43.9MB naive=100.0% file-aware=100.0%
+  f6b7d043f13d frontend-assets    uncomp=     0.0MB naive=  0.0% file-aware=100.0%
+  f836107d04c1 other(code/packages) uncomp=     2.2MB naive=  7.4% file-aware=100.0%
+  f9704c9ad14c other(code/docs)   uncomp=     1.3MB naive=  0.0% file-aware=100.0%
+  fb5036b859ef other(code/products) uncomp=    40.7MB naive= 24.2% file-aware= 97.3%
+  fd9aa183dd18 other(code/common) uncomp=     0.0MB naive= 38.5% file-aware=100.0%
+  fee9fd8ca06e frontend-assets    uncomp=  1710.4MB naive= 70.3% file-aware= 72.4%
+
+== per-class dedup of changed blobs (avg chunk 16K) ==
+  frontend-assets      11041.3MB  naive  82.4%  file-aware  84.9%
+  python                6244.8MB  naive  77.7%  file-aware  89.5%
+  node_modules          2130.5MB  naive  71.8%  file-aware  92.9%
+  other(code/posthog)     178.6MB  naive  54.9%  file-aware  92.3%
+  other(code/products)     122.1MB  naive  24.2%  file-aware  87.1%
+  os/apt                  76.6MB  naive  97.3%  file-aware  99.3%
+  other(code/common)      61.5MB  naive  97.4%  file-aware  99.5%
+  other(code/share)       43.9MB  naive 100.0%  file-aware 100.0%
+  other(code/ee)          36.2MB  naive  56.2%  file-aware  94.6%
+  other(code/packages)       2.2MB  naive   7.4%  file-aware  86.2%
+  other(code/bin)          1.6MB  naive  12.3%  file-aware  85.7%
+  other(code/docs)         1.3MB  naive   0.0%  file-aware  84.0%
+  other(home/posthog)       0.1MB  naive   0.0%  file-aware  38.2%
+  other(code/patches)       0.0MB  naive   0.0%  file-aware  86.8%
+  other(code/rust)         0.0MB  naive   0.0%  file-aware  70.1%
+  other(code/manage.py)       0.0MB  naive   0.0%  file-aware  49.5%
+  other(tmp/.sourcemaps-status)       0.0MB  naive   0.0%  file-aware   0.3%
+  other(docker-entrypoint.d/unit.json.tpl)       0.0MB  naive   0.0%  file-aware  42.7%
+  other(tmp)               0.0MB  naive   0.0%  file-aware   0.0%
+  TOTAL                19940.7MB  naive  79.3%  file-aware  87.4%
+
+verdict guide: naive>=70% -> CDC pays as-is; naive<40% but file-aware high -> needs tar-aware chunking; both low -> content truly churns, CDC does not pay
+```
+
+## Full output: wire-246-247
+
+```
+WIRE_TOTAL blobs=56 full_compressed=5560352613 wire_bytes=1396693887 novel_uncomp=6141822087 changed_uncomp=20492743680 reduction=4.0x
+WIRE_TOTAL blobs=53 full_compressed=5153496373 wire_bytes=1391371878 novel_uncomp=6115626242 changed_uncomp=19940699136 reduction=3.7x
 ```

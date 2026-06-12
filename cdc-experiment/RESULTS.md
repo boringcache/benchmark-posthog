@@ -867,3 +867,26 @@ Readings:
   BLAKE3 or SHA-NI would cut the chunk cost ~3-5x.
 - gzip decompress (440MB/s) vs zstd (1016MB/s) is visible but not
   decisive; both lanes land within 10% on total chunk cost.
+
+## Add/remove time ledger (measured, pair 249->250 native, 49 blobs / 20.4GB uncomp)
+
+Single-threaded over the changed set; the product parallelizes across
+blobs (~/3.5 at 4 cores):
+
+| | CPU (1-thread) | CPU (4-core est.) |
+|---|---|---|
+| today's publish (decompress + zstd-3 ALL bytes) | 103.2s | ~29s |
+| CDC publish (decompress + FastCDC + SHA-256 ALL + zstd-3 NOVEL only) | 151.0s | ~43s |
+| **CDC adds** | **+47.8s** | **+14s** |
+
+Removes (this pair, at the ~170MB/s measured GHA upload speed):
+full 5.58GB = ~33s upload -> wire 1.28GB = ~7.5s -> **removes ~25s of
+upload time** and 4.3GB of egress per run.
+
+Net on GHA-hosted native wall: ~wash (+14s CPU vs -25s upload), and BOTH
+sides mostly overlap the build (online publish passes), so the
+critical-path delta is a few seconds either way. The wall-time case for
+CDC is slow-egress runners (at 30MB/s: removes ~140s/run vs the same
++14s); the GHA case is egress bytes (-77%), storage growth, and p95
+stability. Hash optimization headroom (BLAKE3/SHA-NI) would cut the
+added CPU ~3-5x.

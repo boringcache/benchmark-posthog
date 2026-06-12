@@ -890,3 +890,19 @@ CDC is slow-egress runners (at 30MB/s: removes ~140s/run vs the same
 +14s); the GHA case is egress bytes (-77%), storage growth, and p95
 stability. Hash optimization headroom (BLAKE3/SHA-NI) would cut the
 added CPU ~3-5x.
+
+## Cross-lane / cross-producer dedup (measured, run #253, 64K)
+
+OCI lane blobs (vanilla BuildKit, gzip) deduped against the NATIVE lane's
+chunk store (BC materializer, zstd) - same run, different tar producers;
+the hardest version of cross-pipeline sharing:
+
+- TOTAL 21.4GB across 66 blobs: **naive 76.9%, file-aware 93.0%**
+- frontend-assets 11.0GB: naive 86.6%, file-aware 99.5%
+- python 6.2GB: 68.7% / 86.4%; node_modules 2.1GB: 62.3% / 92.9%
+- 20 of 86 blobs were digest-identical across producers (free today)
+
+Implication: chunks transfer across builders/compression. A second
+pipeline (branch CI, monorepo sibling, another lane) publishes ~23% of
+its bytes with naive chunking - cold branches publish like warm ones.
+Same-producer cross-pipeline sharing should land higher still.

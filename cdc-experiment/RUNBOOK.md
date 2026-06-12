@@ -49,16 +49,20 @@ many large files, so naive should land much higher — measure, don't assume.
 export BORINGCACHE_RESTORE_TOKEN=...   # from the user
 cd cdc-experiment && cargo build --release && cd ..
 
-# 1. Discover the rolling tag names (lanes use scope + platform suffix).
-curl -s -H "Authorization: Bearer $BORINGCACHE_RESTORE_TOKEN" \
-  "https://api.boringcache.com/v2/workspaces/boringcache/benchmark-posthog/tags?per_page=200" \
-  > /tmp/tags.json
-jq -r '..|.name? // empty' /tmp/tags.json | grep -i rolling | sort -u
-# Known live example (BC OCI lane): posthog-run-rolling-main-ubuntu-24-x86_64
-# Scope patterns from the workflow: ${BENCHMARK_ID}-run-rolling-${ref_slug}
-# and ${BENCHMARK_ID}-rolling-${ref_slug}; native lanes have their own scopes
-# (look for "native" in the tag list). Pick: one NATIVE rolling tag (zstd,
-# BoringCache materializer) and one OCI rolling tag (gzip, vanilla BuildKit).
+# NOTE (verified 2026-06-12): raw curl against api.boringcache.com gets a
+# Cloudflare 403 with curl's default User-Agent. Any custom UA fixes it:
+# add  -A "boringcache-cli/1.13.51"  to every curl below. The CLI itself
+# (Bearer token, same endpoints) is unaffected.
+
+# 1. Discover the rolling tag names. Easiest is the CLI:
+boringcache tags boringcache/benchmark-posthog --limit 50 --json \
+  | jq -r '.tags[] | select(.primary) | .name' | grep run-rolling
+# Verified live tags: the OCI/vanilla-BuildKit lane carries a platform
+# suffix, the native lanes do NOT:
+#   OCI  (gzip):  posthog-run-rolling-main-ubuntu-24-x86_64
+#   NATIVE (zstd): posthog-native-run-rolling-main
+# Pick: one NATIVE rolling tag (zstd, BoringCache materializer) and one OCI
+# rolling tag (gzip, vanilla BuildKit).
 
 # 2. Snapshot run A (current version). Tags from the API are full names, so
 #    disable automatic suffixing:
@@ -67,15 +71,30 @@ boringcache restore --no-platform --no-git boringcache/benchmark-posthog \
 # Each target dir must contain oci-layout + blobs/sha256/* (raw layer blobs).
 
 # 3. Wait for the NEXT rolling run to overwrite the tag. Rolling dispatches
-#    fire after upstream sync (every ~30-90 min). Poll the pointer until the
-#    ETag/version changes (every 5 min):
-curl -s -D- -o/dev/null -H "Authorization: Bearer $BORINGCACHE_RESTORE_TOKEN" \
-  "https://api.boringcache.com/v2/workspaces/boringcache/benchmark-posthog/caches/tags/<native-rolling-tag>/pointer" \
-  | grep -i etag
-# (If that path 404s, find the tag-pointer route in the web app's routes, or
-# just re-restore to a scratch dir and compare blob digests.)
+#    fire after upstream sync (every ~30-90 min daytime; can gap hours
+#    overnight). Poll manifest_root_digest until BOTH lane tags change
+#    (every 5 min):
+boringcache tags boringcache/benchmark-posthog --limit 50 --json \
+  | jq -r '.tags[] | select(.name=="<tag>") | .manifest_root_digest'
+# (The pointer endpoint also works with curl + the UA fix above and returns
+# version/cache_entry_id/manifest_root_digest as JSON.)
 # Alternatively watch the benchmark-posthog Actions for the next green
 # "Benchmark Rolling" run, then proceed.
+#
+# SHORTCUT (verified): the OCI lane tag retains its PREVIOUS version
+# server-side (CacheTagVersion; `inspect` shows version_count: 2), so a
+# previous-run snapshot can be reconstructed without waiting:
+#   - Get the previous version's manifest root digest from the web UI tag
+#     page (no token-scoped API lists per-version digests).
+#   - GET /v2/.../caches?manifest_root_digest=sha256:...  -> status "hit",
+#     cache_entry_id + presigned manifest_url (UA fix required).
+#   - The manifest JSON has blobs[{digest,size_bytes}] + index_json_base64 +
+#     oci_layout_base64. Hardlink blobs already present in the newer
+#     snapshot; POST the rest as {cache_entry_id, blobs:[{digest,size_bytes}]}
+#     (size_bytes is required) to /v2/.../caches/blobs/download-urls and
+#     download. Verify sha256 of every blob.
+# The NATIVE lane keeps only 1 version (publish without retention) - the
+# wait is unavoidable for that lane.
 
 # 4. Snapshot run B:
 boringcache restore --no-platform --no-git boringcache/benchmark-posthog \

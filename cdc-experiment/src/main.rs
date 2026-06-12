@@ -72,6 +72,20 @@ fn main() {
             }
             writeln!(out, "T {} {} headers={}", content_total, count, header_total).unwrap();
         }
+        "drain" => {
+            // decompress and count only - baseline for chunking-cost deltas
+            let mut reader = open_decompressed(path);
+            let mut buf = [0u8; 1 << 20];
+            let mut total: u64 = 0;
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => total += n as u64,
+                    Err(_) => break,
+                }
+            }
+            println!("T {}", total);
+        }
         "paths" => {
             let reader = open_decompressed(path);
             let mut archive = tar::Archive::new(reader);

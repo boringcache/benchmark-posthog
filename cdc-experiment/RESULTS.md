@@ -839,3 +839,31 @@ verdict guide: naive>=70% -> CDC pays as-is; naive<40% but file-aware high -> ne
 WIRE_TOTAL blobs=56 full_compressed=5560352613 wire_bytes=1396693887 novel_uncomp=6141822087 changed_uncomp=20492743680 reduction=4.0x
 WIRE_TOTAL blobs=53 full_compressed=5153496373 wire_bytes=1391371878 novel_uncomp=6115626242 changed_uncomp=19940699136 reduction=3.7x
 ```
+
+## Chunking compute cost (measured 2026-06-12, pair 247->248 changed sets)
+
+4-core GHA-class container, SINGLE-THREADED sequential per blob (worst
+case; the product parallelizes across blobs). `time_cost.sh`:
+
+| config | native (zstd, 14.1GB) | OCI (gzip, 13.1GB) |
+|---|---|---|
+| drain (decompress only - work the save path already does) | 13.9s @ 1016MB/s | 29.8s @ 440MB/s |
+| chunk 64K (FastCDC + SHA-256) | 88.3s @ 160MB/s | 98.4s @ 133MB/s |
+| chunk 16K | 87.7s @ 161MB/s | 98.1s @ 134MB/s |
+| novel 64K (full save path: chunk + store lookup + zstd-3 of novel) | 114.2s @ 124MB/s | 122.0s @ 107MB/s |
+| store-build from raw blobs (cold start only; index is persisted) | 148.9s | 178.5s |
+
+Readings:
+- **16K and 64K cost the same** (chunk count is irrelevant; SHA-256 over
+  the bytes dominates). The 16K recommendation is compute-free; its only
+  cost is index size (~109K chunks/run at 64K -> ~4x at 16K).
+- Marginal CDC cost over decompression: ~70-75s single-threaded for a
+  full run's changed set; full save-path ~115-122s. Parallelized across
+  4 cores: **~30s wall per rolling run**, inside the governor's
+  max(60s, 10%) overhead budget - and the 2-4GB of avoided upload pays
+  back ~20-80s at typical CI egress, so net wall time is ~neutral to
+  positive before counting storage savings.
+- Hashing is the dominant term and the optimization headroom: sha2 here;
+  BLAKE3 or SHA-NI would cut the chunk cost ~3-5x.
+- gzip decompress (440MB/s) vs zstd (1016MB/s) is visible but not
+  decisive; both lanes land within 10% on total chunk cost.

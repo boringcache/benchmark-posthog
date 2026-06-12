@@ -72,6 +72,32 @@ fn main() {
             }
             writeln!(out, "T {} {} headers={}", content_total, count, header_total).unwrap();
         }
+        "recompress" => {
+            // decompress -> zstd-3 over ALL bytes: today's publish CPU over a
+            // changed set (baseline against `novel` for CDC's compute delta)
+            struct CountWriter2(u64);
+            impl std::io::Write for CountWriter2 {
+                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                    self.0 += buf.len() as u64;
+                    Ok(buf.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+            }
+            use std::io::Write;
+            let mut reader = open_decompressed(path);
+            let mut enc = zstd::stream::write::Encoder::new(CountWriter2(0), 3).expect("zstd enc");
+            let mut buf = [0u8; 1 << 20];
+            let mut total: u64 = 0;
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => { total += n as u64; enc.write_all(&buf[..n]).unwrap(); }
+                    Err(_) => break,
+                }
+            }
+            let counter = enc.finish().expect("zstd finish");
+            println!("W {} T {}", counter.0, total);
+        }
         "drain" => {
             // decompress and count only - baseline for chunking-cost deltas
             let mut reader = open_decompressed(path);

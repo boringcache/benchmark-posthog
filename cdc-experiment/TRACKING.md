@@ -19,3 +19,5 @@ zstd-3). `bugs`: `clean` or comma-separated signatures (see CYCLE.md step 7).
 | 2026-06-12T16:25Z | 249->250 | oci | 39/87 | 19355 | 4984 | 72.3% | 88.4% | 1267 | 3.9x | chronic-put-noise |
 | 2026-06-12T16:58Z | 250->251 | native | 58/87 | 20428 | 5525 | 75.3% | 91.1% | 1156 | 4.8x | chronic-put-noise |
 | 2026-06-12T16:58Z | 250->251 | oci | 46/89 | 19360 | 4985 | 74.8% | 90.8% | 1129 | 4.4x | chronic-put-noise |
+| 2026-06-12T18:20Z | 251->252 | native | 43/85 | 14133 | 3780 | 75.2% | 89.5% | 863 | 4.4x | chronic-put-noise |
+| 2026-06-12T18:20Z | 251->252 | oci | 33/89 | 13113 | 3199 | 73.7% | 88.7% | 850 | 3.8x | chronic-put-noise |

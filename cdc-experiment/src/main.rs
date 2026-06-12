@@ -99,6 +99,46 @@ fn main() {
                 println!("P {} {}", prefix, bytes);
             }
         }
-        _ => eprintln!("usage: cdc-tool <chunk|paths> <blob> [avg_size]"),
+        "novel" => {
+            // novel <blob> <avg> <store_hash_file>: chunk the blob, batch the
+            // chunks NOT in the store through zstd-3 (the wire payload a CDC
+            // upload would carry) and print W <wire> N <novel> T <total>.
+            let avg: u32 = args.get(3).map(|s| s.parse().unwrap()).unwrap_or(65536);
+            let store_path = args.get(4).expect("novel mode needs <store_hash_file>");
+            let store: std::collections::HashSet<String> =
+                std::fs::read_to_string(store_path)
+                    .expect("read store file")
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+            struct CountWriter(u64);
+            impl std::io::Write for CountWriter {
+                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                    self.0 += buf.len() as u64;
+                    Ok(buf.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+            }
+            let reader = open_decompressed(path);
+            let chunker = fastcdc::v2020::StreamCDC::new(reader, avg / 4, avg, avg * 4);
+            use sha2::Digest;
+            use std::io::Write;
+            let mut enc = zstd::stream::write::Encoder::new(CountWriter(0), 3).expect("zstd enc");
+            let mut novel: u64 = 0;
+            let mut total: u64 = 0;
+            for result in chunker {
+                let chunk = result.expect("chunk read");
+                let hash = format!("{:x}", sha2::Sha256::digest(&chunk.data));
+                total += chunk.length as u64;
+                if !store.contains(&hash) {
+                    novel += chunk.length as u64;
+                    enc.write_all(&chunk.data).unwrap();
+                }
+            }
+            let counter = enc.finish().expect("zstd finish");
+            println!("W {} N {} T {}", counter.0, novel, total);
+        }
+        _ => eprintln!("usage: cdc-tool <chunk|filechunk|paths|novel> <blob> [avg_size] [store_hash_file]"),
     }
 }

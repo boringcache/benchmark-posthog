@@ -89,15 +89,9 @@ to_num() {
 
 component_type_for() {
   local storage_mode="$1"
-  local cache_type="$2"
-  local tag="$3"
-  local primary_tag="$4"
+  local tag="$2"
+  local primary_tag="$3"
   local combined="${tag} ${primary_tag}"
-
-  if [[ "$cache_type" == "kv" ]]; then
-    echo "tool_cache"
-    return
-  fi
 
   case "$storage_mode" in
     cas)
@@ -126,9 +120,6 @@ component_label_for() {
       ;;
     tool_runtime_archive)
       echo "tool runtime archive"
-      ;;
-    tool_cache)
-      echo "tool cache"
       ;;
     dependency_archive)
       echo "dependency archive"
@@ -167,29 +158,24 @@ write_storage_breakdown() {
     inspect_target="${inspect_target:-$tag}"
 
     inspect_json="$(boringcache inspect "$workspace" "$inspect_target" --json 2> "$breakdown_stderr" || true)"
-
-    local entry_id primary_tag storage_mode cache_type stored_size archive_size blob_total_size component_type component_label
-    if [[ -n "$inspect_json" ]]; then
-      entry_id="$(jq -r '.entry.id // empty' <<<"$inspect_json")"
-      primary_tag="$(jq -r '.entry.primary_tag // empty' <<<"$inspect_json")"
-      storage_mode="$(jq -r '.entry.storage_mode // "unknown"' <<<"$inspect_json")"
-      cache_type="$(jq -r '.entry.cache_type // empty' <<<"$inspect_json")"
-      stored_size="$(jq -r '.entry.stored_size_bytes // .entry.compressed_size // .entry.blob_total_size_bytes // 0' <<<"$inspect_json")"
-      archive_size="$(jq -r '.entry.archive_size // .entry.compressed_size // 0' <<<"$inspect_json")"
-      blob_total_size="$(jq -r '.entry.blob_total_size_bytes // 0' <<<"$inspect_json")"
-    else
-      entry_id="$(jq -r '.cache_entry_id // .cacheEntryId // empty' <<<"$row")"
-      primary_tag=""
-      storage_mode="$(jq -r '.storage_mode // .storageMode // "unknown"' <<<"$row")"
-      cache_type="$(jq -r '.cache_type // .cacheType // empty' <<<"$row")"
-      stored_size="$(jq -r '.compressed_size // .compressedSize // .size_bytes // .sizeBytes // .size // 0' <<<"$row")"
-      archive_size="$stored_size"
-      blob_total_size="$(jq -r '.blob_total_size_bytes // .blobTotalSizeBytes // .kv_total_size // .kvTotalSize // .compressed_size // .compressedSize // .size_bytes // .sizeBytes // .size // 0' <<<"$row")"
+    if [[ -z "$inspect_json" ]]; then
+      echo "boringcache inspect failed while writing storage breakdown for tag: ${tag}" >&2
+      cat "$breakdown_stderr" >&2
+      rm -f "$components_file" "$breakdown_stderr"
+      exit 1
     fi
+
+    local entry_id primary_tag storage_mode stored_size archive_size blob_total_size component_type component_label
+    entry_id="$(jq -r '.entry.id // empty' <<<"$inspect_json")"
+    primary_tag="$(jq -r '.entry.primary_tag // empty' <<<"$inspect_json")"
+    storage_mode="$(jq -r '.entry.storage_mode // "unknown"' <<<"$inspect_json")"
+    stored_size="$(jq -r '.entry.stored_size_bytes // .entry.compressed_size // .entry.blob_total_size_bytes // 0' <<<"$inspect_json")"
+    archive_size="$(jq -r '.entry.archive_size // .entry.compressed_size // 0' <<<"$inspect_json")"
+    blob_total_size="$(jq -r '.entry.blob_total_size_bytes // 0' <<<"$inspect_json")"
     stored_size="$(to_num "$stored_size")"
     archive_size="$(to_num "$archive_size")"
     blob_total_size="$(to_num "$blob_total_size")"
-    component_type="$(component_type_for "$storage_mode" "$cache_type" "$tag" "$primary_tag")"
+    component_type="$(component_type_for "$storage_mode" "$tag" "$primary_tag")"
     component_label="$(component_label_for "$component_type" "$tag")"
 
     jq -c -n \
@@ -230,7 +216,6 @@ write_storage_breakdown() {
         remote_cas_bytes: sum_type("remote_cas"),
         dependency_archive_bytes: sum_type("dependency_archive"),
         tool_runtime_archive_bytes: sum_type("tool_runtime_archive"),
-        tool_cache_bytes: sum_type("tool_cache"),
         unknown_bytes: sum_type("unknown")
       },
       components: .

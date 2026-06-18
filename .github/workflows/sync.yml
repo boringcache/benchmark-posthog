@@ -46,7 +46,7 @@ jobs:
           git config --global user.email "boringcache-bot@users.noreply.github.com"
 
           retry git submodule sync --recursive
-          retry git submodule update --init --remote --merge upstream
+          retry git submodule update --init --remote --checkout upstream
 
           github_repo_slug() {
             local url="$1"

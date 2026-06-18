@@ -32,7 +32,7 @@ case "$lane" in
     backend="native"
     tool_cache=""
     mount_cache=""
-    native_publish_intensity="aggressive"
+    native_publish_intensity="balanced"
     ;;
   native-toolcache)
     label="BC Native + toolcache"
@@ -40,7 +40,7 @@ case "$lane" in
     backend="native"
     tool_cache="turbo"
     mount_cache=""
-    native_publish_intensity="aggressive"
+    native_publish_intensity="balanced"
     ;;
   native-mountcache)
     label="BC Native + mountcache"
@@ -48,7 +48,7 @@ case "$lane" in
     backend="native"
     tool_cache=""
     mount_cache="posthog-mounts"
-    native_publish_intensity="aggressive"
+    native_publish_intensity="balanced"
     ;;
   native-toolcache-mountcache)
     label="BC Native + toolcache + mountcache"
@@ -56,7 +56,7 @@ case "$lane" in
     backend="native"
     tool_cache="turbo"
     mount_cache="posthog-mounts"
-    native_publish_intensity="aggressive"
+    native_publish_intensity="balanced"
     ;;
   oci-toolcache)
     label="BC OCI + toolcache"

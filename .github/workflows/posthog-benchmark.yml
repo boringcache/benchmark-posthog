@@ -107,35 +107,35 @@ jobs:
           - label: BC Native
             buildkit_backend: native
             benchmark_id: posthog-native
-            native_publish_intensity: aggressive
+            native_publish_intensity: balanced
             materialize_compression: ""
             docker_tool_cache: ""
             docker_mount_cache: ""
           - label: BC Native gzip
             buildkit_backend: native
             benchmark_id: posthog-native-gzip
-            native_publish_intensity: aggressive
+            native_publish_intensity: balanced
             materialize_compression: gzip-fast
             docker_tool_cache: ""
             docker_mount_cache: ""
           - label: BC Native + toolcache
             buildkit_backend: native
             benchmark_id: posthog-native-toolcache
-            native_publish_intensity: aggressive
+            native_publish_intensity: balanced
             materialize_compression: ""
             docker_tool_cache: turbo
             docker_mount_cache: ""
           - label: BC Native + mountcache
             buildkit_backend: native
             benchmark_id: posthog-native-mountcache
-            native_publish_intensity: aggressive
+            native_publish_intensity: balanced
             materialize_compression: ""
             docker_tool_cache: ""
             docker_mount_cache: posthog-mounts
           - label: BC Native + toolcache + mountcache
             buildkit_backend: native
             benchmark_id: posthog-native-toolcache-mountcache
-            native_publish_intensity: aggressive
+            native_publish_intensity: balanced
             materialize_compression: ""
             docker_tool_cache: turbo
             docker_mount_cache: posthog-mounts

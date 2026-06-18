@@ -70,7 +70,7 @@ on:
         type: boolean
         default: false
       native_publish_intensity:
-        description: 'Optional native BuildKit publisher intensity for benchmark proof lanes.'
+        description: 'Optional native BuildKit publisher intensity for benchmark proof lanes. Use balanced for product lanes; aggressive is stress-only.'
         required: false
         type: string
         default: ''

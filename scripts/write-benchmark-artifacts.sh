@@ -1240,6 +1240,7 @@ cache_import_status="$(sanitize_token "$cache_import_status")"
 paired_run_id="$(sanitize_token "$paired_run_id")"
 prior_cache_state="$(sanitize_token "$prior_cache_state")"
 docker_cache_import_ready="$(sanitize_token "$docker_cache_import_ready")"
+raw_cache_import_status="$cache_import_status"
 
 if [[ -n "$docker_cache_import_seconds" ]] && ! [[ "$docker_cache_import_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   docker_cache_import_seconds=""
@@ -1248,6 +1249,18 @@ if [[ -n "$docker_cache_export_seconds" ]] && ! [[ "$docker_cache_export_seconds
   docker_cache_export_seconds=""
 fi
 buildkit_cached_steps="$(sanitize_uint "$buildkit_cached_steps")"
+cache_reuse_status=""
+effective_cache_import_status="$cache_import_status"
+if [[ "$strategy" == "boringcache" && ( "$mode" == "docker" || "$adapter" == "oci" ) ]]; then
+  if [[ "$cache_import_status" == "ok" && "$buildkit_cached_steps" == "0" ]]; then
+    cache_reuse_status="no_reuse"
+    effective_cache_import_status="no_reuse"
+  elif [[ "$cache_import_status" == "ok" && -n "$buildkit_cached_steps" ]]; then
+    cache_reuse_status="reused"
+  elif [[ -n "$cache_import_status" ]]; then
+    cache_reuse_status="unusable_import"
+  fi
+fi
 oci_body_local_hits="$(sanitize_uint "$oci_body_local_hits")"
 oci_body_remote_fetches="$(sanitize_uint "$oci_body_remote_fetches")"
 oci_body_local_bytes="$(sanitize_uint "$oci_body_local_bytes")"
@@ -1373,7 +1386,9 @@ fi
 slow_new_blob_bytes="$oci_new_blob_bytes"
 slow_prior_cache_state="$prior_cache_state"
 if [[ -z "$slow_prior_cache_state" ]]; then
-  if [[ -n "$cache_import_status" && "$cache_import_status" == "ok" ]]; then
+  if [[ "$cache_reuse_status" == "no_reuse" ]]; then
+    slow_prior_cache_state="metadata_import_no_reuse"
+  elif [[ -n "$cache_import_status" && "$cache_import_status" == "ok" ]]; then
     slow_prior_cache_state="usable_import"
   elif [[ -n "$cache_import_status" ]]; then
     slow_prior_cache_state="unusable_import"
@@ -1713,7 +1728,9 @@ if [[ "$single_phase_proof" == "true" ]]; then
     --arg reporting_reason "$reporting_reason" \
     --arg reporting_note "$reporting_note" \
     --arg validity_reason "$validity_reason" \
-    --arg cache_import_status "$cache_import_status" \
+    --arg cache_import_status "$effective_cache_import_status" \
+    --arg raw_cache_import_status "$raw_cache_import_status" \
+    --arg cache_reuse_status "$cache_reuse_status" \
     --arg rolling_update_kind "$rolling_reseed_kind" \
     --arg rolling_update_reason "$reseed_reason" \
     --argjson sample_valid "$sample_valid" \
@@ -1728,7 +1745,9 @@ if [[ "$single_phase_proof" == "true" ]]; then
       "reporting_reason": ($reporting_reason | blank_to_null),
       "reporting_note": ($reporting_note | blank_to_null),
       "validity_reason": ($validity_reason | blank_to_null),
-      "cache_import_status": ($cache_import_status | blank_to_null)
+      "cache_import_status": ($cache_import_status | blank_to_null),
+      "raw_cache_import_status": ($raw_cache_import_status | blank_to_null),
+      "cache_reuse_status": ($cache_reuse_status | blank_to_null)
     }
     + (
       if $lane == "rolling" then
@@ -1783,7 +1802,9 @@ else
     --arg reporting_reason "$reporting_reason" \
     --arg reporting_note "$reporting_note" \
     --arg validity_reason "$validity_reason" \
-    --arg cache_import_status "$cache_import_status" \
+    --arg cache_import_status "$effective_cache_import_status" \
+    --arg raw_cache_import_status "$raw_cache_import_status" \
+    --arg cache_reuse_status "$cache_reuse_status" \
     --arg rolling_reseed_kind "$rolling_reseed_kind" \
     --arg reseed_reason "$reseed_reason" \
     --argjson sample_valid "$sample_valid" \
@@ -1801,6 +1822,8 @@ else
       "reporting_note": ($reporting_note | blank_to_null),
       "validity_reason": ($validity_reason | blank_to_null),
       "cache_import_status": ($cache_import_status | blank_to_null),
+      "raw_cache_import_status": ($raw_cache_import_status | blank_to_null),
+      "cache_reuse_status": ($cache_reuse_status | blank_to_null),
       "rolling_reseed": $rolling_reseed,
       "steady_state_candidate": $steady_state_candidate,
       "rolling_reseed_kind": ($rolling_reseed_kind | blank_to_null),
@@ -2000,8 +2023,14 @@ JSON
   if [[ -n "$reporting_reason" ]]; then
     echo "| Reporting reason | ${reporting_reason} |"
   fi
-  if [[ -n "$cache_import_status" ]]; then
-    echo "| Cache import status | ${cache_import_status} |"
+  if [[ -n "$effective_cache_import_status" ]]; then
+    echo "| Cache import status | ${effective_cache_import_status} |"
+  fi
+  if [[ -n "$raw_cache_import_status" && "$raw_cache_import_status" != "$effective_cache_import_status" ]]; then
+    echo "| Raw cache import status | ${raw_cache_import_status} |"
+  fi
+  if [[ -n "$cache_reuse_status" ]]; then
+    echo "| Cache reuse status | ${cache_reuse_status} |"
   fi
   if [[ -n "$buildkit_cached_steps" ]]; then
     echo "| BuildKit cached steps | ${buildkit_cached_steps} |"

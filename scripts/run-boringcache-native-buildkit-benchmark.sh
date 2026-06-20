@@ -241,12 +241,24 @@ case "$observability_container_path" in
 esac
 
 cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
+primary_cache_miss=false
+if grep -Fq "BoringCache OCI cache not found for cache@${cache_scope}" "$build_log"; then
+  primary_cache_miss=true
+fi
 if grep -Eq 'failed to configure .*cache importer|cache manifest.*(manifest unknown|not found)|importing cache manifest.*(manifest unknown|not found)' "$build_log"; then
   import_status="not_found"
 elif grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
   import_status="ok"
 else
   import_status="none"
+fi
+prior_cache_state=""
+if [[ "$import_status" == "ok" && "$cached_steps" =~ ^[1-9][0-9]*$ ]]; then
+  if [[ "$primary_cache_miss" == "true" ]]; then
+    prior_cache_state="primary_miss_fallback_reuse"
+  else
+    prior_cache_state="usable_import"
+  fi
 fi
 
 import_step="$(sed -nE 's/^#([0-9]+) importing cache manifest.*/\1/p' "$build_log" | tail -n1 || true)"
@@ -359,6 +371,7 @@ if [[ -n "${BENCHMARK_METRICS_OUTPUT:-}" ]]; then
   mkdir -p "$(dirname "$metrics_output")"
   : > "$metrics_output"
   write_metric cache_import_status "$import_status"
+  write_metric prior_cache_state "$prior_cache_state"
   write_metric buildkit_cached_steps "$cached_steps"
   write_metric docker_cache_import_seconds "$import_seconds"
   write_metric docker_cache_export_seconds "$final_publish_seconds"
@@ -383,6 +396,8 @@ if [[ -n "${BENCHMARK_DIAGNOSTICS_OUTPUT:-}" ]]; then
     echo "dockerfile_rel=${dockerfile_rel}"
     echo "materialize_compression=${materialize_compression}"
     echo "import_status=${import_status}"
+    echo "primary_cache_miss=${primary_cache_miss}"
+    echo "prior_cache_state=${prior_cache_state}"
     echo "cached_steps=${cached_steps}"
     echo "wall_seconds=${wall_seconds}"
     echo "container_command_seconds=$(sed -nE 's/^boringcache timing: container command status=[0-9]+ seconds=([0-9]+)$/\1/p' "$build_log" | tail -n1 || true)"

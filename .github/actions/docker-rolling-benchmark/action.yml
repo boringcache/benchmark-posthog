@@ -638,6 +638,7 @@ runs:
           --warm1-seconds "" \
           --warm1-build-seconds "" \
           --cache-import-status "$cache_import_status" \
+          --prior-cache-state "${{ steps.build.outputs.prior_cache_state }}" \
           --docker-cache-import-seconds "${{ steps.build.outputs.docker_cache_import_seconds }}" \
           --docker-cache-export-seconds "${{ steps.build.outputs.docker_cache_export_seconds }}" \
           --buildkit-cached-steps "${{ steps.build.outputs.buildkit_cached_steps }}" \

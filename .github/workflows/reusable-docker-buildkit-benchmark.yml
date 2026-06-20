@@ -834,6 +834,7 @@ jobs:
           SEED_DOCKER_IMPORT_SECONDS: ${{ steps.cold_baseline_build.outputs.docker_cache_import_seconds }}
           SEED_BUILDKIT_CACHED_STEPS: ${{ steps.cold_baseline_build.outputs.buildkit_cached_steps }}
           SEED_CACHE_IMPORT_STATUS: ${{ steps.cold_baseline_build.outputs.cache_import_status }}
+          SEED_PRIOR_CACHE_STATE: ${{ steps.cold_baseline_build.outputs.prior_cache_state }}
           SEED_OCI_HYDRATION_POLICY: ${{ steps.cold_baseline_build.outputs.oci_hydration_policy }}
           SEED_OCI_BODY_LOCAL_HITS: ${{ steps.cold_baseline_build.outputs.oci_body_local_hits }}
           SEED_OCI_BODY_REMOTE_FETCHES: ${{ steps.cold_baseline_build.outputs.oci_body_remote_fetches }}
@@ -856,6 +857,7 @@ jobs:
           WARM1_DOCKER_CACHE_IMPORT_SECONDS: ${{ steps.timings.outputs.warm1_docker_cache_import_seconds }}
           WARM1_BUILDKIT_CACHED_STEPS: ${{ steps.timings.outputs.warm1_buildkit_cached_steps }}
           WARM1_CACHE_IMPORT_STATUS: ${{ steps.timings.outputs.warm1_cache_import_status }}
+          WARM1_PRIOR_CACHE_STATE: ${{ steps.timings.outputs.warm1_prior_cache_state }}
           WARM1_OCI_HYDRATION_POLICY: ${{ steps.timings.outputs.warm1_oci_hydration_policy }}
           WARM1_OCI_BODY_LOCAL_HITS: ${{ steps.timings.outputs.warm1_oci_body_local_hits }}
           WARM1_OCI_BODY_REMOTE_FETCHES: ${{ steps.timings.outputs.warm1_oci_body_remote_fetches }}
@@ -909,6 +911,7 @@ jobs:
           if [[ "$STRATEGY" == "boringcache" ]]; then
             if [[ "$CACHE_LANE" == "rolling" ]]; then
               cache_import_status="$SEED_CACHE_IMPORT_STATUS"
+              prior_cache_state="$SEED_PRIOR_CACHE_STATE"
               oci_hydration_policy="$SEED_OCI_HYDRATION_POLICY"
               oci_body_local_hits="$SEED_OCI_BODY_LOCAL_HITS"
               oci_body_remote_fetches="$SEED_OCI_BODY_REMOTE_FETCHES"
@@ -923,6 +926,7 @@ jobs:
             else
               require cache_import_status "$WARM1_CACHE_IMPORT_STATUS"
               cache_import_status="$WARM1_CACHE_IMPORT_STATUS"
+              prior_cache_state="$WARM1_PRIOR_CACHE_STATE"
               oci_hydration_policy="$WARM1_OCI_HYDRATION_POLICY"
               oci_body_local_hits="$WARM1_OCI_BODY_LOCAL_HITS"
               oci_body_remote_fetches="$WARM1_OCI_BODY_REMOTE_FETCHES"
@@ -937,6 +941,7 @@ jobs:
             fi
 
             emit cache_import_status "$cache_import_status"
+            emit prior_cache_state "$prior_cache_state"
             emit oci_hydration_policy "$oci_hydration_policy"
             emit oci_body_local_hits "$oci_body_local_hits"
             emit oci_body_remote_fetches "$oci_body_remote_fetches"
@@ -967,6 +972,7 @@ jobs:
             fi
           else
             emit cache_import_status ""
+            emit prior_cache_state ""
             emit oci_hydration_policy ""
             emit oci_body_local_hits ""
             emit oci_body_remote_fetches ""
@@ -1024,6 +1030,7 @@ jobs:
             --warm1-seconds "${{ steps.normalize.outputs.warm1_seconds }}" \
             --warm1-build-seconds "${{ steps.normalize.outputs.warm1_build_seconds }}" \
             --cache-import-status "${{ steps.normalize.outputs.cache_import_status }}" \
+            --prior-cache-state "${{ steps.normalize.outputs.prior_cache_state }}" \
             --docker-cache-import-seconds "${{ steps.normalize.outputs.docker_cache_import_seconds }}" \
             --docker-cache-export-seconds "${{ steps.normalize.outputs.docker_cache_export_seconds }}" \
             --buildkit-cached-steps "${{ steps.normalize.outputs.buildkit_cached_steps }}" \

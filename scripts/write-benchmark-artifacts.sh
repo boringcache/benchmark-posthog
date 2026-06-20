@@ -1730,6 +1730,7 @@ if [[ "$single_phase_proof" == "true" ]]; then
     --arg validity_reason "$validity_reason" \
     --arg cache_import_status "$effective_cache_import_status" \
     --arg raw_cache_import_status "$raw_cache_import_status" \
+    --arg prior_cache_state "$slow_prior_cache_state" \
     --arg cache_reuse_status "$cache_reuse_status" \
     --arg rolling_update_kind "$rolling_reseed_kind" \
     --arg rolling_update_reason "$reseed_reason" \
@@ -1747,6 +1748,7 @@ if [[ "$single_phase_proof" == "true" ]]; then
       "validity_reason": ($validity_reason | blank_to_null),
       "cache_import_status": ($cache_import_status | blank_to_null),
       "raw_cache_import_status": ($raw_cache_import_status | blank_to_null),
+      "prior_cache_state": ($prior_cache_state | blank_to_null),
       "cache_reuse_status": ($cache_reuse_status | blank_to_null)
     }
     + (
@@ -1804,6 +1806,7 @@ else
     --arg validity_reason "$validity_reason" \
     --arg cache_import_status "$effective_cache_import_status" \
     --arg raw_cache_import_status "$raw_cache_import_status" \
+    --arg prior_cache_state "$slow_prior_cache_state" \
     --arg cache_reuse_status "$cache_reuse_status" \
     --arg rolling_reseed_kind "$rolling_reseed_kind" \
     --arg reseed_reason "$reseed_reason" \
@@ -1823,6 +1826,7 @@ else
       "validity_reason": ($validity_reason | blank_to_null),
       "cache_import_status": ($cache_import_status | blank_to_null),
       "raw_cache_import_status": ($raw_cache_import_status | blank_to_null),
+      "prior_cache_state": ($prior_cache_state | blank_to_null),
       "cache_reuse_status": ($cache_reuse_status | blank_to_null),
       "rolling_reseed": $rolling_reseed,
       "steady_state_candidate": $steady_state_candidate,

@@ -34,6 +34,14 @@ case "$lane" in
     mount_cache=""
     native_publish_intensity="balanced"
     ;;
+  native-toolcache)
+    label="BC Native + toolcache"
+    benchmark_id="posthog-native-toolcache"
+    backend="native"
+    tool_cache="turbo"
+    mount_cache=""
+    native_publish_intensity="balanced"
+    ;;
   oci-toolcache)
     label="BC OCI + toolcache"
     benchmark_id="posthog-oci-toolcache"
@@ -111,14 +119,16 @@ if [[ -n "$mount_cache" && -n "$boringcache_candidate" ]]; then
   prepare_boringcache_cache_mount_publish_helper_image /usr/local/bin/boringcache
 fi
 
-docker buildx rm -f "$builder_name" >/dev/null 2>&1 || true
-docker buildx create \
-  --name "$builder_name" \
-  --driver docker-container \
-  --driver-opt "image=${buildkit_image}" \
-  --driver-opt network=host \
-  --use >/dev/null
-docker buildx inspect "$builder_name" --bootstrap
+if [[ "$backend" == "registry" ]]; then
+  docker buildx rm -f "$builder_name" >/dev/null 2>&1 || true
+  docker buildx create \
+    --name "$builder_name" \
+    --driver docker-container \
+    --driver-opt "image=${buildkit_image}" \
+    --driver-opt network=host \
+    --use >/dev/null
+  docker buildx inspect "$builder_name" --bootstrap
+fi
 
 export BENCHMARK_ID="${BENCHMARK_ID:-$benchmark_id}"
 export BENCHMARK_WORKSPACE="$cache_workspace"
@@ -131,7 +141,11 @@ export BORINGCACHE_DOCKER_MOUNT_CACHE="$mount_cache"
 export BORINGCACHE_MANAGED_BUILDKIT_IMAGE="$buildkit_image"
 export BUILDKIT_IMAGE="$buildkit_image"
 export BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY="$native_publish_intensity"
-export BUILDER="$builder_name"
+if [[ "$backend" == "registry" ]]; then
+  export BUILDER="$builder_name"
+else
+  unset BUILDER
+fi
 export BORINGCACHE_DOCKER_WRAPPER=always
 export BORINGCACHE_PROXY_PORT="${BORINGCACHE_PROXY_PORT:-5310}"
 export BORINGCACHE_OBSERVABILITY_JSONL_PATH="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-/tmp/${BENCHMARK_ID}-boringcache-commit-observability.jsonl}"

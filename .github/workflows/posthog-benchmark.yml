@@ -118,6 +118,13 @@ jobs:
             materialize_compression: gzip-fast
             docker_tool_cache: ""
             docker_mount_cache: ""
+          - label: BC Native + toolcache
+            buildkit_backend: native
+            benchmark_id: posthog-native-toolcache
+            native_publish_intensity: balanced
+            materialize_compression: ""
+            docker_tool_cache: turbo
+            docker_mount_cache: ""
           - label: BC OCI + toolcache
             buildkit_backend: registry
             benchmark_id: posthog-oci-toolcache

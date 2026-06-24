@@ -123,13 +123,12 @@ runs:
       if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'native' }}
       shell: bash
       env:
-        DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
         DOCKER_MOUNT_CACHE: ${{ inputs.docker_mount_cache }}
       run: |
         set -euo pipefail
-        if [[ -n "$DOCKER_TOOL_CACHE" || -n "$DOCKER_MOUNT_CACHE" ]]; then
+        if [[ -n "$DOCKER_MOUNT_CACHE" ]]; then
           echo "BoringCache native benchmark lanes must use the managed native BuildKit path directly." >&2
-          echo "Do not combine native with docker_tool_cache or docker_mount_cache; keep those wrapper lanes on the OCI backend." >&2
+          echo "Do not combine native with docker_mount_cache; keep mount-cache sidecar lanes on the OCI backend." >&2
           exit 1
         fi
 
@@ -301,7 +300,7 @@ runs:
         verbose: true
 
     - name: Set up Docker Buildx for BoringCache wrapped build
-      if: ${{ inputs.strategy == 'boringcache' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') }}
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') }}
       id: tool_cache_buildx
       uses: docker/setup-buildx-action@v4
       with:
@@ -414,7 +413,7 @@ runs:
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
         BORINGCACHE_BUILDKIT_MATERIALIZE_COMPRESSION: ${{ inputs.materialize_compression }}
-        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && inputs.docker_mount_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') && steps.tool_cache_buildx.outputs.name || steps.buildx.outputs.name || '' }}
+        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && inputs.docker_mount_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') && steps.tool_cache_buildx.outputs.name || steps.buildx.outputs.name || '' }}
         CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
         CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
         CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}

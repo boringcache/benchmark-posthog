@@ -101,35 +101,24 @@ jobs:
             buildkit_backend: registry
             benchmark_id: posthog
             native_publish_intensity: ""
-            materialize_compression: ""
             docker_tool_cache: ""
             docker_mount_cache: ""
           - label: BC Native
             buildkit_backend: native
             benchmark_id: posthog-native
             native_publish_intensity: balanced
-            materialize_compression: ""
-            docker_tool_cache: ""
-            docker_mount_cache: ""
-          - label: BC Native gzip
-            buildkit_backend: native
-            benchmark_id: posthog-native-gzip
-            native_publish_intensity: balanced
-            materialize_compression: gzip-fast
             docker_tool_cache: ""
             docker_mount_cache: ""
           - label: BC Native + toolcache
             buildkit_backend: native
             benchmark_id: posthog-native-toolcache
             native_publish_intensity: balanced
-            materialize_compression: ""
             docker_tool_cache: turbo
             docker_mount_cache: ""
           - label: BC OCI + toolcache
             buildkit_backend: registry
             benchmark_id: posthog-oci-toolcache
             native_publish_intensity: ""
-            materialize_compression: ""
             docker_tool_cache: turbo
             docker_mount_cache: ""
     env:
@@ -159,7 +148,6 @@ jobs:
           cli_version: ${{ inputs.cli_version }}
           benchmark_workspace: ${{ github.repository }}
           native_publish_intensity: ${{ matrix.native_publish_intensity }}
-          materialize_compression: ${{ matrix.materialize_compression }}
           docker_tool_cache: ${{ matrix.docker_tool_cache }}
           docker_mount_cache: ${{ matrix.docker_mount_cache }}
           free_disk_space: "true"

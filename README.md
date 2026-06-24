@@ -28,10 +28,11 @@ Fresh runs use the scenario set:
 
 BoringCache lanes are split so product capabilities are visible instead of
 mixed into one number: `BC OCI`, `BC Native`, `BC Native gzip`,
-`BC Native + toolcache`, and `BC OCI + toolcache`.
-Tool-cache uses PostHog's Turbo build steps while BoringCache still runs outside
-the Dockerfile. Mount-cache lanes remain script-level diagnostics, but they are
-not part of the routine product benchmark matrix because recent PostHog evidence
+and `BC OCI + toolcache`.
+Native is the managed native BuildKit path. Tool-cache uses PostHog's Turbo
+build steps on the OCI backend while BoringCache still runs outside the
+Dockerfile. Mount-cache lanes remain script-level diagnostics, but they are not
+part of the routine product benchmark matrix because recent PostHog evidence
 showed high publish/export tail variance and sidecar release coupling.
 Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not

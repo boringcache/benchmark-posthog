@@ -119,6 +119,20 @@ runs:
           exit 1
         fi
 
+    - name: Validate native benchmark shape
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'native' }}
+      shell: bash
+      env:
+        DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
+        DOCKER_MOUNT_CACHE: ${{ inputs.docker_mount_cache }}
+      run: |
+        set -euo pipefail
+        if [[ -n "$DOCKER_TOOL_CACHE" || -n "$DOCKER_MOUNT_CACHE" ]]; then
+          echo "BoringCache native benchmark lanes must use the managed native BuildKit path directly." >&2
+          echo "Do not combine native with docker_tool_cache or docker_mount_cache; keep those wrapper lanes on the OCI backend." >&2
+          exit 1
+        fi
+
     - name: Install BoringCache CLI with boringcache/one
       if: ${{ inputs.strategy == 'boringcache' }}
       uses: boringcache/one@v1

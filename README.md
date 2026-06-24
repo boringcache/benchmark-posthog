@@ -27,8 +27,8 @@ Fresh runs use the scenario set:
 - `warm1`
 
 BoringCache lanes are split so product capabilities are visible instead of
-mixed into one number: `BC OCI`, `BC Native`, `BC Native gzip`,
-`BC Native + toolcache`, and `BC OCI + toolcache`.
+mixed into one number: `BC OCI`, `BC Native`, `BC Native + toolcache`, and
+`BC OCI + toolcache`.
 Native lanes use the managed native BuildKit path. Tool-cache uses PostHog's
 Turbo build steps while BoringCache still runs outside the Dockerfile; the
 native tool-cache lane keeps the managed native builder instead of selecting a

@@ -74,11 +74,6 @@ on:
         required: false
         type: string
         default: ''
-      materialize_compression:
-        description: 'Optional native BuildKit materialized export compression, for example zstd-fast.'
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: read
@@ -276,7 +271,6 @@ jobs:
           BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
-          BORINGCACHE_BUILDKIT_MATERIALIZE_COMPRESSION: ${{ inputs.materialize_compression }}
           BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name }}
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
@@ -542,7 +536,6 @@ jobs:
           BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
-          BORINGCACHE_BUILDKIT_MATERIALIZE_COMPRESSION: ${{ inputs.materialize_compression }}
           BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.warm_docker_cache.outputs.buildx-name || inputs.strategy == 'actions-cache' && steps.warm_buildx.outputs.name || '' }}
           CACHE_FROM: ${{ steps.warm_docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.warm_docker_cache.outputs.cache-to }}

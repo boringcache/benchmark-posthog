@@ -34,30 +34,6 @@ case "$lane" in
     mount_cache=""
     native_publish_intensity="balanced"
     ;;
-  native-toolcache)
-    label="BC Native + toolcache"
-    benchmark_id="posthog-native-toolcache"
-    backend="native"
-    tool_cache="turbo"
-    mount_cache=""
-    native_publish_intensity="balanced"
-    ;;
-  native-mountcache)
-    label="BC Native + mountcache"
-    benchmark_id="posthog-native-mountcache"
-    backend="native"
-    tool_cache=""
-    mount_cache="posthog-mounts"
-    native_publish_intensity="balanced"
-    ;;
-  native-toolcache-mountcache)
-    label="BC Native + toolcache + mountcache"
-    benchmark_id="posthog-native-toolcache-mountcache"
-    backend="native"
-    tool_cache="turbo"
-    mount_cache="posthog-mounts"
-    native_publish_intensity="balanced"
-    ;;
   oci-toolcache)
     label="BC OCI + toolcache"
     benchmark_id="posthog-oci-toolcache"

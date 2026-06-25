@@ -52,10 +52,10 @@ jobs:
           strategy: actions-cache
           benchmark_id: posthog
           project_repo: PostHog/posthog
-          dockerfile_path: upstream/Dockerfile
           docker_context: upstream
           image_tag: posthog-benchmark:latest
           benchmark_workspace: ${{ github.repository }}
+          dockerfile_path: scenarios/posthog-toolcache/Dockerfile
           free_disk_space: "true"
 
   ecr-cache:
@@ -79,10 +79,10 @@ jobs:
           artifact_strategy: ecr-cache
           benchmark_id: posthog
           project_repo: PostHog/posthog
-          dockerfile_path: upstream/Dockerfile
           docker_context: upstream
           image_tag: posthog-benchmark:latest
           benchmark_workspace: ${{ github.repository }}
+          dockerfile_path: scenarios/posthog-toolcache/Dockerfile
           free_disk_space: "true"
           ecr_region: ${{ vars.DOCKER_BENCHMARK_ECR_REGION || 'us-east-1' }}
           ecr_role_arn: ${{ vars.DOCKER_BENCHMARK_ECR_ROLE_ARN }}
@@ -101,24 +101,28 @@ jobs:
             buildkit_backend: registry
             benchmark_id: posthog
             native_publish_intensity: ""
+            dockerfile_path: scenarios/posthog-toolcache/Dockerfile
             docker_tool_cache: ""
             docker_mount_cache: ""
           - label: BC Native
             buildkit_backend: native
             benchmark_id: posthog-native
             native_publish_intensity: balanced
+            dockerfile_path: scenarios/posthog-toolcache/Dockerfile
             docker_tool_cache: ""
             docker_mount_cache: ""
           - label: BC Native + toolcache
             buildkit_backend: native
             benchmark_id: posthog-native-toolcache
             native_publish_intensity: balanced
+            dockerfile_path: scenarios/posthog-toolcache/Dockerfile
             docker_tool_cache: turbo
             docker_mount_cache: ""
           - label: BC OCI + toolcache
             buildkit_backend: registry
             benchmark_id: posthog-oci-toolcache
             native_publish_intensity: ""
+            dockerfile_path: scenarios/posthog-toolcache/Dockerfile
             docker_tool_cache: turbo
             docker_mount_cache: ""
     env:
@@ -141,7 +145,7 @@ jobs:
           buildkit_backend: ${{ matrix.buildkit_backend }}
           benchmark_id: ${{ matrix.benchmark_id }}
           project_repo: PostHog/posthog
-          dockerfile_path: upstream/Dockerfile
+          dockerfile_path: ${{ matrix.dockerfile_path }}
           docker_context: upstream
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64

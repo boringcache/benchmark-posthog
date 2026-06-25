@@ -12,7 +12,10 @@ This repo exists separately from [`boringcache/benchmarks`](https://github.com/b
 ## Source Model
 
 - Upstream app source lives in the pinned `upstream/` submodule.
-- Docker builds use the unmodified upstream `upstream/Dockerfile` with `upstream/` as the build context.
+- Docker builds use the committed `scenarios/posthog-toolcache/Dockerfile`
+  fixture with `upstream/` as the build context. The fixture tracks the pinned
+  upstream Dockerfile and adds only the stable optional
+  `boringcache-tool-cache-env` secret mount around PostHog's Turbo build steps.
 - `scripts/prepare-source.sh` only resets the upstream checkout and applies named benchmark scenarios.
 
 Pinned upstream source:
@@ -31,11 +34,13 @@ mixed into one number: `BC OCI`, `BC Native`, `BC Native + toolcache`, and
 `BC OCI + toolcache`.
 Native lanes use the managed native BuildKit path. Tool-cache uses PostHog's
 Turbo build steps while BoringCache still runs outside the Dockerfile; the
-native tool-cache lane keeps the managed native builder instead of selecting a
-separate Buildx builder. Mount-cache lanes remain script-level diagnostics, but
-they are not part of the routine product benchmark matrix because recent
-PostHog evidence showed high publish/export tail variance and sidecar release
-coupling.
+routine matrix uses the same committed Dockerfile fixture for tool-cache lanes
+and their no-toolcache controls, so enabling tool-cache supplies only the
+BuildKit secret value and does not rewrite the Docker graph. The native
+tool-cache lane keeps the managed native builder instead of selecting a separate
+Buildx builder. Mount-cache lanes remain script-level diagnostics, but they are
+not part of the routine product benchmark matrix because recent PostHog evidence
+showed high publish/export tail variance and sidecar release coupling.
 Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not
 blocked by Docker Hub anonymous pull limits.

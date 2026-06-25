@@ -122,49 +122,23 @@ EOF
   echo "Enabled BoringCache Docker cache-mount sidecars for PostHog pnpm, uv, and Playwright package stores"
 }
 
-enable_posthog_turbo_tool_cache() {
+verify_posthog_turbo_tool_cache_contract() {
   docker_tool_cache_enabled turbo || return 0
 
   local dockerfile_path="${DOCKERFILE_PATH:-}"
-  if [[ "$dockerfile_path" != "upstream/Dockerfile" ]]; then
-    echo "warning: docker tool-cache turbo requested, but ${dockerfile_path:-no Dockerfile} is not the PostHog Dockerfile; leaving Dockerfile unchanged" >&2
-    return 0
-  fi
-
   local dockerfile="${repo_root}/${dockerfile_path}"
-  if grep -q "boringcache-tool-cache-env" "$dockerfile"; then
-    return 0
+  if [[ ! -f "$dockerfile" ]]; then
+    echo "Docker tool-cache turbo requested, but Dockerfile does not exist: ${dockerfile_path:-none}" >&2
+    exit 1
   fi
 
-  local patched_dockerfile
-  patched_dockerfile="$(mktemp)"
-  awk '
-    BEGIN { replacements = 0; in_node_scripts = 0 }
-    /^FROM .* AS node-scripts-build$/ { in_node_scripts = 1 }
-    $0 == "RUN bin/turbo --filter=@posthog/frontend build" {
-      print "RUN --mount=type=secret,id=boringcache-tool-cache-env \\"
-      print "    . /run/secrets/boringcache-tool-cache-env && \\"
-      print "    bin/turbo --filter=@posthog/frontend build"
-      replacements += 1
-      next
-    }
-    in_node_scripts && $0 == "RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \\" {
-      print
-      print "    --mount=type=secret,id=boringcache-tool-cache-env \\"
-      print "    . /run/secrets/boringcache-tool-cache-env && \\"
-      replacements += 1
-      next
-    }
-    { print }
-    END {
-      if (replacements != 2) {
-        printf "expected 2 PostHog Turbo tool-cache Dockerfile edits, applied %d\n", replacements > "/dev/stderr"
-        exit 1
-      }
-    }
-  ' "$dockerfile" > "$patched_dockerfile"
-  mv "$patched_dockerfile" "$dockerfile"
-  echo "Enabled BoringCache Turbo remote cache secret mounts in ${dockerfile_path}"
+  if ! grep -q "boringcache-tool-cache-env" "$dockerfile"; then
+    echo "Docker tool-cache turbo requested, but ${dockerfile_path} does not declare the static boringcache-tool-cache-env secret mount." >&2
+    echo "Use scenarios/posthog-toolcache/Dockerfile or another committed Dockerfile with the stable tool-cache contract." >&2
+    exit 1
+  fi
+
+  echo "Verified BoringCache Turbo remote cache secret mounts in ${dockerfile_path}"
 }
 
 assert_turbo_remote_cache_used() {
@@ -669,7 +643,7 @@ run_wrapped_boringcache_build() {
 
 attempt=1
 append_posthog_mount_cache_profile
-enable_posthog_turbo_tool_cache
+verify_posthog_turbo_tool_cache_contract
 while true; do
   cache_args=()
   extra_args=()

@@ -153,7 +153,7 @@ runs:
         set -euo pipefail
         install_dir="${RUNNER_TEMP}/boringcache-experiment-cli/bin"
         mkdir -p "$install_dir"
-        container_id="$(docker create "$BORINGCACHE_CLI_IMAGE")"
+        container_id="$(docker create "$BORINGCACHE_CLI_IMAGE" /usr/local/bin/boringcache --version)"
         cleanup() {
           docker rm -f "$container_id" >/dev/null 2>&1 || true
         }

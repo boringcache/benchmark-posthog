@@ -87,6 +87,7 @@ env:
   CACHE_LANE: ${{ inputs.cache_lane }}
   BUILDKIT_BACKEND: ${{ inputs.buildkit_backend }}
   CACHE_SCOPE_SUFFIX: ${{ inputs.cache_scope_suffix }}
+  BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
 
 jobs:
   benchmark:

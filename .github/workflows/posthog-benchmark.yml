@@ -10,6 +10,11 @@ on:
         required: false
         type: string
         default: ""
+      prewarm_buildkit_image:
+        description: "Optional experimental BuildKit image. When set, the rolling run adds a BC OCI Prewarm BuildKit lane."
+        required: false
+        type: string
+        default: ""
   schedule:
     - cron: "0 3 * * 3"
   pull_request:
@@ -154,4 +159,41 @@ jobs:
           native_publish_intensity: ${{ matrix.native_publish_intensity }}
           docker_tool_cache: ${{ matrix.docker_tool_cache }}
           docker_mount_cache: ${{ matrix.docker_mount_cache }}
+          free_disk_space: "true"
+
+  boringcache-prewarm-buildkit:
+    name: BC OCI Prewarm BuildKit
+    if: ${{ github.event_name != 'pull_request' && (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+      BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
+    steps:
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: BC OCI Prewarm BuildKit
+        uses: ./.github/actions/docker-rolling-benchmark
+        with:
+          strategy: boringcache
+          buildkit_backend: registry
+          benchmark_id: posthog-oci-prewarm
+          project_repo: PostHog/posthog
+          dockerfile_path: scenarios/posthog-toolcache/Dockerfile
+          docker_context: upstream
+          image_tag: posthog-benchmark:latest
+          cli_platform: linux-amd64
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
+          benchmark_workspace: ${{ github.repository }}
+          cache_export_type: boringcache
+          native_publish_intensity: ""
+          docker_tool_cache: ""
+          docker_mount_cache: ""
           free_disk_space: "true"

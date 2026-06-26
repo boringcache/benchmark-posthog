@@ -21,6 +21,7 @@ oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
 docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
 docker_mount_cache="${BORINGCACHE_DOCKER_MOUNT_CACHE:-}"
 docker_wrapper_mode="${BORINGCACHE_DOCKER_WRAPPER:-auto}"
+cache_export_type="${BORINGCACHE_CACHE_EXPORT_TYPE:-}"
 materialize_compression="${BORINGCACHE_BUILDKIT_MATERIALIZE_COMPRESSION:-}"
 native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
 chmod 0777 "$native_tool_evidence_dir" 2>/dev/null || true
@@ -59,6 +60,31 @@ docker_mount_cache_enabled() {
     [[ "$profile" == "$requested_profile" ]] && return 0
   done
   return 1
+}
+
+cache_to_ref() {
+  local ref="${CACHE_TO:-}"
+  [[ -n "$ref" ]] || return 0
+  if [[ -z "$cache_export_type" ]]; then
+    printf '%s\n' "$ref"
+    return 0
+  fi
+  case "$cache_export_type" in
+    registry|boringcache)
+      ;;
+    *)
+      echo "Unsupported BORINGCACHE_CACHE_EXPORT_TYPE: ${cache_export_type}" >&2
+      exit 1
+      ;;
+  esac
+  case "$ref" in
+    type=*,*)
+      printf 'type=%s,%s\n' "$cache_export_type" "${ref#type=*,}"
+      ;;
+    *)
+      printf '%s\n' "$ref"
+      ;;
+  esac
 }
 
 use_wrapped_boringcache_build() {
@@ -503,6 +529,7 @@ write_build_diagnostics() {
     echo "cache_unreadable_from_refs=${cache_unreadable_from_refs}"
     echo "cache_promotion_refs=${cache_promotion_refs}"
     echo "cache_to=${CACHE_TO:-}"
+    echo "cache_export_type=${cache_export_type}"
     echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
     echo "docker_tool_cache=${docker_tool_cache}"
     echo "docker_mount_cache=${docker_mount_cache}"
@@ -671,7 +698,8 @@ while true; do
   if [[ "$mode" == "full" ]]; then
     if [[ "$backend" == "registry" ]]; then
       [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
-      [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
+      cache_to="$(cache_to_ref)"
+      [[ -n "$cache_to" ]] && cache_args+=(--cache-to "$cache_to")
     fi
   elif [[ "$mode" == "seed-cache" ]]; then
     # --no-cache is required for type=registry export: without it, buildx
@@ -679,7 +707,8 @@ while true; do
     # registry proxy, so the proxy never uploads to BoringCache backend.
     cache_args=(--no-cache)
     if [[ "$backend" == "registry" ]]; then
-      [[ -n "${CACHE_TO:-}" ]] && cache_args+=(--cache-to "$CACHE_TO")
+      cache_to="$(cache_to_ref)"
+      [[ -n "$cache_to" ]] && cache_args+=(--cache-to "$cache_to")
     fi
   elif [[ "$mode" == "partial-warm" ]]; then
     # Read-only: no --cache-to.

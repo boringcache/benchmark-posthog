@@ -59,6 +59,10 @@ inputs:
     description: "Optional native BuildKit publisher intensity for benchmark proof lanes. Use balanced for product lanes; aggressive is stress-only."
     required: false
     default: ""
+  cache_export_type:
+    description: "Optional override for the BuildKit cache-to type. Used by experimental BuildKit lanes such as type=boringcache."
+    required: false
+    default: ""
   free_disk_space:
     required: false
     default: "false"
@@ -405,6 +409,7 @@ runs:
         BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
         BORINGCACHE_DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
         BORINGCACHE_DOCKER_MOUNT_CACHE: ${{ inputs.docker_mount_cache }}
+        BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
@@ -617,6 +622,8 @@ runs:
         STRATEGY: ${{ inputs.strategy }}
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
         PROJECT_REPO: ${{ inputs.project_repo }}
+        BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+        BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
       run: |
         set -euo pipefail
         cache_summary_args=()

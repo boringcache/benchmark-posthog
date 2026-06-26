@@ -132,6 +132,14 @@ runs:
           exit 1
         fi
 
+    - name: Log in to private BuildKit image registry
+      if: ${{ startsWith(inputs.buildkit_image, 'ghcr.io/') }}
+      uses: docker/login-action@v4.2.0
+      with:
+        registry: ghcr.io
+        username: ${{ env.BORINGCACHE_GHCR_READ_USER || github.actor }}
+        password: ${{ env.BORINGCACHE_GHCR_READ_TOKEN }}
+
     - name: Install BoringCache CLI with boringcache/one
       if: ${{ inputs.strategy == 'boringcache' }}
       uses: boringcache/one@v1
@@ -293,6 +301,7 @@ runs:
         cli-version: ${{ inputs.cli_version }}
         cache-tag: ${{ steps.scope.outputs.cache_scope }}
         registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
+        no-platform: "true"
         proxy-no-git: "true"
         driver-opts: |
           image=${{ inputs.buildkit_image }}

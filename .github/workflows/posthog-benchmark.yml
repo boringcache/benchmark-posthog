@@ -11,7 +11,12 @@ on:
         type: string
         default: ""
       prewarm_buildkit_image:
-        description: "Optional experimental BuildKit image. When set, the rolling run adds a BC OCI Prewarm BuildKit lane."
+        description: "Optional experimental BuildKit image. When set, the rolling run adds a BC BuildKit backend lane."
+        required: false
+        type: string
+        default: ""
+      prewarm_cli_image:
+        description: "Optional experimental Linux BoringCache CLI image. Used only by the experimental BuildKit lane; public lanes keep boringcache/one@v1 defaults."
         required: false
         type: string
         default: ""
@@ -19,7 +24,7 @@ on:
         description: "Optional benchmark/cache scope for the experimental BuildKit lane."
         required: false
         type: string
-        default: "posthog-oci-prewarm"
+        default: "posthog-bc-buildkit"
   schedule:
     - cron: "0 3 * * 3"
   pull_request:
@@ -168,7 +173,7 @@ jobs:
           free_disk_space: "true"
 
   boringcache-prewarm-buildkit:
-    name: BC OCI Prewarm BuildKit
+    name: BC BuildKit Backend
     if: ${{ github.event_name != 'pull_request' && (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE) }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -186,7 +191,7 @@ jobs:
           fetch-depth: 1
           submodules: false
 
-      - name: BC OCI Prewarm BuildKit
+      - name: BC BuildKit Backend
         uses: ./.github/actions/docker-rolling-benchmark
         with:
           strategy: boringcache
@@ -198,6 +203,7 @@ jobs:
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64
           cli_version: ${{ inputs.cli_version }}
+          cli_image: ${{ inputs.prewarm_cli_image || vars.POSTHOG_PREWARM_CLI_IMAGE }}
           buildkit_image: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
           benchmark_workspace: ${{ github.repository }}
           cache_export_type: boringcache

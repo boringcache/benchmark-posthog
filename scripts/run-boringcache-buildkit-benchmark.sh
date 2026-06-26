@@ -22,6 +22,7 @@ docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
 docker_mount_cache="${BORINGCACHE_DOCKER_MOUNT_CACHE:-}"
 docker_wrapper_mode="${BORINGCACHE_DOCKER_WRAPPER:-auto}"
 cache_export_type="${BORINGCACHE_CACHE_EXPORT_TYPE:-}"
+effective_cache_to=""
 materialize_compression="${BORINGCACHE_BUILDKIT_MATERIALIZE_COMPRESSION:-}"
 native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
 chmod 0777 "$native_tool_evidence_dir" 2>/dev/null || true
@@ -529,6 +530,7 @@ write_build_diagnostics() {
     echo "cache_unreadable_from_refs=${cache_unreadable_from_refs}"
     echo "cache_promotion_refs=${cache_promotion_refs}"
     echo "cache_to=${CACHE_TO:-}"
+    echo "effective_cache_to=${effective_cache_to}"
     echo "cache_export_type=${cache_export_type}"
     echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
     echo "docker_tool_cache=${docker_tool_cache}"
@@ -699,6 +701,7 @@ while true; do
     if [[ "$backend" == "registry" ]]; then
       [[ -n "${CACHE_FROM:-}" ]] && cache_args+=(--cache-from "$CACHE_FROM")
       cache_to="$(cache_to_ref)"
+      effective_cache_to="$cache_to"
       [[ -n "$cache_to" ]] && cache_args+=(--cache-to "$cache_to")
     fi
   elif [[ "$mode" == "seed-cache" ]]; then
@@ -708,6 +711,7 @@ while true; do
     cache_args=(--no-cache)
     if [[ "$backend" == "registry" ]]; then
       cache_to="$(cache_to_ref)"
+      effective_cache_to="$cache_to"
       [[ -n "$cache_to" ]] && cache_args+=(--cache-to "$cache_to")
     fi
   elif [[ "$mode" == "partial-warm" ]]; then
@@ -739,6 +743,9 @@ while true; do
     fi
 
     : > "$build_log"
+    echo "Effective cache args:"
+    printf '  %q' "${cache_args[@]}"
+    printf '\n'
     set +e
     DOCKER_BUILDKIT=1 docker buildx build \
       --builder "$BUILDER" \

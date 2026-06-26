@@ -15,6 +15,11 @@ on:
         required: false
         type: string
         default: ""
+      prewarm_benchmark_id:
+        description: "Optional benchmark/cache scope for the experimental BuildKit lane."
+        required: false
+        type: string
+        default: "posthog-oci-prewarm"
   schedule:
     - cron: "0 3 * * 3"
   pull_request:
@@ -186,7 +191,7 @@ jobs:
         with:
           strategy: boringcache
           buildkit_backend: registry
-          benchmark_id: posthog-oci-prewarm
+          benchmark_id: ${{ inputs.prewarm_benchmark_id || 'posthog-oci-prewarm' }}
           project_repo: PostHog/posthog
           dockerfile_path: scenarios/posthog-toolcache/Dockerfile
           docker_context: upstream

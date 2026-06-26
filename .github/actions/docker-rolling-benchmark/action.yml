@@ -164,7 +164,7 @@ runs:
         echo "$install_dir" >> "$GITHUB_PATH"
 
     - name: Install BoringCache CLI with boringcache/one
-      if: ${{ inputs.strategy == 'boringcache' }}
+      if: ${{ inputs.strategy == 'boringcache' && inputs.cli_image == '' }}
       uses: boringcache/one@v1
       with:
         setup: none

@@ -112,6 +112,7 @@ output_dir="benchmark-results"
 docker_cache_import_seconds=""
 docker_cache_export_seconds=""
 buildkit_cached_steps="${BENCHMARK_BUILDKIT_CACHED_STEPS:-}"
+cli_image="${BENCHMARK_CLI_IMAGE:-}"
 buildkit_image="${BENCHMARK_BUILDKIT_IMAGE:-${BUILDKIT_IMAGE:-}}"
 buildkit_cache_export_type="${BENCHMARK_BUILDKIT_CACHE_EXPORT_TYPE:-${BORINGCACHE_CACHE_EXPORT_TYPE:-}}"
 oci_hydration_policy=""
@@ -352,6 +353,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --buildkit-cached-steps)
       buildkit_cached_steps="$2"
+      shift 2
+      ;;
+    --cli-image)
+      cli_image="$2"
       shift 2
       ;;
     --buildkit-image)
@@ -1922,6 +1927,7 @@ cat > "$json_path" <<JSON
     "storage_breakdown": $storage_breakdown_payload
   },
   "docker_cache": {
+    "cli_image": $(json_string_or_null "$cli_image"),
     "buildkit_image": $(json_string_or_null "$buildkit_image"),
     "buildkit_cache_export_type": $(json_string_or_null "$buildkit_cache_export_type"),
     "import_seconds": $(json_num_or_null "$docker_cache_import_seconds"),
@@ -2050,6 +2056,9 @@ JSON
   fi
   if [[ -n "$buildkit_cached_steps" ]]; then
     echo "| BuildKit cached steps | ${buildkit_cached_steps} |"
+  fi
+  if [[ -n "$cli_image" ]]; then
+    echo "| CLI image | \`${cli_image}\` |"
   fi
   if [[ -n "$buildkit_image" ]]; then
     echo "| BuildKit image | \`${buildkit_image}\` |"

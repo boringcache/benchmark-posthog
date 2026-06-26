@@ -303,6 +303,7 @@ runs:
         registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
         no-platform: "true"
         proxy-no-git: "true"
+        proxy-no-platform: "true"
         driver-opts: |
           image=${{ inputs.buildkit_image }}
           network=host

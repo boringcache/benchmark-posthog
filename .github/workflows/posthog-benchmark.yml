@@ -187,7 +187,7 @@ jobs:
 
   boringcache-prewarm-buildkit:
     name: BC BuildKit Backend
-    if: ${{ github.event_name != 'pull_request' && (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE) && (inputs.prewarm_cli_image || vars.POSTHOG_PREWARM_CLI_IMAGE) }}
+    if: ${{ github.event_name != 'pull_request' && (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE) }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -228,7 +228,7 @@ jobs:
 
   boringcache-prewarm-buildkit-toolcache:
     name: BC BuildKit Backend + toolcache
-    if: ${{ github.event_name != 'pull_request' && (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE) && (inputs.prewarm_cli_image || vars.POSTHOG_PREWARM_CLI_IMAGE) }}
+    if: ${{ github.event_name != 'pull_request' && (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE) }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:

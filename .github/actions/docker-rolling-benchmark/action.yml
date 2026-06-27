@@ -574,10 +574,13 @@ runs:
           if [[ -n "$import_seconds" ]]; then
             echo "docker_cache_import_seconds=${import_seconds}" >> "$GITHUB_OUTPUT"
           fi
-          if [[ "$STRATEGY" == "ecr-cache" ]]; then
-            export_step="$(find_step_id "exporting cache to registry")"
-          else
-            export_step="$(find_step_id "preparing build cache for export")"
+          export_step="$(find_step_id "exporting cache to boringcache")"
+          if [[ -z "$export_step" ]]; then
+            if [[ "$STRATEGY" == "ecr-cache" ]]; then
+              export_step="$(find_step_id "exporting cache to registry")"
+            else
+              export_step="$(find_step_id "preparing build cache for export")"
+            fi
           fi
           export_seconds="$(find_step_seconds "$export_step")"
           if [[ -n "$export_seconds" ]]; then

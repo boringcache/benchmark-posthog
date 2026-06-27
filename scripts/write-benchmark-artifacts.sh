@@ -115,6 +115,21 @@ buildkit_cached_steps="${BENCHMARK_BUILDKIT_CACHED_STEPS:-}"
 cli_image="${BENCHMARK_CLI_IMAGE:-}"
 buildkit_image="${BENCHMARK_BUILDKIT_IMAGE:-${BUILDKIT_IMAGE:-}}"
 buildkit_cache_export_type="${BENCHMARK_BUILDKIT_CACHE_EXPORT_TYPE:-${BORINGCACHE_CACHE_EXPORT_TYPE:-}}"
+buildkit_cache_prewarm_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_SECONDS:-}"
+buildkit_cache_prepare_seconds="${BENCHMARK_BUILDKIT_CACHE_PREPARE_SECONDS:-}"
+buildkit_cache_send_seconds="${BENCHMARK_BUILDKIT_CACHE_SEND_SECONDS:-}"
+buildkit_cache_prewarm_queued="${BENCHMARK_BUILDKIT_CACHE_PREWARM_QUEUED:-}"
+buildkit_cache_prewarm_dropped="${BENCHMARK_BUILDKIT_CACHE_PREWARM_DROPPED:-}"
+buildkit_cache_prewarm_canceled="${BENCHMARK_BUILDKIT_CACHE_PREWARM_CANCELED:-}"
+buildkit_cache_prewarm_prepared="${BENCHMARK_BUILDKIT_CACHE_PREWARM_PREPARED:-}"
+buildkit_cache_prewarm_body_prepared="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_PREPARED:-}"
+buildkit_cache_prewarm_resolved="${BENCHMARK_BUILDKIT_CACHE_PREWARM_RESOLVED:-}"
+buildkit_cache_prewarm_reused="${BENCHMARK_BUILDKIT_CACHE_PREWARM_REUSED:-}"
+buildkit_cache_prewarm_uploaded="${BENCHMARK_BUILDKIT_CACHE_PREWARM_UPLOADED:-}"
+buildkit_cache_prewarm_failed="${BENCHMARK_BUILDKIT_CACHE_PREWARM_FAILED:-}"
+buildkit_cache_prewarm_recursive="${BENCHMARK_BUILDKIT_CACHE_PREWARM_RECURSIVE:-}"
+buildkit_cache_prewarm_direct="${BENCHMARK_BUILDKIT_CACHE_PREWARM_DIRECT:-}"
+buildkit_cache_prewarm_missed="${BENCHMARK_BUILDKIT_CACHE_PREWARM_MISSED:-}"
 oci_hydration_policy=""
 oci_body_local_hits=""
 oci_body_remote_fetches=""
@@ -365,6 +380,66 @@ while [[ $# -gt 0 ]]; do
       ;;
     --buildkit-cache-export-type)
       buildkit_cache_export_type="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-seconds)
+      buildkit_cache_prewarm_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prepare-seconds)
+      buildkit_cache_prepare_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-send-seconds)
+      buildkit_cache_send_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-queued)
+      buildkit_cache_prewarm_queued="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-dropped)
+      buildkit_cache_prewarm_dropped="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-canceled)
+      buildkit_cache_prewarm_canceled="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-prepared)
+      buildkit_cache_prewarm_prepared="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-prepared)
+      buildkit_cache_prewarm_body_prepared="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-resolved)
+      buildkit_cache_prewarm_resolved="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-reused)
+      buildkit_cache_prewarm_reused="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-uploaded)
+      buildkit_cache_prewarm_uploaded="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-failed)
+      buildkit_cache_prewarm_failed="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-recursive)
+      buildkit_cache_prewarm_recursive="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-direct)
+      buildkit_cache_prewarm_direct="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-missed)
+      buildkit_cache_prewarm_missed="$2"
       shift 2
       ;;
     --http-transport)
@@ -1263,7 +1338,28 @@ fi
 if [[ -n "$docker_cache_export_seconds" ]] && ! [[ "$docker_cache_export_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   docker_cache_export_seconds=""
 fi
+if [[ -n "$buildkit_cache_prewarm_seconds" ]] && ! [[ "$buildkit_cache_prewarm_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  buildkit_cache_prewarm_seconds=""
+fi
+if [[ -n "$buildkit_cache_prepare_seconds" ]] && ! [[ "$buildkit_cache_prepare_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  buildkit_cache_prepare_seconds=""
+fi
+if [[ -n "$buildkit_cache_send_seconds" ]] && ! [[ "$buildkit_cache_send_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  buildkit_cache_send_seconds=""
+fi
 buildkit_cached_steps="$(sanitize_uint "$buildkit_cached_steps")"
+buildkit_cache_prewarm_queued="$(sanitize_uint "$buildkit_cache_prewarm_queued")"
+buildkit_cache_prewarm_dropped="$(sanitize_uint "$buildkit_cache_prewarm_dropped")"
+buildkit_cache_prewarm_canceled="$(sanitize_uint "$buildkit_cache_prewarm_canceled")"
+buildkit_cache_prewarm_prepared="$(sanitize_uint "$buildkit_cache_prewarm_prepared")"
+buildkit_cache_prewarm_body_prepared="$(sanitize_uint "$buildkit_cache_prewarm_body_prepared")"
+buildkit_cache_prewarm_resolved="$(sanitize_uint "$buildkit_cache_prewarm_resolved")"
+buildkit_cache_prewarm_reused="$(sanitize_uint "$buildkit_cache_prewarm_reused")"
+buildkit_cache_prewarm_uploaded="$(sanitize_uint "$buildkit_cache_prewarm_uploaded")"
+buildkit_cache_prewarm_failed="$(sanitize_uint "$buildkit_cache_prewarm_failed")"
+buildkit_cache_prewarm_recursive="$(sanitize_uint "$buildkit_cache_prewarm_recursive")"
+buildkit_cache_prewarm_direct="$(sanitize_uint "$buildkit_cache_prewarm_direct")"
+buildkit_cache_prewarm_missed="$(sanitize_uint "$buildkit_cache_prewarm_missed")"
 cache_reuse_status=""
 effective_cache_import_status="$cache_import_status"
 if [[ "$strategy" == "boringcache" && ( "$mode" == "docker" || "$adapter" == "oci" ) ]]; then
@@ -1932,7 +2028,24 @@ cat > "$json_path" <<JSON
     "buildkit_cache_export_type": $(json_string_or_null "$buildkit_cache_export_type"),
     "import_seconds": $(json_num_or_null "$docker_cache_import_seconds"),
     "export_seconds": $(json_num_or_null "$docker_cache_export_seconds"),
-    "cached_steps": $(json_num_or_null "$buildkit_cached_steps")
+    "cached_steps": $(json_num_or_null "$buildkit_cached_steps"),
+    "prewarm_seconds": $(json_num_or_null "$buildkit_cache_prewarm_seconds"),
+    "prepare_seconds": $(json_num_or_null "$buildkit_cache_prepare_seconds"),
+    "send_seconds": $(json_num_or_null "$buildkit_cache_send_seconds"),
+    "prewarm": {
+      "queued": $(json_num_or_null "$buildkit_cache_prewarm_queued"),
+      "dropped": $(json_num_or_null "$buildkit_cache_prewarm_dropped"),
+      "canceled": $(json_num_or_null "$buildkit_cache_prewarm_canceled"),
+      "prepared": $(json_num_or_null "$buildkit_cache_prewarm_prepared"),
+      "body_prepared": $(json_num_or_null "$buildkit_cache_prewarm_body_prepared"),
+      "resolved": $(json_num_or_null "$buildkit_cache_prewarm_resolved"),
+      "reused": $(json_num_or_null "$buildkit_cache_prewarm_reused"),
+      "uploaded": $(json_num_or_null "$buildkit_cache_prewarm_uploaded"),
+      "failed": $(json_num_or_null "$buildkit_cache_prewarm_failed"),
+      "recursive": $(json_num_or_null "$buildkit_cache_prewarm_recursive"),
+      "direct": $(json_num_or_null "$buildkit_cache_prewarm_direct"),
+      "missed": $(json_num_or_null "$buildkit_cache_prewarm_missed")
+    }
   },
   "startup_prefetch": {
     "duration_ms": $(json_num_or_null "$startup_prefetch_duration_ms"),
@@ -2163,6 +2276,12 @@ JSON
   fi
   if [[ -n "$docker_cache_export_seconds" ]]; then
     echo "| Docker cache export | ${docker_cache_export_seconds}s |"
+  fi
+  if [[ -n "$buildkit_cache_prewarm_seconds" || -n "$buildkit_cache_prepare_seconds" || -n "$buildkit_cache_send_seconds" ]]; then
+    echo "| BuildKit cache export split | prewarm=${buildkit_cache_prewarm_seconds:-?}s; prepare=${buildkit_cache_prepare_seconds:-?}s; send=${buildkit_cache_send_seconds:-?}s |"
+  fi
+  if [[ -n "$buildkit_cache_prewarm_recursive" || -n "$buildkit_cache_prewarm_body_prepared" ]]; then
+    echo "| BuildKit prewarm shape | body_prepared=${buildkit_cache_prewarm_body_prepared:-?}; uploaded=${buildkit_cache_prewarm_uploaded:-?}; recursive=${buildkit_cache_prewarm_recursive:-?}; failed=${buildkit_cache_prewarm_failed:-?} |"
   fi
   if [[ -n "$startup_prefetch_duration_ms" ]]; then
     echo "| Startup prefetch | ${startup_prefetch_duration_ms}ms |"

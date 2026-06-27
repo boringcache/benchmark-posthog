@@ -292,6 +292,21 @@ find_step_seconds() {
   sed -nE "s/^#${step_id} DONE ([0-9]+(\\.[0-9]+)?)s$/\\1/p" "$build_log" | tail -n1
 }
 
+find_progress_seconds() {
+  local label="$1"
+  sed -nE "s/^#[0-9]+ ${label} ([0-9]+(\\.[0-9]+)?)s done$/\\1/p" "$build_log" | tail -n1
+}
+
+buildkit_prewarm_summary() {
+  sed -nE 's/^#[0-9]+ cache prewarm (queued=.*) done$/\1/p' "$build_log" | tail -n1
+}
+
+summary_value() {
+  local details="$1"
+  local name="$2"
+  printf '%s\n' "$details" | tr ' ' '\n' | awk -F= -v key="$name" '$1 == key { print $2; exit }'
+}
+
 write_build_metrics() {
   local output_path="${BENCHMARK_METRICS_OUTPUT:-}"
   [[ -n "$output_path" ]] || return 0
@@ -302,6 +317,10 @@ write_build_metrics() {
   local export_seconds=""
   local import_status=""
   local cached_steps=""
+  local prewarm_seconds=""
+  local prepare_seconds=""
+  local send_seconds=""
+  local prewarm_summary=""
 
   import_step="$(find_step_id "importing cache manifest from")"
   export_step="$(find_step_id "exporting cache to boringcache")"
@@ -312,6 +331,10 @@ write_build_metrics() {
   export_seconds="$(find_step_seconds "$export_step")"
   import_status="$(build_import_status)"
   cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
+  prewarm_seconds="$(find_progress_seconds "waiting for cache prewarm")"
+  prepare_seconds="$(find_progress_seconds "preparing build cache for export")"
+  send_seconds="$(find_progress_seconds "sending cache export")"
+  prewarm_summary="$(buildkit_prewarm_summary)"
 
   mkdir -p "$(dirname "$output_path")"
   : > "$output_path"
@@ -322,6 +345,29 @@ write_build_metrics() {
   fi
   if [[ -n "$export_seconds" ]]; then
     echo "docker_cache_export_seconds=$export_seconds" >> "$output_path"
+  fi
+  if [[ -n "$prewarm_seconds" ]]; then
+    echo "buildkit_cache_prewarm_seconds=$prewarm_seconds" >> "$output_path"
+  fi
+  if [[ -n "$prepare_seconds" ]]; then
+    echo "buildkit_cache_prepare_seconds=$prepare_seconds" >> "$output_path"
+  fi
+  if [[ -n "$send_seconds" ]]; then
+    echo "buildkit_cache_send_seconds=$send_seconds" >> "$output_path"
+  fi
+  if [[ -n "$prewarm_summary" ]]; then
+    echo "buildkit_cache_prewarm_queued=$(summary_value "$prewarm_summary" queued)" >> "$output_path"
+    echo "buildkit_cache_prewarm_dropped=$(summary_value "$prewarm_summary" dropped)" >> "$output_path"
+    echo "buildkit_cache_prewarm_canceled=$(summary_value "$prewarm_summary" canceled)" >> "$output_path"
+    echo "buildkit_cache_prewarm_prepared=$(summary_value "$prewarm_summary" prepared)" >> "$output_path"
+    echo "buildkit_cache_prewarm_body_prepared=$(summary_value "$prewarm_summary" body_prepared)" >> "$output_path"
+    echo "buildkit_cache_prewarm_resolved=$(summary_value "$prewarm_summary" resolved)" >> "$output_path"
+    echo "buildkit_cache_prewarm_reused=$(summary_value "$prewarm_summary" reused)" >> "$output_path"
+    echo "buildkit_cache_prewarm_uploaded=$(summary_value "$prewarm_summary" uploaded)" >> "$output_path"
+    echo "buildkit_cache_prewarm_failed=$(summary_value "$prewarm_summary" failed)" >> "$output_path"
+    echo "buildkit_cache_prewarm_recursive=$(summary_value "$prewarm_summary" recursive)" >> "$output_path"
+    echo "buildkit_cache_prewarm_direct=$(summary_value "$prewarm_summary" direct)" >> "$output_path"
+    echo "buildkit_cache_prewarm_missed=$(summary_value "$prewarm_summary" missed)" >> "$output_path"
   fi
   if [[ -n "$docker_tool_cache" ]]; then
     echo "docker_tool_cache=${docker_tool_cache}" >> "$output_path"
@@ -553,7 +599,7 @@ write_build_diagnostics() {
     grep -E 'importing cache manifest|failed to configure .*cache importer|inferred cache manifest type' "$build_log" || true
     echo "EOF"
     echo "export_lines<<EOF"
-    grep -E 'exporting cache to (registry|boringcache)|DONE [0-9.]+s$' "$build_log" | tail -n 80 || true
+    grep -E 'exporting cache to (registry|boringcache)|waiting for cache prewarm|cache prewarm|preparing build cache for export|sending cache export|writing (config|cache image manifest)|DONE [0-9.]+s$' "$build_log" | tail -n 120 || true
     echo "EOF"
     echo "proxy_summary<<EOF"
     grep -E 'Mode:|OCI Human Tags|Internal Registry Root Tag|Startup mode|Full-tag hydration|OCI body hydration|OCI HEAD|SESSION tool=oci|KV flush|root publish|error|warn' "$proxy_log" | tail -n 160 || true

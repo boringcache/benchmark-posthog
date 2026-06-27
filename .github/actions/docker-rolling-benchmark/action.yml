@@ -695,6 +695,21 @@ runs:
           --docker-cache-export-seconds "${{ steps.build.outputs.docker_cache_export_seconds }}" \
           --buildkit-cached-steps "${{ steps.build.outputs.buildkit_cached_steps }}" \
           --cli-image "${{ inputs.cli_image }}" \
+          --buildkit-cache-prewarm-seconds "${{ steps.build.outputs.buildkit_cache_prewarm_seconds }}" \
+          --buildkit-cache-prepare-seconds "${{ steps.build.outputs.buildkit_cache_prepare_seconds }}" \
+          --buildkit-cache-send-seconds "${{ steps.build.outputs.buildkit_cache_send_seconds }}" \
+          --buildkit-cache-prewarm-queued "${{ steps.build.outputs.buildkit_cache_prewarm_queued }}" \
+          --buildkit-cache-prewarm-dropped "${{ steps.build.outputs.buildkit_cache_prewarm_dropped }}" \
+          --buildkit-cache-prewarm-canceled "${{ steps.build.outputs.buildkit_cache_prewarm_canceled }}" \
+          --buildkit-cache-prewarm-prepared "${{ steps.build.outputs.buildkit_cache_prewarm_prepared }}" \
+          --buildkit-cache-prewarm-body-prepared "${{ steps.build.outputs.buildkit_cache_prewarm_body_prepared }}" \
+          --buildkit-cache-prewarm-resolved "${{ steps.build.outputs.buildkit_cache_prewarm_resolved }}" \
+          --buildkit-cache-prewarm-reused "${{ steps.build.outputs.buildkit_cache_prewarm_reused }}" \
+          --buildkit-cache-prewarm-uploaded "${{ steps.build.outputs.buildkit_cache_prewarm_uploaded }}" \
+          --buildkit-cache-prewarm-failed "${{ steps.build.outputs.buildkit_cache_prewarm_failed }}" \
+          --buildkit-cache-prewarm-recursive "${{ steps.build.outputs.buildkit_cache_prewarm_recursive }}" \
+          --buildkit-cache-prewarm-direct "${{ steps.build.outputs.buildkit_cache_prewarm_direct }}" \
+          --buildkit-cache-prewarm-missed "${{ steps.build.outputs.buildkit_cache_prewarm_missed }}" \
           --cache-storage-bytes "${{ steps.storage.outputs.bytes }}" \
           --cache-storage-source "${{ steps.storage.outputs.source }}" \
           --storage-breakdown-json "${{ steps.storage.outputs.breakdown_path }}" \

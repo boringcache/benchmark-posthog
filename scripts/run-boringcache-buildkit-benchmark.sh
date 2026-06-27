@@ -304,7 +304,10 @@ write_build_metrics() {
   local cached_steps=""
 
   import_step="$(find_step_id "importing cache manifest from")"
-  export_step="$(find_step_id "exporting cache to registry")"
+  export_step="$(find_step_id "exporting cache to boringcache")"
+  if [[ -z "$export_step" ]]; then
+    export_step="$(find_step_id "exporting cache to registry")"
+  fi
   import_seconds="$(find_step_seconds "$import_step")"
   export_seconds="$(find_step_seconds "$export_step")"
   import_status="$(build_import_status)"
@@ -550,7 +553,7 @@ write_build_diagnostics() {
     grep -E 'importing cache manifest|failed to configure .*cache importer|inferred cache manifest type' "$build_log" || true
     echo "EOF"
     echo "export_lines<<EOF"
-    grep -E 'exporting cache to registry|DONE [0-9.]+s$' "$build_log" | tail -n 80 || true
+    grep -E 'exporting cache to (registry|boringcache)|DONE [0-9.]+s$' "$build_log" | tail -n 80 || true
     echo "EOF"
     echo "proxy_summary<<EOF"
     grep -E 'Mode:|OCI Human Tags|Internal Registry Root Tag|Startup mode|Full-tag hydration|OCI body hydration|OCI HEAD|SESSION tool=oci|KV flush|root publish|error|warn' "$proxy_log" | tail -n 160 || true

@@ -361,6 +361,7 @@ write_build_metrics() {
     echo "buildkit_cache_prewarm_canceled=$(summary_value "$prewarm_summary" canceled)" >> "$output_path"
     echo "buildkit_cache_prewarm_prepared=$(summary_value "$prewarm_summary" prepared)" >> "$output_path"
     echo "buildkit_cache_prewarm_body_prepared=$(summary_value "$prewarm_summary" body_prepared)" >> "$output_path"
+    echo "buildkit_cache_prewarm_committed_bodies=$(summary_value "$prewarm_summary" committed_bodies)" >> "$output_path"
     echo "buildkit_cache_prewarm_resolved=$(summary_value "$prewarm_summary" resolved)" >> "$output_path"
     echo "buildkit_cache_prewarm_reused=$(summary_value "$prewarm_summary" reused)" >> "$output_path"
     echo "buildkit_cache_prewarm_uploaded=$(summary_value "$prewarm_summary" uploaded)" >> "$output_path"

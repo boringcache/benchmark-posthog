@@ -123,6 +123,7 @@ buildkit_cache_prewarm_dropped="${BENCHMARK_BUILDKIT_CACHE_PREWARM_DROPPED:-}"
 buildkit_cache_prewarm_canceled="${BENCHMARK_BUILDKIT_CACHE_PREWARM_CANCELED:-}"
 buildkit_cache_prewarm_prepared="${BENCHMARK_BUILDKIT_CACHE_PREWARM_PREPARED:-}"
 buildkit_cache_prewarm_body_prepared="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_PREPARED:-}"
+buildkit_cache_prewarm_committed_bodies="${BENCHMARK_BUILDKIT_CACHE_PREWARM_COMMITTED_BODIES:-}"
 buildkit_cache_prewarm_resolved="${BENCHMARK_BUILDKIT_CACHE_PREWARM_RESOLVED:-}"
 buildkit_cache_prewarm_reused="${BENCHMARK_BUILDKIT_CACHE_PREWARM_REUSED:-}"
 buildkit_cache_prewarm_uploaded="${BENCHMARK_BUILDKIT_CACHE_PREWARM_UPLOADED:-}"
@@ -412,6 +413,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --buildkit-cache-prewarm-body-prepared)
       buildkit_cache_prewarm_body_prepared="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-committed-bodies)
+      buildkit_cache_prewarm_committed_bodies="$2"
       shift 2
       ;;
     --buildkit-cache-prewarm-resolved)
@@ -1353,6 +1358,7 @@ buildkit_cache_prewarm_dropped="$(sanitize_uint "$buildkit_cache_prewarm_dropped
 buildkit_cache_prewarm_canceled="$(sanitize_uint "$buildkit_cache_prewarm_canceled")"
 buildkit_cache_prewarm_prepared="$(sanitize_uint "$buildkit_cache_prewarm_prepared")"
 buildkit_cache_prewarm_body_prepared="$(sanitize_uint "$buildkit_cache_prewarm_body_prepared")"
+buildkit_cache_prewarm_committed_bodies="$(sanitize_uint "$buildkit_cache_prewarm_committed_bodies")"
 buildkit_cache_prewarm_resolved="$(sanitize_uint "$buildkit_cache_prewarm_resolved")"
 buildkit_cache_prewarm_reused="$(sanitize_uint "$buildkit_cache_prewarm_reused")"
 buildkit_cache_prewarm_uploaded="$(sanitize_uint "$buildkit_cache_prewarm_uploaded")"
@@ -2038,6 +2044,7 @@ cat > "$json_path" <<JSON
       "canceled": $(json_num_or_null "$buildkit_cache_prewarm_canceled"),
       "prepared": $(json_num_or_null "$buildkit_cache_prewarm_prepared"),
       "body_prepared": $(json_num_or_null "$buildkit_cache_prewarm_body_prepared"),
+      "committed_bodies": $(json_num_or_null "$buildkit_cache_prewarm_committed_bodies"),
       "resolved": $(json_num_or_null "$buildkit_cache_prewarm_resolved"),
       "reused": $(json_num_or_null "$buildkit_cache_prewarm_reused"),
       "uploaded": $(json_num_or_null "$buildkit_cache_prewarm_uploaded"),
@@ -2281,7 +2288,7 @@ JSON
     echo "| BuildKit cache export split | prewarm=${buildkit_cache_prewarm_seconds:-?}s; prepare=${buildkit_cache_prepare_seconds:-?}s; send=${buildkit_cache_send_seconds:-?}s |"
   fi
   if [[ -n "$buildkit_cache_prewarm_recursive" || -n "$buildkit_cache_prewarm_body_prepared" ]]; then
-    echo "| BuildKit prewarm shape | body_prepared=${buildkit_cache_prewarm_body_prepared:-?}; uploaded=${buildkit_cache_prewarm_uploaded:-?}; recursive=${buildkit_cache_prewarm_recursive:-?}; failed=${buildkit_cache_prewarm_failed:-?} |"
+    echo "| BuildKit prewarm shape | body_prepared=${buildkit_cache_prewarm_body_prepared:-?}; committed_bodies=${buildkit_cache_prewarm_committed_bodies:-?}; uploaded=${buildkit_cache_prewarm_uploaded:-?}; recursive=${buildkit_cache_prewarm_recursive:-?}; failed=${buildkit_cache_prewarm_failed:-?} |"
   fi
   if [[ -n "$startup_prefetch_duration_ms" ]]; then
     echo "| Startup prefetch | ${startup_prefetch_duration_ms}ms |"

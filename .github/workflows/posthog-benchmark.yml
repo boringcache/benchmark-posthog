@@ -24,7 +24,12 @@ on:
         description: "Optional benchmark/cache scope for the experimental BuildKit lane."
         required: false
         type: string
-        default: "posthog-bc-buildkit"
+        default: ""
+      benchmark_id_suffix:
+        description: "Optional suffix appended to built-in benchmark/cache scopes for isolated comparison runs."
+        required: false
+        type: string
+        default: ""
   schedule:
     - cron: "0 3 * * 3"
   pull_request:
@@ -66,7 +71,7 @@ jobs:
         uses: ./.github/actions/docker-rolling-benchmark
         with:
           strategy: actions-cache
-          benchmark_id: posthog
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
           project_repo: PostHog/posthog
           docker_context: upstream
           image_tag: posthog-benchmark:latest
@@ -93,7 +98,7 @@ jobs:
         with:
           strategy: ecr-cache
           artifact_strategy: ecr-cache
-          benchmark_id: posthog
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
           project_repo: PostHog/posthog
           docker_context: upstream
           image_tag: posthog-benchmark:latest
@@ -159,7 +164,7 @@ jobs:
         with:
           strategy: boringcache
           buildkit_backend: ${{ matrix.buildkit_backend }}
-          benchmark_id: ${{ matrix.benchmark_id }}
+          benchmark_id: ${{ format('{0}{1}', matrix.benchmark_id, inputs.benchmark_id_suffix) }}
           project_repo: PostHog/posthog
           dockerfile_path: ${{ matrix.dockerfile_path }}
           docker_context: upstream
@@ -196,7 +201,7 @@ jobs:
         with:
           strategy: boringcache
           buildkit_backend: registry
-          benchmark_id: ${{ inputs.prewarm_benchmark_id || 'posthog-oci-prewarm' }}
+          benchmark_id: ${{ inputs.prewarm_benchmark_id != '' && inputs.prewarm_benchmark_id || format('posthog-bc-buildkit{0}', inputs.benchmark_id_suffix) }}
           project_repo: PostHog/posthog
           dockerfile_path: scenarios/posthog-toolcache/Dockerfile
           docker_context: upstream

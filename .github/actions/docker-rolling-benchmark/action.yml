@@ -691,6 +691,7 @@ runs:
         if [[ "$STRATEGY" == "boringcache" || "$STRATEGY" == "ecr-cache" ]]; then
           cache_import_status="${{ steps.build.outputs.cache_import_status }}"
         fi
+        project_ref="$(git -C upstream rev-parse HEAD 2>/dev/null || git rev-parse HEAD:upstream)"
 
         ./scripts/write-benchmark-artifacts.sh \
           --benchmark "$BENCHMARK_ID" \
@@ -699,7 +700,7 @@ runs:
           --mode docker \
           --adapter oci \
           --project-repo "$PROJECT_REPO" \
-          --project-ref "$(git rev-parse HEAD:upstream)" \
+          --project-ref "$project_ref" \
           --cold-seconds "${{ steps.build.outputs.seconds }}" \
           --cold-build-seconds "${{ steps.build.outputs.build_seconds }}" \
           --warm1-seconds "" \

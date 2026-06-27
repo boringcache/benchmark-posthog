@@ -11,6 +11,10 @@ inputs:
     required: true
   project_repo:
     required: true
+  project_ref:
+    description: "Optional upstream project ref/SHA to checkout after initializing the pinned submodule."
+    required: false
+    default: ""
   dockerfile_path:
     required: false
     default: upstream/Dockerfile
@@ -176,10 +180,16 @@ runs:
 
     - name: Checkout pinned upstream submodule shallowly
       shell: bash
+      env:
+        PROJECT_REF: ${{ inputs.project_ref }}
       run: |
         set -euo pipefail
         git submodule sync --recursive
         git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+        if [[ -n "$PROJECT_REF" ]]; then
+          git -C upstream fetch --depth 1 origin "$PROJECT_REF"
+          git -C upstream checkout --detach FETCH_HEAD
+        fi
 
     - name: Prepare base benchmark source tree
       shell: bash

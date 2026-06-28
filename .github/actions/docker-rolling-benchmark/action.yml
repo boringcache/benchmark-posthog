@@ -38,14 +38,6 @@ inputs:
   cli_platform:
     required: false
     default: linux-amd64
-  cli_version:
-    description: "Optional diagnostic CLI version override. Empty uses boringcache/one@v1's bundled default."
-    required: false
-    default: ""
-  cli_image:
-    description: "Optional experiment-only image containing /usr/local/bin/boringcache. When set, the action installs that binary and passes cli-version=skip to boringcache/one."
-    required: false
-    default: ""
   buildkit_image:
     description: "BuildKit daemon image used by benchmark-created builders."
     required: false
@@ -141,40 +133,20 @@ runs:
         fi
 
     - name: Log in to private GHCR images
-      if: ${{ startsWith(inputs.buildkit_image, 'ghcr.io/') || startsWith(inputs.cli_image, 'ghcr.io/') }}
+      if: ${{ startsWith(inputs.buildkit_image, 'ghcr.io/') }}
       uses: docker/login-action@v4.2.0
       with:
         registry: ghcr.io
         username: ${{ env.BORINGCACHE_GHCR_READ_USER || github.actor }}
         password: ${{ env.BORINGCACHE_GHCR_READ_TOKEN }}
 
-    - name: Install experiment BoringCache CLI image
-      if: ${{ inputs.strategy == 'boringcache' && inputs.cli_image != '' }}
-      shell: bash
-      env:
-        BORINGCACHE_CLI_IMAGE: ${{ inputs.cli_image }}
-      run: |
-        set -euo pipefail
-        install_dir="${RUNNER_TEMP}/boringcache-experiment-cli/bin"
-        mkdir -p "$install_dir"
-        container_id="$(docker create "$BORINGCACHE_CLI_IMAGE" /usr/local/bin/boringcache --version)"
-        cleanup() {
-          docker rm -f "$container_id" >/dev/null 2>&1 || true
-        }
-        trap cleanup EXIT
-        docker cp "${container_id}:/usr/local/bin/boringcache" "${install_dir}/boringcache"
-        chmod 0755 "${install_dir}/boringcache"
-        "${install_dir}/boringcache" --version
-        echo "$install_dir" >> "$GITHUB_PATH"
-
     - name: Install BoringCache CLI with boringcache/one
-      if: ${{ inputs.strategy == 'boringcache' && inputs.cli_image == '' }}
+      if: ${{ inputs.strategy == 'boringcache' }}
       uses: boringcache/one@v1
       with:
         setup: none
         mode: archive
         workspace: ${{ inputs.benchmark_workspace }}
-        cli-version: ${{ inputs.cli_image != '' && 'skip' || inputs.cli_version }}
         cli-platform: ${{ inputs.cli_platform }}
         cache-runtime: false
 
@@ -336,7 +308,6 @@ runs:
         mode: docker
         docker-command: setup
         workspace: ${{ inputs.benchmark_workspace }}
-        cli-version: ${{ inputs.cli_image != '' && 'skip' || inputs.cli_version }}
         cache-tag: ${{ steps.scope.outputs.cache_scope }}
         registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
         no-platform: "true"
@@ -673,7 +644,6 @@ runs:
         STRATEGY: ${{ inputs.strategy }}
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
         PROJECT_REPO: ${{ inputs.project_repo }}
-        BENCHMARK_CLI_IMAGE: ${{ inputs.cli_image }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
       run: |
@@ -710,7 +680,6 @@ runs:
           --docker-cache-import-seconds "${{ steps.build.outputs.docker_cache_import_seconds }}" \
           --docker-cache-export-seconds "${{ steps.build.outputs.docker_cache_export_seconds }}" \
           --buildkit-cached-steps "${{ steps.build.outputs.buildkit_cached_steps }}" \
-          --cli-image "${{ inputs.cli_image }}" \
           --buildkit-cache-prewarm-seconds "${{ steps.build.outputs.buildkit_cache_prewarm_seconds }}" \
           --buildkit-cache-prepare-seconds "${{ steps.build.outputs.buildkit_cache_prepare_seconds }}" \
           --buildkit-cache-send-seconds "${{ steps.build.outputs.buildkit_cache_send_seconds }}" \

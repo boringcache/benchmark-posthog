@@ -10,11 +10,6 @@ on:
         required: false
         type: string
         default: ""
-      prewarm_benchmark_id:
-        description: "Optional benchmark/cache scope for the experimental BuildKit lane."
-        required: false
-        type: string
-        default: ""
       benchmark_id_suffix:
         description: "Optional suffix appended to built-in benchmark/cache scopes for isolated comparison runs."
         required: false
@@ -198,7 +193,7 @@ jobs:
         with:
           strategy: boringcache
           buildkit_backend: registry
-          benchmark_id: ${{ inputs.prewarm_benchmark_id != '' && inputs.prewarm_benchmark_id || format('posthog-bc-buildkit{0}', inputs.benchmark_id_suffix) }}
+          benchmark_id: ${{ format('posthog-bc-buildkit{0}', inputs.benchmark_id_suffix) }}
           project_repo: PostHog/posthog
           project_ref: ${{ inputs.upstream_ref }}
           dockerfile_path: scenarios/posthog-toolcache/Dockerfile

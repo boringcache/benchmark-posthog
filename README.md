@@ -30,8 +30,9 @@ Fresh runs use the scenario set:
 - `warm1`
 
 BoringCache lanes are split so product capabilities are visible instead of
-mixed into one number: `BC OCI`, `BC Native`, `BC Native + toolcache`, and
-`BC OCI + toolcache`.
+mixed into one number: `BC OCI`, `BC OCI + toolcache`, `BC Native`,
+`BC Native + toolcache`, `BC BuildKit Backend`, and
+`BC BuildKit Backend + toolcache`.
 Native lanes use the managed native BuildKit path. Tool-cache uses PostHog's
 Turbo build steps while BoringCache still runs outside the Dockerfile; the
 routine matrix uses the same committed Dockerfile fixture for tool-cache lanes
@@ -66,7 +67,7 @@ This repo uses split BoringCache tokens as the standard CI shape:
 ## Repo Layout
 
 - [`scripts/prepare-source.sh`](scripts/prepare-source.sh)
-- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache plus explicit BoringCache OCI/native/tool-cache product lanes side by side.
+- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, ECR, and explicit BoringCache OCI/native/BuildKit-backend/tool-cache product lanes side by side.
 - [`.github/workflows/rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml) runs the rolling lane after upstream sync.
 - [`.github/workflows/sync.yml`](.github/workflows/sync.yml) keeps the pinned upstream source current.
 

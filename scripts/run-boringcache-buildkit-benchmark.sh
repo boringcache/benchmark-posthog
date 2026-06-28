@@ -552,10 +552,10 @@ require_readable_cache_import() {
 }
 
 build_import_status() {
-  if grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
-    echo "ok"
-  elif grep -Eq 'failed to configure .*cache importer' "$build_log"; then
+  if grep -Eq 'failed to configure .*cache importer|cache manifest.*(manifest unknown|not found)|importing cache manifest.*(manifest unknown|not found)' "$build_log"; then
     echo "not_found"
+  elif grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
+    echo "ok"
   elif cache_from_requested && ! cache_from_usable && [[ "$mode" == "full" && "$allow_rolling_bootstrap" == "true" ]]; then
     echo "bootstrap_miss"
   elif cache_from_requested && ! cache_from_usable; then

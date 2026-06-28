@@ -55,6 +55,11 @@ on:
         required: false
         type: string
         default: mirror.gcr.io/moby/buildkit:buildx-stable-1
+      cache_export_type:
+        description: 'Optional override for BuildKit cache-to type. Experimental BoringCache BuildKit lanes use type=boringcache.'
+        required: false
+        type: string
+        default: ''
       benchmark_workspace:
         required: false
         type: string
@@ -83,6 +88,7 @@ env:
   CACHE_LANE: ${{ inputs.cache_lane }}
   BUILDKIT_BACKEND: ${{ inputs.buildkit_backend }}
   CACHE_SCOPE_SUFFIX: ${{ inputs.cache_scope_suffix }}
+  BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
   BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
 
 jobs:

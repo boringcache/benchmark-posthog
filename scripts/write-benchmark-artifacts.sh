@@ -906,8 +906,15 @@ native_tool_payload_from_inputs() {
     return
   fi
 
-  local stats_path="${native_tool_stats_file:-$sccache_stats_file}"
-  local tool="${native_tool_kind:-${adapter:-$mode}}"
+  local stats_path=""
+  local tool="${native_tool_kind:-}"
+  if [[ -n "$native_tool_stats_file" ]]; then
+    stats_path="$native_tool_stats_file"
+    tool="${tool:-${adapter:-$mode}}"
+  elif [[ -n "$sccache_stats_file" ]]; then
+    stats_path="$sccache_stats_file"
+    tool="${tool:-sccache}"
+  fi
   if [[ -n "$stats_path" ]]; then
     case "$tool" in
       sccache|rust-sccache|"")

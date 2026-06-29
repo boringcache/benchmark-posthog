@@ -7,6 +7,10 @@ inputs:
   buildkit_backend:
     required: false
     default: registry
+  buildkit_cache_backend:
+    description: "Optional BuildKit cache backend type. Use boringcache for the managed BuildKit backend."
+    required: false
+    default: ""
   benchmark_id:
     required: true
   project_repo:
@@ -60,7 +64,7 @@ inputs:
     required: false
     default: ""
   cache_export_type:
-    description: "Optional override for the BuildKit cache-to type. Used by experimental BuildKit lanes such as type=boringcache."
+    description: "Legacy compatibility alias for buildkit_cache_backend. Prefer buildkit_cache_backend for BuildKit backend lanes."
     required: false
     default: ""
   free_disk_space:
@@ -428,6 +432,7 @@ runs:
         BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
         BORINGCACHE_DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
         BORINGCACHE_DOCKER_MOUNT_CACHE: ${{ inputs.docker_mount_cache }}
+        BORINGCACHE_BUILDKIT_CACHE_BACKEND: ${{ inputs.buildkit_cache_backend }}
         BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
@@ -645,6 +650,7 @@ runs:
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
         PROJECT_REPO: ${{ inputs.project_repo }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+        BORINGCACHE_BUILDKIT_CACHE_BACKEND: ${{ inputs.buildkit_cache_backend }}
         BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
       run: |
         set -euo pipefail

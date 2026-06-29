@@ -21,7 +21,8 @@ oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
 docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
 docker_mount_cache="${BORINGCACHE_DOCKER_MOUNT_CACHE:-}"
 docker_wrapper_mode="${BORINGCACHE_DOCKER_WRAPPER:-auto}"
-cache_export_type="${BORINGCACHE_CACHE_EXPORT_TYPE:-}"
+buildkit_cache_backend="${BORINGCACHE_BUILDKIT_CACHE_BACKEND:-${BORINGCACHE_CACHE_EXPORT_TYPE:-}}"
+cache_export_type="$buildkit_cache_backend"
 effective_cache_to=""
 materialize_compression="${BORINGCACHE_BUILDKIT_MATERIALIZE_COMPRESSION:-}"
 native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
@@ -74,7 +75,7 @@ cache_to_ref() {
     registry|boringcache)
       ;;
     *)
-      echo "Unsupported BORINGCACHE_CACHE_EXPORT_TYPE: ${cache_export_type}" >&2
+      echo "Unsupported BuildKit cache backend: ${cache_export_type}" >&2
       exit 1
       ;;
   esac
@@ -577,6 +578,7 @@ write_build_diagnostics() {
   {
     echo "strategy=boringcache"
     echo "buildkit_backend=${backend}"
+    echo "buildkit_cache_backend=${buildkit_cache_backend:-registry}"
     echo "mode=${mode}"
     echo "builder=${BUILDER:-}"
     echo "cache_scope=${CACHE_SCOPE:-}"

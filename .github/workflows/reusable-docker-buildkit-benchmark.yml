@@ -14,6 +14,11 @@ on:
         required: false
         type: string
         default: registry
+      buildkit_cache_backend:
+        description: "Optional BuildKit cache backend type. Use boringcache for the managed BuildKit backend."
+        required: false
+        type: string
+        default: ""
       benchmark_id:
         required: true
         type: string
@@ -88,6 +93,7 @@ env:
   CACHE_LANE: ${{ inputs.cache_lane }}
   BUILDKIT_BACKEND: ${{ inputs.buildkit_backend }}
   CACHE_SCOPE_SUFFIX: ${{ inputs.cache_scope_suffix }}
+  BORINGCACHE_BUILDKIT_CACHE_BACKEND: ${{ inputs.buildkit_cache_backend }}
   BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
   BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
 

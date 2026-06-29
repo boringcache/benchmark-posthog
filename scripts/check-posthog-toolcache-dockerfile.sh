@@ -19,16 +19,16 @@ awk '
     replacements += 1
     next
   }
-  in_node_scripts && $0 == "RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \\" {
-    print
-    print "    --mount=type=secret,id=boringcache-tool-cache-env \\"
+  in_node_scripts && $0 == "    NODE_OPTIONS=\"--max-old-space-size=4096\" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24 && \\" {
+    print "    NODE_OPTIONS=\"--max-old-space-size=4096\" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24"
+    print "RUN --mount=type=secret,id=boringcache-tool-cache-env \\"
     next
   }
-  in_node_scripts && $0 == "    NODE_OPTIONS=\"--max-old-space-size=4096\" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24 && \\" {
-    print
+  in_node_scripts && $0 == "    NODE_OPTIONS=\"--max-old-space-size=4096\" bin/turbo --filter=@posthog/plugin-transpiler build" {
     print "    if [ -f /run/secrets/boringcache-tool-cache-env ]; then \\"
     print "        . /run/secrets/boringcache-tool-cache-env; \\"
     print "    fi && \\"
+    print
     replacements += 1
     next
   }

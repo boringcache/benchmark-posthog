@@ -119,9 +119,9 @@ COPY patches/ patches/
 COPY common/esbuilder/ common/esbuilder/
 COPY common/plugin_transpiler/ common/plugin_transpiler/
 RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \
-    --mount=type=secret,id=boringcache-tool-cache-env \
     corepack enable && \
-    NODE_OPTIONS="--max-old-space-size=4096" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24 && \
+    NODE_OPTIONS="--max-old-space-size=4096" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24
+RUN --mount=type=secret,id=boringcache-tool-cache-env \
     if [ -f /run/secrets/boringcache-tool-cache-env ]; then \
         . /run/secrets/boringcache-tool-cache-env; \
     fi && \

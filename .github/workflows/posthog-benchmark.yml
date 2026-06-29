@@ -67,7 +67,7 @@ jobs:
           docker_context: upstream
           image_tag: posthog-benchmark:latest
           benchmark_workspace: ${{ github.repository }}
-          dockerfile_path: scenarios/posthog-toolcache/Dockerfile
+          dockerfile_path: upstream/Dockerfile
           free_disk_space: "true"
 
   ecr-cache:
@@ -95,7 +95,7 @@ jobs:
           docker_context: upstream
           image_tag: posthog-benchmark:latest
           benchmark_workspace: ${{ github.repository }}
-          dockerfile_path: scenarios/posthog-toolcache/Dockerfile
+          dockerfile_path: upstream/Dockerfile
           free_disk_space: "true"
           ecr_region: ${{ vars.DOCKER_BENCHMARK_ECR_REGION || 'us-east-1' }}
           ecr_role_arn: ${{ vars.DOCKER_BENCHMARK_ECR_ROLE_ARN }}
@@ -114,14 +114,14 @@ jobs:
             buildkit_backend: registry
             benchmark_id: posthog
             native_publish_intensity: ""
-            dockerfile_path: scenarios/posthog-toolcache/Dockerfile
+            dockerfile_path: upstream/Dockerfile
             docker_tool_cache: ""
             docker_mount_cache: ""
           - label: BC Native
             buildkit_backend: native
             benchmark_id: posthog-native
             native_publish_intensity: balanced
-            dockerfile_path: scenarios/posthog-toolcache/Dockerfile
+            dockerfile_path: upstream/Dockerfile
             docker_tool_cache: ""
             docker_mount_cache: ""
           - label: BC Native + toolcache
@@ -196,7 +196,7 @@ jobs:
           benchmark_id: ${{ format('posthog-bc-buildkit{0}', inputs.benchmark_id_suffix) }}
           project_repo: PostHog/posthog
           project_ref: ${{ inputs.upstream_ref }}
-          dockerfile_path: scenarios/posthog-toolcache/Dockerfile
+          dockerfile_path: upstream/Dockerfile
           docker_context: upstream
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64

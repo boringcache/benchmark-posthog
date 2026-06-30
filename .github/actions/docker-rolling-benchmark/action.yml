@@ -12,7 +12,7 @@ inputs:
     required: false
     default: ""
   oci_hydration:
-    description: "Optional Docker/BuildKit proxy hydration policy: metadata-only or bodies-before-ready."
+    description: "Docker/BuildKit proxy hydration policy for benchmark lanes; keep metadata-only."
     required: false
     default: "metadata-only"
   benchmark_id:

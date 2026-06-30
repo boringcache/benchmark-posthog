@@ -57,6 +57,25 @@ jobs:
           fetch-depth: 1
           submodules: false
 
+      - name: Free disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_gb="${BORINGCACHE_MIN_FREE_DISK_GB:-45}"
+          available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+          required_kb=$((required_gb * 1024 * 1024))
+          if (( available_kb >= required_kb )); then
+            echo "Free disk is already at least ${required_gb}GiB; skipping cleanup."
+            df -h /
+            docker system df || true
+            exit 0
+          fi
+          echo "Free disk below ${required_gb}GiB; reclaiming hosted-runner tool caches."
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/share/swift /usr/local/.ghcup
+          sudo docker system prune --all --volumes --force
+          df -h /
+          docker system df || true
+
       - name: GHA
         uses: ./.github/actions/docker-rolling-benchmark
         with:
@@ -68,7 +87,6 @@ jobs:
           image_tag: posthog-benchmark:latest
           benchmark_workspace: ${{ github.repository }}
           dockerfile_path: upstream/Dockerfile
-          free_disk_space: "true"
 
   ecr-cache:
     name: ECR
@@ -84,6 +102,25 @@ jobs:
           fetch-depth: 1
           submodules: false
 
+      - name: Free disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_gb="${BORINGCACHE_MIN_FREE_DISK_GB:-45}"
+          available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+          required_kb=$((required_gb * 1024 * 1024))
+          if (( available_kb >= required_kb )); then
+            echo "Free disk is already at least ${required_gb}GiB; skipping cleanup."
+            df -h /
+            docker system df || true
+            exit 0
+          fi
+          echo "Free disk below ${required_gb}GiB; reclaiming hosted-runner tool caches."
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/share/swift /usr/local/.ghcup
+          sudo docker system prune --all --volumes --force
+          df -h /
+          docker system df || true
+
       - name: ECR
         uses: ./.github/actions/docker-rolling-benchmark
         with:
@@ -96,7 +133,6 @@ jobs:
           image_tag: posthog-benchmark:latest
           benchmark_workspace: ${{ github.repository }}
           dockerfile_path: upstream/Dockerfile
-          free_disk_space: "true"
           ecr_region: ${{ vars.DOCKER_BENCHMARK_ECR_REGION || 'us-east-1' }}
           ecr_role_arn: ${{ vars.DOCKER_BENCHMARK_ECR_ROLE_ARN }}
           ecr_registry: ${{ vars.DOCKER_BENCHMARK_ECR_REGISTRY }}
@@ -151,6 +187,25 @@ jobs:
           fetch-depth: 1
           submodules: false
 
+      - name: Free disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_gb="${BORINGCACHE_MIN_FREE_DISK_GB:-45}"
+          available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+          required_kb=$((required_gb * 1024 * 1024))
+          if (( available_kb >= required_kb )); then
+            echo "Free disk is already at least ${required_gb}GiB; skipping cleanup."
+            df -h /
+            docker system df || true
+            exit 0
+          fi
+          echo "Free disk below ${required_gb}GiB; reclaiming hosted-runner tool caches."
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/share/swift /usr/local/.ghcup
+          sudo docker system prune --all --volumes --force
+          df -h /
+          docker system df || true
+
       - name: ${{ matrix.label }}
         uses: ./.github/actions/docker-rolling-benchmark
         with:
@@ -167,7 +222,6 @@ jobs:
           native_publish_intensity: ${{ matrix.native_publish_intensity }}
           docker_tool_cache: ${{ matrix.docker_tool_cache }}
           docker_mount_cache: ${{ matrix.docker_mount_cache }}
-          free_disk_space: "true"
 
   boringcache-prewarm-buildkit:
     name: BC BuildKit Backend
@@ -188,6 +242,25 @@ jobs:
           fetch-depth: 1
           submodules: false
 
+      - name: Free disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_gb="${BORINGCACHE_MIN_FREE_DISK_GB:-45}"
+          available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+          required_kb=$((required_gb * 1024 * 1024))
+          if (( available_kb >= required_kb )); then
+            echo "Free disk is already at least ${required_gb}GiB; skipping cleanup."
+            df -h /
+            docker system df || true
+            exit 0
+          fi
+          echo "Free disk below ${required_gb}GiB; reclaiming hosted-runner tool caches."
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/share/swift /usr/local/.ghcup
+          sudo docker system prune --all --volumes --force
+          df -h /
+          docker system df || true
+
       - name: BC BuildKit Backend
         uses: ./.github/actions/docker-rolling-benchmark
         with:
@@ -207,7 +280,6 @@ jobs:
           native_publish_intensity: ""
           docker_tool_cache: ""
           docker_mount_cache: ""
-          free_disk_space: "true"
 
   boringcache-prewarm-buildkit-toolcache:
     name: BC BuildKit Backend + toolcache
@@ -228,6 +300,25 @@ jobs:
           fetch-depth: 1
           submodules: false
 
+      - name: Free disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_gb="${BORINGCACHE_MIN_FREE_DISK_GB:-45}"
+          available_kb="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+          required_kb=$((required_gb * 1024 * 1024))
+          if (( available_kb >= required_kb )); then
+            echo "Free disk is already at least ${required_gb}GiB; skipping cleanup."
+            df -h /
+            docker system df || true
+            exit 0
+          fi
+          echo "Free disk below ${required_gb}GiB; reclaiming hosted-runner tool caches."
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/share/swift /usr/local/.ghcup
+          sudo docker system prune --all --volumes --force
+          df -h /
+          docker system df || true
+
       - name: BC BuildKit Backend + toolcache
         uses: ./.github/actions/docker-rolling-benchmark
         with:
@@ -247,4 +338,3 @@ jobs:
           native_publish_intensity: ""
           docker_tool_cache: turbo
           docker_mount_cache: ""
-          free_disk_space: "true"

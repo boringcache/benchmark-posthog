@@ -318,6 +318,7 @@ runs:
         workspace: ${{ inputs.benchmark_workspace }}
         cache-tag: ${{ steps.scope.outputs.cache_scope }}
         registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
+        oci-hydration: ${{ inputs.oci_hydration }}
         no-platform: "true"
         proxy-no-git: "true"
         proxy-no-platform: "true"

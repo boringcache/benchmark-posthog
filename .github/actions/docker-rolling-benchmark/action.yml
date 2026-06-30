@@ -11,6 +11,10 @@ inputs:
     description: "Optional BuildKit cache backend type. Use boringcache for the managed BuildKit backend."
     required: false
     default: ""
+  oci_hydration:
+    description: "Optional Docker/BuildKit proxy hydration policy: metadata-only, bodies-background, or bodies-before-ready."
+    required: false
+    default: "metadata-only"
   benchmark_id:
     required: true
   project_repo:
@@ -434,6 +438,7 @@ runs:
         BORINGCACHE_DOCKER_MOUNT_CACHE: ${{ inputs.docker_mount_cache }}
         BORINGCACHE_BUILDKIT_CACHE_BACKEND: ${{ inputs.buildkit_cache_backend }}
         BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
+        BORINGCACHE_OCI_HYDRATION: ${{ inputs.oci_hydration }}
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}

@@ -203,6 +203,7 @@ jobs:
           buildkit_image: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
           benchmark_workspace: ${{ github.repository }}
           buildkit_cache_backend: boringcache
+          oci_hydration: bodies-background
           native_publish_intensity: ""
           docker_tool_cache: ""
           docker_mount_cache: ""
@@ -242,6 +243,7 @@ jobs:
           buildkit_image: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
           benchmark_workspace: ${{ github.repository }}
           buildkit_cache_backend: boringcache
+          oci_hydration: bodies-background
           native_publish_intensity: ""
           docker_tool_cache: turbo
           docker_mount_cache: ""

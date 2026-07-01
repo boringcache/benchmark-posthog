@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       prewarm_buildkit_image:
-        description: "Optional experimental BuildKit image. When set, the rolling run adds a BC BuildKit backend lane."
+        description: "Optional experimental BuildKit image. When set, the rolling matrix includes BC BuildKit backend lanes."
         required: false
         type: string
         default: ""
@@ -44,71 +44,7 @@ permissions:
   packages: read
 
 jobs:
-  github-actions-cache:
-    name: GHA
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: Checkout benchmark repo
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          submodules: false
-
-      - name: Free disk space
-        shell: bash
-        run: ./scripts/free-runner-disk.sh
-
-      - name: GHA
-        uses: ./.github/actions/docker-rolling-benchmark
-        with:
-          strategy: actions-cache
-          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
-          project_repo: PostHog/posthog
-          project_ref: ${{ inputs.upstream_ref }}
-          docker_context: upstream
-          image_tag: posthog-benchmark:latest
-          benchmark_workspace: ${{ github.repository }}
-          dockerfile_path: upstream/Dockerfile
-
-  ecr-cache:
-    name: ECR
-    if: ${{ github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: Checkout benchmark repo
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          submodules: false
-
-      - name: Free disk space
-        shell: bash
-        run: ./scripts/free-runner-disk.sh
-
-      - name: ECR
-        uses: ./.github/actions/docker-rolling-benchmark
-        with:
-          strategy: ecr-cache
-          artifact_strategy: ecr-cache
-          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
-          project_repo: PostHog/posthog
-          project_ref: ${{ inputs.upstream_ref }}
-          docker_context: upstream
-          image_tag: posthog-benchmark:latest
-          benchmark_workspace: ${{ github.repository }}
-          dockerfile_path: upstream/Dockerfile
-          ecr_region: ${{ vars.DOCKER_BENCHMARK_ECR_REGION || 'us-east-1' }}
-          ecr_role_arn: ${{ vars.DOCKER_BENCHMARK_ECR_ROLE_ARN }}
-          ecr_registry: ${{ vars.DOCKER_BENCHMARK_ECR_REGISTRY }}
-          ecr_repository: ${{ vars.DOCKER_BENCHMARK_ECR_REPOSITORY }}
-
-  boringcache:
+  docker-benchmark:
     name: ${{ matrix.label }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -116,39 +52,114 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: BC OCI
+          - label: GHA
+            strategy: actions-cache
+            artifact_strategy: ""
+            benchmark_id: posthog
             buildkit_backend: registry
+            buildkit_cache_backend: ""
+            dockerfile_path: upstream/Dockerfile
+            docker_tool_cache: ""
+            docker_mount_cache: ""
+            run_on_pull_request: true
+            requires_buildkit_image: false
+          - label: ECR
+            strategy: ecr-cache
+            artifact_strategy: ecr-cache
+            benchmark_id: posthog
+            buildkit_backend: registry
+            buildkit_cache_backend: ""
+            dockerfile_path: upstream/Dockerfile
+            docker_tool_cache: ""
+            docker_mount_cache: ""
+            run_on_pull_request: false
+            requires_buildkit_image: false
+          - label: BC OCI
+            strategy: boringcache
+            artifact_strategy: ""
+            buildkit_backend: registry
+            buildkit_cache_backend: ""
             benchmark_id: posthog
             dockerfile_path: upstream/Dockerfile
             docker_tool_cache: ""
             docker_mount_cache: ""
+            run_on_pull_request: true
+            requires_buildkit_image: false
           - label: BC OCI + toolcache
+            strategy: boringcache
+            artifact_strategy: ""
             buildkit_backend: registry
+            buildkit_cache_backend: ""
             benchmark_id: posthog-oci-toolcache
             dockerfile_path: scenarios/posthog-toolcache/Dockerfile
             docker_tool_cache: turbo
             docker_mount_cache: ""
+            run_on_pull_request: true
+            requires_buildkit_image: false
+          - label: BC BuildKit Backend
+            strategy: boringcache
+            artifact_strategy: ""
+            buildkit_backend: registry
+            buildkit_cache_backend: boringcache
+            benchmark_id: posthog-bc-buildkit
+            dockerfile_path: upstream/Dockerfile
+            docker_tool_cache: ""
+            docker_mount_cache: ""
+            run_on_pull_request: false
+            requires_buildkit_image: true
+          - label: BC BuildKit Backend + toolcache
+            strategy: boringcache
+            artifact_strategy: ""
+            buildkit_backend: registry
+            buildkit_cache_backend: boringcache
+            benchmark_id: posthog-bc-buildkit-toolcache
+            dockerfile_path: scenarios/posthog-toolcache/Dockerfile
+            docker_tool_cache: turbo
+            docker_mount_cache: ""
+            run_on_pull_request: false
+            requires_buildkit_image: true
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
       BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
       BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
+      BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
+      PREWARM_BUILDKIT_IMAGE: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
     steps:
+      - name: Skip disabled lane
+        if: ${{ (github.event_name == 'pull_request' && !matrix.run_on_pull_request) || (matrix.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE == '') }}
+        shell: bash
+        run: |
+          echo "Skipping ${{ matrix.label }} for this event/configuration."
+
       - name: Checkout benchmark repo
+        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') }}
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
           submodules: false
 
       - name: Free disk space
+        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') }}
         shell: bash
         run: ./scripts/free-runner-disk.sh
 
       - name: ${{ matrix.label }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') }}
         uses: ./.github/actions/docker-rolling-benchmark
+        env:
+          BORINGCACHE_OCI_DEMAND_PREFETCH: ${{ matrix.buildkit_cache_backend == 'boringcache' && 'false' || '' }}
+          BORINGCACHE_STORAGE_SLOW_READ_PROBE: ${{ matrix.buildkit_cache_backend == 'boringcache' && '1' || '' }}
+          BORINGCACHE_STORAGE_SLOW_READ_PROBE_MB: ${{ matrix.buildkit_cache_backend == 'boringcache' && '4' || '' }}
+          BORINGCACHE_STORAGE_SLOW_READ_MIN_MBPS: ${{ matrix.buildkit_cache_backend == 'boringcache' && '64' || '' }}
+          BORINGCACHE_STORAGE_SLOW_READ_MAX_RETRIES: ${{ matrix.buildkit_cache_backend == 'boringcache' && '1' || '' }}
         with:
-          strategy: boringcache
+          strategy: ${{ matrix.strategy }}
+          artifact_strategy: ${{ matrix.artifact_strategy }}
           buildkit_backend: ${{ matrix.buildkit_backend }}
+          buildkit_cache_backend: ${{ matrix.buildkit_cache_backend }}
+          buildkit_image: ${{ matrix.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE || 'mirror.gcr.io/moby/buildkit:buildx-stable-1' }}
           benchmark_id: ${{ format('{0}{1}', matrix.benchmark_id, inputs.benchmark_id_suffix) }}
           project_repo: PostHog/posthog
           project_ref: ${{ inputs.upstream_ref }}
@@ -159,97 +170,7 @@ jobs:
           benchmark_workspace: ${{ github.repository }}
           docker_tool_cache: ${{ matrix.docker_tool_cache }}
           docker_mount_cache: ${{ matrix.docker_mount_cache }}
-
-  boringcache-prewarm-buildkit:
-    name: BC BuildKit Backend
-    if: ${{ github.event_name != 'pull_request' && (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
-      BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
-      BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
-      BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
-      BORINGCACHE_OCI_DEMAND_PREFETCH: "false"
-      BORINGCACHE_STORAGE_SLOW_READ_PROBE: "1"
-      BORINGCACHE_STORAGE_SLOW_READ_PROBE_MB: "4"
-      BORINGCACHE_STORAGE_SLOW_READ_MIN_MBPS: "64"
-      BORINGCACHE_STORAGE_SLOW_READ_MAX_RETRIES: "1"
-    steps:
-      - name: Checkout benchmark repo
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          submodules: false
-
-      - name: Free disk space
-        shell: bash
-        run: ./scripts/free-runner-disk.sh
-
-      - name: BC BuildKit Backend
-        uses: ./.github/actions/docker-rolling-benchmark
-        with:
-          strategy: boringcache
-          buildkit_backend: registry
-          benchmark_id: ${{ format('posthog-bc-buildkit{0}', inputs.benchmark_id_suffix) }}
-          project_repo: PostHog/posthog
-          project_ref: ${{ inputs.upstream_ref }}
-          dockerfile_path: upstream/Dockerfile
-          docker_context: upstream
-          image_tag: posthog-benchmark:latest
-          cli_platform: linux-amd64
-          buildkit_image: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
-          benchmark_workspace: ${{ github.repository }}
-          buildkit_cache_backend: boringcache
-          oci_hydration: metadata-only
-          docker_tool_cache: ""
-          docker_mount_cache: ""
-
-  boringcache-prewarm-buildkit-toolcache:
-    name: BC BuildKit Backend + toolcache
-    if: ${{ github.event_name != 'pull_request' && (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
-      BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
-      BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
-      BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
-      BORINGCACHE_OCI_DEMAND_PREFETCH: "false"
-      BORINGCACHE_STORAGE_SLOW_READ_PROBE: "1"
-      BORINGCACHE_STORAGE_SLOW_READ_PROBE_MB: "4"
-      BORINGCACHE_STORAGE_SLOW_READ_MIN_MBPS: "64"
-      BORINGCACHE_STORAGE_SLOW_READ_MAX_RETRIES: "1"
-    steps:
-      - name: Checkout benchmark repo
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          submodules: false
-
-      - name: Free disk space
-        shell: bash
-        run: ./scripts/free-runner-disk.sh
-
-      - name: BC BuildKit Backend + toolcache
-        uses: ./.github/actions/docker-rolling-benchmark
-        with:
-          strategy: boringcache
-          buildkit_backend: registry
-          benchmark_id: ${{ format('posthog-bc-buildkit-toolcache{0}', inputs.benchmark_id_suffix) }}
-          project_repo: PostHog/posthog
-          project_ref: ${{ inputs.upstream_ref }}
-          dockerfile_path: scenarios/posthog-toolcache/Dockerfile
-          docker_context: upstream
-          image_tag: posthog-benchmark:latest
-          cli_platform: linux-amd64
-          buildkit_image: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
-          benchmark_workspace: ${{ github.repository }}
-          buildkit_cache_backend: boringcache
-          oci_hydration: metadata-only
-          docker_tool_cache: turbo
-          docker_mount_cache: ""
+          ecr_region: ${{ vars.DOCKER_BENCHMARK_ECR_REGION || 'us-east-1' }}
+          ecr_role_arn: ${{ vars.DOCKER_BENCHMARK_ECR_ROLE_ARN }}
+          ecr_registry: ${{ vars.DOCKER_BENCHMARK_ECR_REGISTRY }}
+          ecr_repository: ${{ vars.DOCKER_BENCHMARK_ECR_REPOSITORY }}

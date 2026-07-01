@@ -78,9 +78,3 @@ fi
 emit_output seconds "$((end - phase_start))"
 emit_output build_seconds "$((end - start))"
 append_outputs_file "$metrics_file"
-
-native_tool_evidence="$(grep "^native_tool_evidence=" "$metrics_file" 2>/dev/null | head -n1 | cut -d= -f2- || true)"
-if [[ "$backend" == "native" && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
-  mkdir -p benchmark-native-tool
-  cp "$native_tool_evidence" benchmark-native-tool/native-tool.json
-fi

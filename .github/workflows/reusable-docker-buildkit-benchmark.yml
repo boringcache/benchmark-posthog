@@ -79,11 +79,6 @@ on:
         required: false
         type: boolean
         default: false
-      native_publish_intensity:
-        description: 'Optional native BuildKit publisher intensity for benchmark proof lanes. Use balanced for product lanes; aggressive is stress-only.'
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: read
@@ -294,7 +289,6 @@ jobs:
           BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
           BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
-          BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
           BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name }}
           CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
@@ -361,11 +355,6 @@ jobs:
             echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
             if [[ -s "$metrics_file" ]]; then
               cat "$metrics_file" >> "$GITHUB_OUTPUT"
-              native_tool_evidence="$(grep "^native_tool_evidence=" "$metrics_file" | head -n1 | cut -d= -f2- || true)"
-              if [[ "$BUILDKIT_BACKEND" == "native" && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
-                mkdir -p benchmark-native-tool
-                cp "$native_tool_evidence" benchmark-native-tool/native-tool.json
-              fi
             fi
           else
             build_log="$(mktemp /tmp/${BENCHMARK_ID}-ac-build.XXXXXX.log)"
@@ -476,14 +465,6 @@ jobs:
           path: benchmark-session-summary/benchmark-session-summary.json
           if-no-files-found: ignore
 
-      - name: Upload native BuildKit evidence
-        if: inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'native' && always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}-build
-          path: benchmark-native-tool/native-tool.json
-          if-no-files-found: ignore
-
       - name: Prepare warm source tree
         if: inputs.cache_lane != 'rolling'
         run: ./scripts/prepare-source.sh warm1
@@ -560,7 +541,6 @@ jobs:
           BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.warm_docker_cache.outputs.docker-cache-promotion-refs }}
           BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
-          BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
           BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.warm_docker_cache.outputs.buildx-name || inputs.strategy == 'actions-cache' && steps.warm_buildx.outputs.name || '' }}
           CACHE_FROM: ${{ steps.warm_docker_cache.outputs.cache-from }}
           CACHE_TO: ${{ steps.warm_docker_cache.outputs.cache-to }}
@@ -601,11 +581,6 @@ jobs:
             echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
             if [[ -s "$metrics_file" ]]; then
               cat "$metrics_file" >> "$GITHUB_OUTPUT"
-              native_tool_evidence="$(grep "^native_tool_evidence=" "$metrics_file" | head -n1 | cut -d= -f2- || true)"
-              if [[ "$BUILDKIT_BACKEND" == "native" && -n "$native_tool_evidence" && -s "$native_tool_evidence" ]]; then
-                mkdir -p benchmark-native-tool
-                cp "$native_tool_evidence" benchmark-native-tool/native-tool.json
-              fi
             fi
           else
             build_log="$(mktemp /tmp/${BENCHMARK_ID}-ac-warm.XXXXXX.log)"
@@ -745,14 +720,6 @@ jobs:
           path: benchmark-phase/warm1.env
           if-no-files-found: error
 
-      - name: Upload native BuildKit evidence
-        if: inputs.cache_lane != 'rolling' && inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'native'
-        uses: actions/upload-artifact@v6
-        with:
-          name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}-warm
-          path: benchmark-native-tool/native-tool.json
-          if-no-files-found: ignore
-
       - name: Checkout benchmark repo helpers
         uses: actions/checkout@v6
         with:
@@ -821,7 +788,7 @@ jobs:
           mkdir -p benchmark-storage
           breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
           exact_tags=""
-          if [[ "$BUILDKIT_BACKEND" == "native" || "$BUILDKIT_BACKEND" == "registry" ]]; then
+          if [[ "$BUILDKIT_BACKEND" == "registry" ]]; then
             exact_tags="${tags_csv}"
           fi
           bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" BORINGCACHE_EXACT_TAGS="$exact_tags" .benchmark-config/scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
@@ -1030,10 +997,6 @@ jobs:
           if [[ -s benchmark-session-summary/benchmark-session-summary.json ]]; then
             cache_summary_args=(--cache-session-summary-json benchmark-session-summary/benchmark-session-summary.json)
           fi
-          native_tool_args=()
-          if [[ -s benchmark-native-tool/native-tool.json ]]; then
-            native_tool_args=(--native-tool-evidence-json benchmark-native-tool/native-tool.json)
-          fi
 
           .benchmark-config/scripts/write-benchmark-artifacts.sh \
             --benchmark "$BENCHMARK_ID" \
@@ -1075,7 +1038,6 @@ jobs:
             --reseed-new-blob-threshold "0" \
             --hit-behavior-note "${{ steps.normalize.outputs.hit_behavior_note }}" \
             "${cache_summary_args[@]}" \
-            "${native_tool_args[@]}"
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v6

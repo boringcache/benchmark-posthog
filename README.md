@@ -33,15 +33,13 @@ Fresh runs use the scenario set:
 - `warm1`
 
 BoringCache lanes are split so product capabilities are visible instead of
-mixed into one number: `BC OCI`, `BC OCI + toolcache`, `BC Native`,
-`BC Native + toolcache`, `BC BuildKit Backend`, and
-`BC BuildKit Backend + toolcache`.
-Native lanes use the managed native BuildKit path. Tool-cache uses PostHog's
+mixed into one number: `BC OCI`, `BC OCI + toolcache`,
+`BC BuildKit Backend`, and `BC BuildKit Backend + toolcache`.
+Tool-cache uses PostHog's
 Turbo build commands while BoringCache still runs outside the Dockerfile; only
 `+ toolcache` lanes use the committed Dockerfile fixture, and the fixture keeps
 dependency-install steps upstream-shaped so the tool-cache secret only affects
-Turbo execution. The native tool-cache lane keeps the managed native builder
-instead of selecting a separate Buildx builder. Mount-cache lanes remain
+Turbo execution. Mount-cache lanes remain
 script-level diagnostics, but they are not part of the routine product
 benchmark matrix because recent PostHog evidence showed high publish/export
 tail variance and sidecar release coupling.

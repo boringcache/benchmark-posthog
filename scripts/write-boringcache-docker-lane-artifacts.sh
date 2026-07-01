@@ -97,10 +97,6 @@ if [[ -s benchmark-session-summary/benchmark-session-summary.json ]]; then
   cache_summary_args=(--cache-session-summary-json benchmark-session-summary/benchmark-session-summary.json)
 fi
 
-native_tool_args=()
-if [[ -s benchmark-native-tool/native-tool.json ]]; then
-  native_tool_args=(--native-tool-evidence-json benchmark-native-tool/native-tool.json)
-fi
 
 "$repo_root/scripts/write-benchmark-artifacts.sh" \
   --benchmark "$benchmark_id" \
@@ -141,4 +137,3 @@ fi
   --reseed-new-blob-threshold "0" \
   --hit-behavior-note "Rolling lane: one continuous-commit build imports the prior branch/default Docker cache, exports the updated cache, and records that commit build only." \
   "${cache_summary_args[@]}" \
-  "${native_tool_args[@]}"

@@ -10,6 +10,14 @@ max_attempts=1
 cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
 mode="${1:-full}"
 backend="${BUILDKIT_BACKEND:-registry}"
+case "$backend" in
+  registry)
+    ;;
+  *)
+    echo "Unsupported BUILDKIT_BACKEND: ${backend}" >&2
+    exit 1
+    ;;
+esac
 cache_import_ready="${BORINGCACHE_CACHE_IMPORT_READY:-true}"
 cache_requested_from_refs="${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}"
 cache_used_from_refs="${BORINGCACHE_CACHE_USED_FROM_REFS:-}"
@@ -24,10 +32,6 @@ docker_wrapper_mode="${BORINGCACHE_DOCKER_WRAPPER:-auto}"
 buildkit_cache_backend="${BORINGCACHE_BUILDKIT_CACHE_BACKEND:-${BORINGCACHE_CACHE_EXPORT_TYPE:-}}"
 cache_export_type="$buildkit_cache_backend"
 effective_cache_to=""
-materialize_compression="${BORINGCACHE_BUILDKIT_MATERIALIZE_COMPRESSION:-}"
-native_tool_evidence_dir="$(mktemp -d /tmp/boringcache-native-tool.XXXXXX)"
-chmod 0777 "$native_tool_evidence_dir" 2>/dev/null || true
-native_tool_evidence_path="${native_tool_evidence_dir}/native-tool.json"
 boringcache_config="${repo_root}/.boringcache.toml"
 boringcache_config_backup=""
 export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS:-1}"
@@ -98,7 +102,7 @@ use_wrapped_boringcache_build() {
       return 1
       ;;
     auto)
-      [[ "$backend" == "native" || -n "$docker_tool_cache" || -n "$docker_mount_cache" ]] && return 0
+      [[ -n "$docker_tool_cache" || -n "$docker_mount_cache" ]] && return 0
       [[ -z "${CACHE_FROM:-}" && -z "${CACHE_TO:-}" ]] && return 0
       return 1
       ;;
@@ -378,17 +382,6 @@ write_build_metrics() {
   if [[ -n "$docker_mount_cache" ]]; then
     echo "docker_mount_cache=${docker_mount_cache}" >> "$output_path"
   fi
-  if [[ "$backend" == "native" ]]; then
-    echo "buildkit_backend=native" >> "$output_path"
-    if [[ -n "$materialize_compression" ]]; then
-      echo "materialize_compression=$materialize_compression" >> "$output_path"
-    fi
-    if [[ -s "$native_tool_evidence_path" ]]; then
-      echo "native_tool_evidence=$native_tool_evidence_path" >> "$output_path"
-      append_native_tool_metrics "$native_tool_evidence_path" || true
-    fi
-  fi
-
   if [[ -s "$status_snapshot_path" ]] && command -v jq >/dev/null 2>&1; then
     append_status_metric() {
       local key="$1"
@@ -464,46 +457,6 @@ write_build_metrics() {
     fi
   fi
 }
-
-append_native_tool_metrics() {
-  local evidence_file="$1"
-  [[ -s "$evidence_file" ]] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
-
-  local requested uploaded already_present uploaded_bytes export_seconds save_seconds
-  requested="$(jq -r '.publisher.final_save_checked_blob_count // .publisher.final_save_graph_blob_count // empty' "$evidence_file" 2>/dev/null || true)"
-  uploaded="$(jq -r '.publisher.final_save_uploaded_blob_count // empty' "$evidence_file" 2>/dev/null || true)"
-  already_present="$(jq -r '.publisher.final_save_already_present_blob_count // empty' "$evidence_file" 2>/dev/null || true)"
-  uploaded_bytes="$(jq -r '.publisher.final_save_uploaded_blob_bytes // .publisher.final_save_missing_blob_bytes // empty' "$evidence_file" 2>/dev/null || true)"
-  export_seconds="$(jq -r '.publisher.final_export_seconds // empty' "$evidence_file" 2>/dev/null || true)"
-  save_seconds="$(jq -r '.publisher.final_save_seconds // empty' "$evidence_file" 2>/dev/null || true)"
-  if [[ -z "$already_present" && "$requested" =~ ^[0-9]+$ && "$uploaded" =~ ^[0-9]+$ ]]; then
-    already_present="$(( requested > uploaded ? requested - uploaded : 0 ))"
-  fi
-
-  append_metric() {
-    local key="$1"
-    local value="$2"
-    if [[ -n "$value" && "$value" != "null" ]]; then
-      echo "$key=$value" >> "$output_path"
-    fi
-  }
-
-  append_metric oci_upload_requested_blobs "$requested"
-  append_metric oci_new_blob_count "$uploaded"
-  append_metric oci_upload_already_present "$already_present"
-  append_metric oci_new_blob_bytes "$uploaded_bytes"
-  append_metric oci_upload_batch_seconds "$save_seconds"
-  local writethrough_bytes
-  writethrough_bytes="$(jq -r '.publisher.publish_blob_bytes // 0' "$evidence_file" 2>/dev/null || echo 0)"
-  [[ "$writethrough_bytes" =~ ^[0-9]+$ ]] || writethrough_bytes=0
-  [[ "$uploaded_bytes" =~ ^[0-9]+$ ]] || uploaded_bytes=0
-  append_metric network_upload_bytes "$((writethrough_bytes + uploaded_bytes))"
-  if [[ "$export_seconds" =~ ^[0-9]+([.][0-9]+)?$ && "$save_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    awk -v export_s="$export_seconds" -v save_s="$save_seconds" 'BEGIN { printf "docker_cache_export_seconds=%.3f\n", export_s + save_s }' >> "$output_path"
-  fi
-}
-
 
 capture_proxy_status() {
   local output_path="${1:-$status_snapshot_path}"
@@ -623,12 +576,6 @@ write_build_diagnostics() {
     grep -E '^#[0-9]+ DONE [0-9]+(\.[0-9]+)?s$' "$build_log" | tail -n 80 || true
     echo "EOF"
     echo "observability_jsonl=${observability_path}"
-    echo "native_tool_evidence=${native_tool_evidence_path}"
-    if [[ -s "$native_tool_evidence_path" ]]; then
-      echo "native_tool_summary<<EOF"
-      jq -c '{restore, publisher, command, publish}' "$native_tool_evidence_path" 2>/dev/null || cat "$native_tool_evidence_path"
-      echo "EOF"
-    fi
     if [[ -n "$observability_path" && -s "$observability_path" ]]; then
       printf 'observability_events='
       wc -l < "$observability_path" | tr -d ' '
@@ -665,12 +612,6 @@ run_wrapped_boringcache_build() {
     --fail-on-cache-error
   )
 
-  if [[ "$backend" == "native" ]]; then
-    boringcache_args+=(--native-tool-evidence-json "$native_tool_evidence_path")
-  fi
-  if [[ -n "$materialize_compression" ]]; then
-    boringcache_args+=(--metadata-hint "materialize_compression=${materialize_compression}")
-  fi
 
   if [[ -n "$docker_tool_cache" ]]; then
     local tool_cache_value

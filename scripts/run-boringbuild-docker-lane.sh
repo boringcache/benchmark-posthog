@@ -8,7 +8,6 @@ lane="${POSTHOG_BORINGBUILD_LANE:-oci-mountcache}"
 ref_slug="${POSTHOG_BORINGBUILD_REF_SLUG:-main}"
 scope_suffix="${POSTHOG_BORINGBUILD_SCOPE_SUFFIX:-boringbuild}"
 builder_name="${POSTHOG_BORINGBUILD_BUILDER:-posthog-boringbuild-${lane//[^A-Za-z0-9_.-]/-}-$$}"
-buildkit_image="${BUILDKIT_IMAGE:-${BORINGCACHE_MANAGED_BUILDKIT_IMAGE:-mirror.gcr.io/moby/buildkit:buildx-stable-1}}"
 . "$repo_root/scripts/prepare-boringcache-cache-mount-publish-helper-image.sh"
 
 cleanup_boringbuild_lane() {
@@ -24,23 +23,6 @@ case "$lane" in
     backend="registry"
     tool_cache=""
     mount_cache=""
-    native_publish_intensity=""
-    ;;
-  native)
-    label="BC Native"
-    benchmark_id="posthog-native"
-    backend="native"
-    tool_cache=""
-    mount_cache=""
-    native_publish_intensity="balanced"
-    ;;
-  native-toolcache)
-    label="BC Native + toolcache"
-    benchmark_id="posthog-native-toolcache"
-    backend="native"
-    tool_cache="turbo"
-    mount_cache=""
-    native_publish_intensity="balanced"
     ;;
   oci-toolcache)
     label="BC OCI + toolcache"
@@ -48,7 +30,6 @@ case "$lane" in
     backend="registry"
     tool_cache="turbo"
     mount_cache=""
-    native_publish_intensity=""
     ;;
   oci-mountcache)
     label="BC OCI + mountcache"
@@ -56,7 +37,6 @@ case "$lane" in
     backend="registry"
     tool_cache=""
     mount_cache="posthog-mounts"
-    native_publish_intensity=""
     ;;
   oci-toolcache-mountcache)
     label="BC OCI + toolcache + mountcache"
@@ -64,13 +44,18 @@ case "$lane" in
     backend="registry"
     tool_cache="turbo"
     mount_cache="posthog-mounts"
-    native_publish_intensity=""
     ;;
   *)
     echo "Unknown POSTHOG_BORINGBUILD_LANE: $lane" >&2
     exit 1
     ;;
 esac
+
+if [[ -n "${BUILDKIT_IMAGE:-}" ]]; then
+  buildkit_image="$BUILDKIT_IMAGE"
+else
+  buildkit_image="mirror.gcr.io/moby/buildkit:buildx-stable-1"
+fi
 
 boringcache_candidate=""
 if [[ -x /workspace/bin/boringcache ]]; then
@@ -92,10 +77,6 @@ fi
 if ! command -v boringcache >/dev/null 2>&1; then
   echo "boringcache CLI not found. Put a Linux boringcache binary at boringbuild/bin/boringcache, boringcache-linux-musl-amd64.local, or /workspace/bin/boringcache." >&2
   exit 1
-fi
-
-if [[ "$backend" == "native" ]]; then
-  export BORINGCACHE_BUILDKIT_PUBLISHER_BINARY="${BORINGCACHE_BUILDKIT_PUBLISHER_BINARY:-/usr/local/bin/boringcache}"
 fi
 
 if [[ -z "${BORINGCACHE_RESTORE_TOKEN:-}" ]]; then
@@ -140,12 +121,7 @@ export BORINGCACHE_DOCKER_TOOL_CACHE="$tool_cache"
 export BORINGCACHE_DOCKER_MOUNT_CACHE="$mount_cache"
 export BORINGCACHE_MANAGED_BUILDKIT_IMAGE="$buildkit_image"
 export BUILDKIT_IMAGE="$buildkit_image"
-export BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY="$native_publish_intensity"
-if [[ "$backend" == "registry" ]]; then
-  export BUILDER="$builder_name"
-else
-  unset BUILDER
-fi
+export BUILDER="$builder_name"
 export BORINGCACHE_DOCKER_WRAPPER=always
 export BORINGCACHE_PROXY_PORT="${BORINGCACHE_PROXY_PORT:-5310}"
 export BORINGCACHE_OBSERVABILITY_JSONL_PATH="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-/tmp/${BENCHMARK_ID}-boringcache-commit-observability.jsonl}"

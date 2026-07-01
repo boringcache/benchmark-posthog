@@ -63,10 +63,6 @@ inputs:
     description: "Optional Docker cache-mount sidecar profile. Use posthog-mounts for PostHog pnpm, uv, and Playwright cache mounts."
     required: false
     default: ""
-  native_publish_intensity:
-    description: "Optional native BuildKit publisher intensity for benchmark proof lanes. Use balanced for product lanes; aggressive is stress-only."
-    required: false
-    default: ""
   cache_export_type:
     description: "Legacy compatibility alias for buildkit_cache_backend. Prefer buildkit_cache_backend for BuildKit backend lanes."
     required: false
@@ -124,19 +120,6 @@ runs:
         fi
         if [[ -z "${BORINGCACHE_SAVE_TOKEN:-}" ]]; then
           echo "Missing BORINGCACHE_SAVE_TOKEN secret" >&2
-          exit 1
-        fi
-
-    - name: Validate native benchmark shape
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'native' }}
-      shell: bash
-      env:
-        DOCKER_MOUNT_CACHE: ${{ inputs.docker_mount_cache }}
-      run: |
-        set -euo pipefail
-        if [[ -n "$DOCKER_MOUNT_CACHE" ]]; then
-          echo "BoringCache native benchmark lanes must use the managed native BuildKit path directly." >&2
-          echo "Do not combine native with docker_mount_cache; keep mount-cache sidecar lanes on the OCI backend." >&2
           exit 1
         fi
 
@@ -442,7 +425,6 @@ runs:
         BORINGCACHE_OCI_HYDRATION: ${{ inputs.oci_hydration }}
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
-        BORINGCACHE_BUILDKIT_PUBLISH_INTENSITY: ${{ inputs.native_publish_intensity }}
         BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && inputs.docker_mount_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') && steps.tool_cache_buildx.outputs.name || steps.buildx.outputs.name || '' }}
         CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
         CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
@@ -598,14 +580,6 @@ runs:
         path: benchmark-diagnostics/*
         if-no-files-found: ignore
 
-    - name: Upload native BuildKit evidence
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'native' && always() }}
-      uses: actions/upload-artifact@v6
-      with:
-        name: benchmark-native-tool-${{ inputs.benchmark_id }}-boringcache-rolling-commit
-        path: benchmark-native-tool/native-tool.json
-        if-no-files-found: ignore
-
     - name: Measure cache storage usage
       id: storage
       shell: bash
@@ -623,7 +597,7 @@ runs:
           tags_csv="${{ steps.scope.outputs.tags_csv }}"
           breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
           exact_tags=""
-          if [[ "$BUILDKIT_BACKEND" == "native" || "$BUILDKIT_BACKEND" == "registry" ]]; then
+          if [[ "$BUILDKIT_BACKEND" == "registry" ]]; then
             exact_tags="${tags_csv}"
           fi
           bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" BORINGCACHE_EXACT_TAGS="$exact_tags" ./scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
@@ -663,10 +637,6 @@ runs:
         cache_summary_args=()
         if [[ -s benchmark-session-summary/benchmark-session-summary.json ]]; then
           cache_summary_args=(--cache-session-summary-json benchmark-session-summary/benchmark-session-summary.json)
-        fi
-        native_tool_args=()
-        if [[ -s benchmark-native-tool/native-tool.json ]]; then
-          native_tool_args=(--native-tool-evidence-json benchmark-native-tool/native-tool.json)
         fi
 
         cache_import_status=""
@@ -732,7 +702,6 @@ runs:
           --reseed-new-blob-threshold "0" \
           --hit-behavior-note "Rolling lane: one continuous-commit build imports the prior branch/default Docker cache, exports the updated cache, and records that commit build only." \
           "${cache_summary_args[@]}" \
-          "${native_tool_args[@]}"
 
     - name: Upload benchmark artifacts
       uses: actions/upload-artifact@v6

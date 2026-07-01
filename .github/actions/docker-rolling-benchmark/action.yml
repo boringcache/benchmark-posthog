@@ -318,7 +318,7 @@ runs:
         verbose: true
 
     - name: Set up Docker Buildx for BoringCache wrapped build
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') }}
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.buildkit_cache_backend != 'boringcache' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') }}
       id: tool_cache_buildx
       uses: docker/setup-buildx-action@v4
       with:
@@ -433,7 +433,7 @@ runs:
         BORINGCACHE_OCI_HYDRATION: ${{ inputs.oci_hydration }}
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
-        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && inputs.docker_mount_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') && steps.tool_cache_buildx.outputs.name || steps.buildx.outputs.name || '' }}
+        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && inputs.docker_mount_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.buildkit_cache_backend != 'boringcache' && (inputs.docker_tool_cache != '' || inputs.docker_mount_cache != '') && steps.tool_cache_buildx.outputs.name || steps.buildx.outputs.name || '' }}
         CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
         CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
         CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}

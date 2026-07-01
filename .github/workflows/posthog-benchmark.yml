@@ -20,6 +20,14 @@ on:
         required: false
         type: string
         default: ""
+      lane_filter:
+        description: "Optional manual-dispatch lane filter."
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - buildkit
   schedule:
     - cron: "0 3 * * 3"
   pull_request:
@@ -62,6 +70,7 @@ jobs:
             docker_tool_cache: ""
             docker_mount_cache: ""
             buildkit_mountcache_offloader: false
+            lane_filter: default
             run_on_pull_request: true
             requires_buildkit_image: false
           - label: ECR
@@ -74,6 +83,7 @@ jobs:
             docker_tool_cache: ""
             docker_mount_cache: ""
             buildkit_mountcache_offloader: false
+            lane_filter: default
             run_on_pull_request: false
             requires_buildkit_image: false
           - label: BC OCI
@@ -86,6 +96,7 @@ jobs:
             docker_tool_cache: ""
             docker_mount_cache: ""
             buildkit_mountcache_offloader: false
+            lane_filter: default
             run_on_pull_request: true
             requires_buildkit_image: false
           - label: BC OCI + toolcache
@@ -98,6 +109,7 @@ jobs:
             docker_tool_cache: turbo
             docker_mount_cache: ""
             buildkit_mountcache_offloader: false
+            lane_filter: default
             run_on_pull_request: true
             requires_buildkit_image: false
           - label: BC BuildKit Backend + mountcache
@@ -110,6 +122,7 @@ jobs:
             docker_tool_cache: ""
             docker_mount_cache: ""
             buildkit_mountcache_offloader: true
+            lane_filter: buildkit
             run_on_pull_request: false
             requires_buildkit_image: true
           - label: BC BuildKit Backend + toolcache + mountcache
@@ -122,6 +135,7 @@ jobs:
             docker_tool_cache: turbo
             docker_mount_cache: ""
             buildkit_mountcache_offloader: true
+            lane_filter: buildkit
             run_on_pull_request: false
             requires_buildkit_image: true
     env:
@@ -134,25 +148,25 @@ jobs:
       PREWARM_BUILDKIT_IMAGE: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
     steps:
       - name: Skip disabled lane
-        if: ${{ (github.event_name == 'pull_request' && !matrix.run_on_pull_request) || (matrix.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE == '') }}
+        if: ${{ (github.event_name == 'pull_request' && !matrix.run_on_pull_request) || (matrix.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE == '') || (github.event_name == 'workflow_dispatch' && inputs.lane_filter != 'all' && inputs.lane_filter != matrix.lane_filter) }}
         shell: bash
         run: |
           echo "Skipping ${{ matrix.label }} for this event/configuration."
 
       - name: Checkout benchmark repo
-        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane_filter) }}
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
           submodules: false
 
       - name: Free disk space
-        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane_filter) }}
         shell: bash
         run: ./scripts/free-runner-disk.sh
 
       - name: ${{ matrix.label }}
-        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane_filter) }}
         uses: ./.github/actions/docker-rolling-benchmark
         env:
           BORINGCACHE_OCI_DEMAND_PREFETCH: ${{ matrix.buildkit_cache_backend == 'boringcache' && 'false' || '' }}

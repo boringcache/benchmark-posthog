@@ -611,6 +611,9 @@ run_wrapped_boringcache_build() {
     --fail-on-cache-error
   )
 
+  if [[ -n "$docker_tool_cache" && "${BORINGCACHE_DOCKER_TOOL_CACHE_ON_DEMAND:-true}" == "true" ]]; then
+    boringcache_args+=(--on-demand)
+  fi
 
   if [[ -n "$docker_tool_cache" ]]; then
     local tool_cache_value

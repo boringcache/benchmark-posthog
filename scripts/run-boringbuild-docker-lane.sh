@@ -4,15 +4,13 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-lane="${POSTHOG_BORINGBUILD_LANE:-oci-mountcache}"
+lane="${POSTHOG_BORINGBUILD_LANE:-buildkit-mountcache}"
 ref_slug="${POSTHOG_BORINGBUILD_REF_SLUG:-main}"
 scope_suffix="${POSTHOG_BORINGBUILD_SCOPE_SUFFIX:-boringbuild}"
 builder_name="${POSTHOG_BORINGBUILD_BUILDER:-posthog-boringbuild-${lane//[^A-Za-z0-9_.-]/-}-$$}"
-. "$repo_root/scripts/prepare-boringcache-cache-mount-publish-helper-image.sh"
 
 cleanup_boringbuild_lane() {
   docker buildx rm -f "$builder_name" >/dev/null 2>&1 || true
-  cleanup_boringcache_cache_mount_publish_helper_image
 }
 trap cleanup_boringbuild_lane EXIT
 
@@ -21,29 +19,33 @@ case "$lane" in
     label="BC OCI"
     benchmark_id="posthog"
     backend="registry"
+    cache_backend=""
     tool_cache=""
-    mount_cache=""
+    mountcache_offloader=""
     ;;
   oci-toolcache)
     label="BC OCI + toolcache"
     benchmark_id="posthog-oci-toolcache"
     backend="registry"
+    cache_backend=""
     tool_cache="turbo"
-    mount_cache=""
+    mountcache_offloader=""
     ;;
-  oci-mountcache)
-    label="BC OCI + mountcache"
-    benchmark_id="posthog-oci-mountcache"
+  buildkit-mountcache)
+    label="BC BuildKit Backend + mountcache"
+    benchmark_id="posthog-bc-buildkit-mountcache"
     backend="registry"
+    cache_backend="boringcache"
     tool_cache=""
-    mount_cache="posthog-mounts"
+    mountcache_offloader="1"
     ;;
-  oci-toolcache-mountcache)
-    label="BC OCI + toolcache + mountcache"
-    benchmark_id="posthog-oci-toolcache-mountcache"
+  buildkit-toolcache-mountcache)
+    label="BC BuildKit Backend + toolcache + mountcache"
+    benchmark_id="posthog-bc-buildkit-toolcache-mountcache"
     backend="registry"
+    cache_backend="boringcache"
     tool_cache="turbo"
-    mount_cache="posthog-mounts"
+    mountcache_offloader="1"
     ;;
   *)
     echo "Unknown POSTHOG_BORINGBUILD_LANE: $lane" >&2
@@ -96,11 +98,8 @@ export BORINGCACHE_API_TOKEN="${BORINGCACHE_API_TOKEN:-${BORINGCACHE_RESTORE_TOK
 
 echo "Running ${label} through BoringBuild"
 boringcache --version
-if [[ -n "$mount_cache" && -n "$boringcache_candidate" ]]; then
-  prepare_boringcache_cache_mount_publish_helper_image /usr/local/bin/boringcache
-fi
 
-if [[ "$backend" == "registry" ]]; then
+if [[ "$backend" == "registry" && "$cache_backend" != "boringcache" ]]; then
   docker buildx rm -f "$builder_name" >/dev/null 2>&1 || true
   docker buildx create \
     --name "$builder_name" \
@@ -115,13 +114,18 @@ export BENCHMARK_ID="${BENCHMARK_ID:-$benchmark_id}"
 export BENCHMARK_WORKSPACE="$cache_workspace"
 export BENCHMARK_PROJECT_REPO="${BENCHMARK_PROJECT_REPO:-PostHog/posthog}"
 export BUILDKIT_BACKEND="$backend"
+export BORINGCACHE_BUILDKIT_CACHE_BACKEND="$cache_backend"
+export BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER="$mountcache_offloader"
 export CACHE_LANE="${CACHE_LANE:-rolling}"
 export CACHE_SCOPE="${CACHE_SCOPE:-${BENCHMARK_ID}-run-rolling-${ref_slug}-${scope_suffix}}"
 export BORINGCACHE_DOCKER_TOOL_CACHE="$tool_cache"
-export BORINGCACHE_DOCKER_MOUNT_CACHE="$mount_cache"
 export BORINGCACHE_MANAGED_BUILDKIT_IMAGE="$buildkit_image"
 export BUILDKIT_IMAGE="$buildkit_image"
-export BUILDER="$builder_name"
+if [[ "$cache_backend" == "boringcache" ]]; then
+  export BUILDER=""
+else
+  export BUILDER="$builder_name"
+fi
 export BORINGCACHE_DOCKER_WRAPPER=always
 export BORINGCACHE_PROXY_PORT="${BORINGCACHE_PROXY_PORT:-5310}"
 export BORINGCACHE_OBSERVABILITY_JSONL_PATH="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-/tmp/${BENCHMARK_ID}-boringcache-commit-observability.jsonl}"
@@ -132,7 +136,7 @@ export BENCHMARK_DOCKER_CONTEXT="${BENCHMARK_DOCKER_CONTEXT:-upstream}"
 export BENCHMARK_OUTPUTS_PATH="${BENCHMARK_OUTPUTS_PATH:-benchmark-results/${BENCHMARK_ID}-boringcache-rolling.outputs.env}"
 export BENCHMARK_PROJECT_REF="${BENCHMARK_PROJECT_REF:-}"
 
-rm -rf benchmark-diagnostics benchmark-native-tool benchmark-results benchmark-session-summary benchmark-storage .bc-sidecars
+rm -rf benchmark-diagnostics benchmark-results benchmark-session-summary benchmark-storage
 mkdir -p benchmark-results benchmark-diagnostics
 
 "$repo_root/scripts/run-boringcache-docker-lane.sh" full

@@ -40,10 +40,8 @@ Tool-cache uses PostHog's
 Turbo build commands while BoringCache still runs outside the Dockerfile; only
 `+ toolcache` lanes use the committed Dockerfile fixture, and the fixture keeps
 dependency-install steps upstream-shaped so the tool-cache secret only affects
-Turbo execution. Managed BuildKit lanes enable native cache-mount archive
+Turbo execution. Managed BuildKit lanes enable BuildKit-owned cache-mount archive
 offload in BuildKit; the local proxy only transports generic archive bytes.
-The older `docker_mount_cache` wrapper profile remains diagnostic-only and is
-not used by the GitHub matrix.
 Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not
 blocked by Docker Hub anonymous pull limits.
@@ -69,7 +67,7 @@ This repo uses split BoringCache tokens as the standard CI shape:
 ## Repo Layout
 
 - [`scripts/prepare-source.sh`](scripts/prepare-source.sh)
-- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, ECR, and explicit BoringCache OCI/native/BuildKit-backend/tool-cache product lanes side by side.
+- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, ECR, and explicit BoringCache OCI, BuildKit-backend, and tool-cache product lanes side by side.
 - [`.github/workflows/rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml) runs the rolling lane after upstream sync.
 - [`.github/workflows/sync.yml`](.github/workflows/sync.yml) keeps the pinned upstream source current.
 

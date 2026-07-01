@@ -33,14 +33,12 @@ append_outputs_file() {
   fi
 }
 
-if [[ "$backend" != "native" ]]; then
-  if [[ "${BORINGCACHE_CACHE_IMPORT_READY:-}" != "true" || ( -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ) ]]; then
-    echo "Rolling BoringCache Docker import was not ready; continuing as a bootstrap/update sample." >&2
-    echo "import ready: ${BORINGCACHE_CACHE_IMPORT_READY:-}" >&2
-    echo "requested refs: ${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}" >&2
-    echo "used refs: ${BORINGCACHE_CACHE_USED_FROM_REFS:-}" >&2
-    echo "unreadable refs: ${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}" >&2
-  fi
+if [[ "${BORINGCACHE_CACHE_IMPORT_READY:-}" != "true" || ( -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ) ]]; then
+  echo "Rolling BoringCache Docker import was not ready; continuing as a bootstrap/update sample." >&2
+  echo "import ready: ${BORINGCACHE_CACHE_IMPORT_READY:-}" >&2
+  echo "requested refs: ${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}" >&2
+  echo "used refs: ${BORINGCACHE_CACHE_USED_FROM_REFS:-}" >&2
+  echo "unreadable refs: ${BORINGCACHE_CACHE_UNREADABLE_FROM_REFS:-}" >&2
 fi
 
 start="$(date +%s)"

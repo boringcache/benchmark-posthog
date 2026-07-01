@@ -12,7 +12,6 @@ outputs_file="${BENCHMARK_OUTPUTS_PATH:-benchmark-results/${benchmark_id}-boring
 project_repo="${BENCHMARK_PROJECT_REPO:-PostHog/posthog}"
 project_ref="${BENCHMARK_PROJECT_REF:-}"
 docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
-docker_mount_cache="${BORINGCACHE_DOCKER_MOUNT_CACHE:-}"
 
 read_output() {
   local key="$1"
@@ -49,43 +48,15 @@ tool_cache_tags_csv() {
   printf '%s\n' "${tags[*]}"
 }
 
-mount_cache_tags_csv() {
-  local requested="$1"
-  local profile
-  local tags=()
-
-  for profile in ${requested//,/ }; do
-    [[ -n "$profile" ]] || continue
-    case "$profile" in
-      posthog-mounts)
-        tags+=("${cache_scope}-mount-pnpm-store")
-        tags+=("${cache_scope}-mount-uv-cache")
-        tags+=("${cache_scope}-mount-playwright-browsers")
-        ;;
-      *)
-        echo "Unknown Docker mount-cache profile: ${profile}" >&2
-        exit 1
-        ;;
-    esac
-  done
-
-  local IFS=,
-  printf '%s\n' "${tags[*]}"
-}
-
 if [[ -z "$project_ref" ]]; then
   project_ref="$(git rev-parse HEAD:upstream 2>/dev/null || git -C upstream rev-parse HEAD 2>/dev/null || echo unknown)"
 fi
 
 mkdir -p benchmark-storage
 tool_cache_tags="$(tool_cache_tags_csv "$docker_tool_cache")"
-mount_cache_tags="$(mount_cache_tags_csv "$docker_mount_cache")"
 tags_csv="$cache_scope"
 if [[ -n "$tool_cache_tags" ]]; then
   tags_csv="${tags_csv},${tool_cache_tags}"
-fi
-if [[ -n "$mount_cache_tags" ]]; then
-  tags_csv="${tags_csv},${mount_cache_tags}"
 fi
 
 storage_breakdown_path="benchmark-storage/${benchmark_id}-boringcache-storage-breakdown.json"

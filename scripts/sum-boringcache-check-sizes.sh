@@ -24,7 +24,7 @@
 #   - Default mode == 71-line variant (the dedupe is universally correct
 #     and was the most common fork). The 55-line callers gain dedupe.
 #     Storage totals can only decrease or stay equal — never inflate.
-#   - Set BORINGCACHE_EXACT_TAGS=<csv> to check proxy/native tags with
+#   - Set BORINGCACHE_EXACT_TAGS=<csv> to check exact cache tags with
 #     `--no-platform --exact` while checking archive tags with default
 #     restore-style resolution.
 #   - Set BORINGCACHE_CHECK_STRICT=1 to enable `--no-platform --exact`

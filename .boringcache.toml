@@ -2,10 +2,9 @@ workspace = "boringcache/benchmark-posthog"
 
 # Docker BuildKit registry cache benchmark. The proxy is the only cache
 # surface (boringcache/one mode=docker exporting --cache-from / --cache-to
-# against the BoringCache OCI registry endpoint). Hybrid benchmark lanes append
-# temporary archive entries at runtime for Docker tool-cache and cache-mount
-# sidecars, then restore this canonical file before the job exits.
+# against the BoringCache OCI registry endpoint). Tool-cache and managed
+# BuildKit mountcache lanes are driven by explicit benchmark inputs, not by
+# runtime edits to this file.
 #
 # This file is the canonical config anchor; durable entries can be declared
-# here if a hybrid local-archive contract becomes part of the public benchmark
-# surface instead of an individual proof lane.
+# here if a local-archive contract becomes part of the public benchmark surface.

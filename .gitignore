@@ -1,7 +1,5 @@
 .DS_Store
-.bc-sidecars/
 benchmark-diagnostics/
-benchmark-native-tool/
 benchmark-results/
 benchmark-session-summary/
 benchmark-storage/

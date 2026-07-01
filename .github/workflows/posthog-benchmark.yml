@@ -61,6 +61,7 @@ jobs:
             dockerfile_path: upstream/Dockerfile
             docker_tool_cache: ""
             docker_mount_cache: ""
+            buildkit_mountcache_offloader: false
             run_on_pull_request: true
             requires_buildkit_image: false
           - label: ECR
@@ -72,6 +73,7 @@ jobs:
             dockerfile_path: upstream/Dockerfile
             docker_tool_cache: ""
             docker_mount_cache: ""
+            buildkit_mountcache_offloader: false
             run_on_pull_request: false
             requires_buildkit_image: false
           - label: BC OCI
@@ -83,6 +85,7 @@ jobs:
             dockerfile_path: upstream/Dockerfile
             docker_tool_cache: ""
             docker_mount_cache: ""
+            buildkit_mountcache_offloader: false
             run_on_pull_request: true
             requires_buildkit_image: false
           - label: BC OCI + toolcache
@@ -94,28 +97,31 @@ jobs:
             dockerfile_path: scenarios/posthog-toolcache/Dockerfile
             docker_tool_cache: turbo
             docker_mount_cache: ""
+            buildkit_mountcache_offloader: false
             run_on_pull_request: true
             requires_buildkit_image: false
-          - label: BC BuildKit Backend
+          - label: BC BuildKit Backend + mountcache
             strategy: boringcache
             artifact_strategy: ""
             buildkit_backend: registry
             buildkit_cache_backend: boringcache
-            benchmark_id: posthog-bc-buildkit
+            benchmark_id: posthog-bc-buildkit-mountcache
             dockerfile_path: upstream/Dockerfile
             docker_tool_cache: ""
             docker_mount_cache: ""
+            buildkit_mountcache_offloader: true
             run_on_pull_request: false
             requires_buildkit_image: true
-          - label: BC BuildKit Backend + toolcache
+          - label: BC BuildKit Backend + toolcache + mountcache
             strategy: boringcache
             artifact_strategy: ""
             buildkit_backend: registry
             buildkit_cache_backend: boringcache
-            benchmark_id: posthog-bc-buildkit-toolcache
+            benchmark_id: posthog-bc-buildkit-toolcache-mountcache
             dockerfile_path: scenarios/posthog-toolcache/Dockerfile
             docker_tool_cache: turbo
             docker_mount_cache: ""
+            buildkit_mountcache_offloader: true
             run_on_pull_request: false
             requires_buildkit_image: true
     env:
@@ -154,11 +160,13 @@ jobs:
           BORINGCACHE_STORAGE_SLOW_READ_PROBE_MB: ${{ matrix.buildkit_cache_backend == 'boringcache' && '4' || '' }}
           BORINGCACHE_STORAGE_SLOW_READ_MIN_MBPS: ${{ matrix.buildkit_cache_backend == 'boringcache' && '64' || '' }}
           BORINGCACHE_STORAGE_SLOW_READ_MAX_RETRIES: ${{ matrix.buildkit_cache_backend == 'boringcache' && '3' || '' }}
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ matrix.buildkit_mountcache_offloader && '1' || '' }}
         with:
           strategy: ${{ matrix.strategy }}
           artifact_strategy: ${{ matrix.artifact_strategy }}
           buildkit_backend: ${{ matrix.buildkit_backend }}
           buildkit_cache_backend: ${{ matrix.buildkit_cache_backend }}
+          buildkit_mountcache_offloader: ${{ matrix.buildkit_mountcache_offloader }}
           buildkit_image: ${{ matrix.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE || 'mirror.gcr.io/moby/buildkit:buildx-stable-1' }}
           benchmark_id: ${{ format('{0}{1}', matrix.benchmark_id, inputs.benchmark_id_suffix) }}
           project_repo: PostHog/posthog

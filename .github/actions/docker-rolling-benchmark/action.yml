@@ -11,6 +11,10 @@ inputs:
     description: "Optional BuildKit cache backend type. Use boringcache for the managed BuildKit backend."
     required: false
     default: ""
+  buildkit_mountcache_offloader:
+    description: "Enable native BuildKit cache-mount archive offload for managed type=boringcache lanes."
+    required: false
+    default: "false"
   oci_hydration:
     description: "Docker/BuildKit proxy hydration policy for benchmark lanes; keep metadata-only."
     required: false
@@ -60,7 +64,7 @@ inputs:
     required: false
     default: ""
   docker_mount_cache:
-    description: "Optional Docker cache-mount sidecar profile. Use posthog-mounts for PostHog pnpm, uv, and Playwright cache mounts."
+    description: "Legacy benchmark-local Docker cache-mount profile. Use posthog-mounts only for the older wrapper profile, not for native BuildKit offload."
     required: false
     default: ""
   cache_export_type:
@@ -293,6 +297,8 @@ runs:
       if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && inputs.docker_mount_cache == '' }}
       id: docker_cache
       uses: boringcache/one@v1
+      env:
+        BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.buildkit_mountcache_offloader == 'true' && '1' || '' }}
       with:
         setup: none
         cache-runtime: false
@@ -301,6 +307,7 @@ runs:
         workspace: ${{ inputs.benchmark_workspace }}
         cache-tag: ${{ steps.scope.outputs.cache_scope }}
         registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
+        cache-backend: ${{ inputs.buildkit_cache_backend == 'boringcache' && 'boringcache' || 'registry' }}
         oci-hydration: ${{ inputs.oci_hydration }}
         no-platform: "true"
         proxy-no-git: "true"
@@ -421,6 +428,7 @@ runs:
         BORINGCACHE_DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
         BORINGCACHE_DOCKER_MOUNT_CACHE: ${{ inputs.docker_mount_cache }}
         BORINGCACHE_BUILDKIT_CACHE_BACKEND: ${{ inputs.buildkit_cache_backend }}
+        BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.buildkit_mountcache_offloader == 'true' && '1' || '' }}
         BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
         BORINGCACHE_OCI_HYDRATION: ${{ inputs.oci_hydration }}
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}

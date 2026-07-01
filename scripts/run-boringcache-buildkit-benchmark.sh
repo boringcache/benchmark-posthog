@@ -6,12 +6,12 @@ proxy_log="${BORINGCACHE_PROXY_LOG_PATH:-/tmp/boringcache-proxy-${proxy_port}.lo
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
 status_snapshot_path="$(mktemp /tmp/boringcache-status.XXXXXX.json)"
-max_attempts=1
+max_attempts="${BORINGCACHE_BUILD_MAX_ATTEMPTS:-3}"
 cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
 mode="${1:-full}"
 backend="${BUILDKIT_BACKEND:-registry}"
 case "$backend" in
-  registry)
+  registry|boringcache)
     ;;
   *)
     echo "Unsupported BUILDKIT_BACKEND: ${backend}" >&2
@@ -30,6 +30,7 @@ docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
 docker_mount_cache="${BORINGCACHE_DOCKER_MOUNT_CACHE:-}"
 docker_wrapper_mode="${BORINGCACHE_DOCKER_WRAPPER:-auto}"
 buildkit_cache_backend="${BORINGCACHE_BUILDKIT_CACHE_BACKEND:-${BORINGCACHE_CACHE_EXPORT_TYPE:-}}"
+buildkit_mountcache_offloader="${BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER:-}"
 cache_export_type="$buildkit_cache_backend"
 effective_cache_to=""
 boringcache_config="${repo_root}/.boringcache.toml"
@@ -382,6 +383,9 @@ write_build_metrics() {
   if [[ -n "$docker_mount_cache" ]]; then
     echo "docker_mount_cache=${docker_mount_cache}" >> "$output_path"
   fi
+  if [[ -n "$buildkit_mountcache_offloader" ]]; then
+    echo "buildkit_mountcache_offloader=${buildkit_mountcache_offloader}" >> "$output_path"
+  fi
   if [[ -s "$status_snapshot_path" ]] && command -v jq >/dev/null 2>&1; then
     append_status_metric() {
       local key="$1"
@@ -519,6 +523,10 @@ build_import_status() {
   fi
 }
 
+transient_build_failure() {
+  grep -Eq 'i/o timeout|TLS handshake timeout|DeadlineExceeded: .*failed to resolve source metadata|failed to do request|connection reset by peer|connection refused|503 Service Unavailable|502 Bad Gateway|429 Too Many Requests' "$build_log"
+}
+
 write_build_diagnostics() {
   local output_path="${BENCHMARK_DIAGNOSTICS_OUTPUT:-}"
   [[ -n "$output_path" ]] || return 0
@@ -532,6 +540,7 @@ write_build_diagnostics() {
     echo "strategy=boringcache"
     echo "buildkit_backend=${backend}"
     echo "buildkit_cache_backend=${buildkit_cache_backend:-registry}"
+    echo "buildkit_mountcache_offloader=${buildkit_mountcache_offloader:-}"
     echo "mode=${mode}"
     echo "builder=${BUILDER:-}"
     echo "cache_scope=${CACHE_SCOPE:-}"
@@ -593,12 +602,16 @@ run_wrapped_boringcache_build() {
   elif [[ "${CACHE_LANE:-fresh}" == "rolling" ]]; then
     phase_hint="commit"
   fi
+  local cli_backend="$backend"
+  if [[ "$buildkit_cache_backend" == "boringcache" ]]; then
+    cli_backend="boringcache"
+  fi
 
   local boringcache_args=(
     boringcache docker
     --workspace "${BENCHMARK_WORKSPACE:?Set BENCHMARK_WORKSPACE}"
     --tag "${CACHE_SCOPE:?Set CACHE_SCOPE}"
-    --backend "$backend"
+    --backend "$cli_backend"
     --port "$proxy_port"
     --cache-mode max
     --no-platform
@@ -607,7 +620,7 @@ run_wrapped_boringcache_build() {
     --metadata-hint "benchmark=${BENCHMARK_ID:-docker}"
     --metadata-hint "phase=${phase_hint}"
     --metadata-hint "lane=${CACHE_LANE:-fresh}"
-    --metadata-hint "backend=${backend}"
+    --metadata-hint "backend=${cli_backend}"
     --fail-on-cache-error
   )
 
@@ -643,7 +656,7 @@ run_wrapped_boringcache_build() {
   local boringcache_cmd=("$boringcache_bin")
 
   local builder_args=()
-  if [[ -n "${BUILDER:-}" ]]; then
+  if [[ -n "${BUILDER:-}" && "$cli_backend" != "boringcache" ]]; then
     builder_args=(--builder "$BUILDER")
   fi
 
@@ -780,7 +793,7 @@ while true; do
       write_build_diagnostics
       echo "Build succeeded but registry cache export reported an error; failing benchmark." >&2
       tail -n 200 "$build_log" || true
-      tail -n 400 "$proxy_log" || true
+      tail -n 400 "$proxy_log" 2>/dev/null || true
       stop_proxy
       exit 1
     fi
@@ -805,9 +818,21 @@ while true; do
   if [[ "$attempt" -ge "$max_attempts" ]]; then
     echo "Build (${mode}) failed after ${max_attempts} attempts" >&2
     tail -n 200 "$build_log" || true
-    tail -n 400 "$proxy_log" || true
+    tail -n 400 "$proxy_log" 2>/dev/null || true
     write_build_diagnostics
     exit "$status"
   fi
+
+  if ! transient_build_failure; then
+    echo "Build (${mode}) failed with a non-transient error on attempt ${attempt}/${max_attempts}" >&2
+    tail -n 200 "$build_log" || true
+    tail -n 400 "$proxy_log" 2>/dev/null || true
+    write_build_diagnostics
+    exit "$status"
+  fi
+
+  echo "Build (${mode}) failed with a transient registry/network error on attempt ${attempt}/${max_attempts}; retrying..." >&2
+  attempt=$((attempt + 1))
+  sleep $((attempt * 5))
 
 done

@@ -153,7 +153,7 @@ jobs:
           BORINGCACHE_STORAGE_SLOW_READ_PROBE: ${{ matrix.buildkit_cache_backend == 'boringcache' && '1' || '' }}
           BORINGCACHE_STORAGE_SLOW_READ_PROBE_MB: ${{ matrix.buildkit_cache_backend == 'boringcache' && '4' || '' }}
           BORINGCACHE_STORAGE_SLOW_READ_MIN_MBPS: ${{ matrix.buildkit_cache_backend == 'boringcache' && '64' || '' }}
-          BORINGCACHE_STORAGE_SLOW_READ_MAX_RETRIES: ${{ matrix.buildkit_cache_backend == 'boringcache' && '1' || '' }}
+          BORINGCACHE_STORAGE_SLOW_READ_MAX_RETRIES: ${{ matrix.buildkit_cache_backend == 'boringcache' && '3' || '' }}
         with:
           strategy: ${{ matrix.strategy }}
           artifact_strategy: ${{ matrix.artifact_strategy }}

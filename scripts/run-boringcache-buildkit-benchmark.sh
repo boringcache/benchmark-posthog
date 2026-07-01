@@ -617,7 +617,7 @@ run_wrapped_boringcache_build() {
     --no-platform
     --no-git
     --oci-hydration "$oci_hydration"
-    --metadata-hint "benchmark=${BENCHMARK_ID:-docker}"
+    --metadata-hint "benchmark=posthog"
     --metadata-hint "phase=${phase_hint}"
     --metadata-hint "lane=${CACHE_LANE:-fresh}"
     --metadata-hint "backend=${cli_backend}"

@@ -547,7 +547,6 @@ write_build_diagnostics() {
     echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
     echo "docker_tool_cache=${docker_tool_cache}"
     echo "docker_mount_cache=${docker_mount_cache}"
-    echo "materialize_compression=${materialize_compression}"
     echo "docker_mount_cache_paths<<EOF"
     if [[ -d "${repo_root}/.bc-sidecars/posthog" ]]; then
       du -sh "${repo_root}/.bc-sidecars/posthog"/* 2>/dev/null || true

@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: ""
+      boringcache_cli_version:
+        description: "BoringCache CLI version used by BoringCache benchmark lanes."
+        required: false
+        type: string
+        default: "v1.13.79"
       lane_filter:
         description: "Optional manual-dispatch lane filter."
         required: false
@@ -179,6 +184,7 @@ jobs:
           docker_context: upstream
           image_tag: posthog-benchmark:latest
           cli_platform: linux-amd64
+          boringcache_cli_version: ${{ inputs.boringcache_cli_version || 'v1.13.79' }}
           benchmark_workspace: ${{ github.repository }}
           docker_tool_cache: ${{ matrix.docker_tool_cache }}
           ecr_region: ${{ vars.DOCKER_BENCHMARK_ECR_REGION || 'us-east-1' }}

@@ -60,6 +60,11 @@ on:
         required: false
         type: string
         default: linux-amd64
+      boringcache_cli_version:
+        description: 'BoringCache CLI version used by BoringCache benchmark lanes.'
+        required: false
+        type: string
+        default: v1.13.79
       buildkit_image:
         description: 'BuildKit daemon image used by benchmark-created builders.'
         required: false
@@ -152,6 +157,7 @@ jobs:
         if: inputs.strategy == 'boringcache'
         uses: boringcache/one@v1
         with:
+          cli-version: ${{ inputs.boringcache_cli_version }}
           setup: none
           mode: archive
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
@@ -219,6 +225,7 @@ jobs:
         id: docker_cache
         uses: boringcache/one@v1
         with:
+          cli-version: ${{ inputs.boringcache_cli_version }}
           setup: none
           cache-runtime: false
           mode: docker
@@ -479,6 +486,7 @@ jobs:
         id: warm_docker_cache
         uses: boringcache/one@v1
         with:
+          cli-version: ${{ inputs.boringcache_cli_version }}
           setup: none
           cache-runtime: false
           mode: docker
@@ -730,6 +738,7 @@ jobs:
         if: inputs.strategy == 'boringcache'
         uses: boringcache/one@v1
         with:
+          cli-version: ${{ inputs.boringcache_cli_version }}
           setup: none
           mode: archive
           workspace: ${{ env.BENCHMARK_WORKSPACE }}

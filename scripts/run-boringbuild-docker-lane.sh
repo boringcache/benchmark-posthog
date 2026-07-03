@@ -33,7 +33,7 @@ case "$lane" in
     ;;
   buildkit)
     label="BC BuildKit Backend"
-    benchmark_id="posthog-bc-buildkit"
+    benchmark_id="posthog-bc-buildkit-mountcache"
     backend="registry"
     cache_backend="boringcache"
     tool_cache=""
@@ -41,7 +41,7 @@ case "$lane" in
     ;;
   buildkit-toolcache)
     label="BC BuildKit Backend + toolcache"
-    benchmark_id="posthog-bc-buildkit-toolcache"
+    benchmark_id="posthog-bc-buildkit-toolcache-mountcache"
     backend="registry"
     cache_backend="boringcache"
     tool_cache="turbo"

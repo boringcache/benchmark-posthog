@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-lane="${POSTHOG_BORINGBUILD_LANE:-buildkit-mountcache}"
+lane="${POSTHOG_BORINGBUILD_LANE:-buildkit}"
 ref_slug="${POSTHOG_BORINGBUILD_REF_SLUG:-main}"
 scope_suffix="${POSTHOG_BORINGBUILD_SCOPE_SUFFIX:-boringbuild}"
 builder_name="${POSTHOG_BORINGBUILD_BUILDER:-posthog-boringbuild-${lane//[^A-Za-z0-9_.-]/-}-$$}"
@@ -31,21 +31,21 @@ case "$lane" in
     tool_cache="turbo"
     mountcache_offloader=""
     ;;
-  buildkit-mountcache)
-    label="BC BuildKit Backend + mountcache"
-    benchmark_id="posthog-bc-buildkit-mountcache"
+  buildkit)
+    label="BC BuildKit Backend"
+    benchmark_id="posthog-bc-buildkit"
     backend="registry"
     cache_backend="boringcache"
     tool_cache=""
-    mountcache_offloader="1"
+    mountcache_offloader=""
     ;;
-  buildkit-toolcache-mountcache)
-    label="BC BuildKit Backend + toolcache + mountcache"
-    benchmark_id="posthog-bc-buildkit-toolcache-mountcache"
+  buildkit-toolcache)
+    label="BC BuildKit Backend + toolcache"
+    benchmark_id="posthog-bc-buildkit-toolcache"
     backend="registry"
     cache_backend="boringcache"
     tool_cache="turbo"
-    mountcache_offloader="1"
+    mountcache_offloader=""
     ;;
   *)
     echo "Unknown POSTHOG_BORINGBUILD_LANE: $lane" >&2

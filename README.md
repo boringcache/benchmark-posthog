@@ -34,14 +34,13 @@ Fresh runs use the scenario set:
 
 BoringCache lanes are split so product capabilities are visible instead of
 mixed into one number: `BC OCI`, `BC OCI + toolcache`,
-`BC BuildKit Backend + mountcache`, and
-`BC BuildKit Backend + toolcache + mountcache`.
+`BC BuildKit Backend`, and `BC BuildKit Backend + toolcache`.
 Tool-cache uses PostHog's
 Turbo build commands while BoringCache still runs outside the Dockerfile; only
 `+ toolcache` lanes use the committed Dockerfile fixture, and the fixture keeps
 dependency-install steps upstream-shaped so the tool-cache secret only affects
-Turbo execution. Managed BuildKit lanes enable BuildKit-owned cache-mount archive
-offload in BuildKit; the local proxy only transports generic archive bytes.
+Turbo execution. Managed BuildKit lanes run without BuildKit-owned cache-mount
+archive offload unless the benchmark explicitly enables that diagnostic mode.
 Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not
 blocked by Docker Hub anonymous pull limits.

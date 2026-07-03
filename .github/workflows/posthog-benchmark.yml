@@ -108,27 +108,27 @@ jobs:
             lane_filter: default
             run_on_pull_request: true
             requires_buildkit_image: false
-          - label: BC BuildKit Backend + mountcache
+          - label: BC BuildKit Backend
             strategy: boringcache
             artifact_strategy: ""
             buildkit_backend: registry
             buildkit_cache_backend: boringcache
-            benchmark_id: posthog-bc-buildkit-mountcache
+            benchmark_id: posthog-bc-buildkit
             dockerfile_path: upstream/Dockerfile
             docker_tool_cache: ""
-            buildkit_mountcache_offloader: true
+            buildkit_mountcache_offloader: false
             lane_filter: buildkit
             run_on_pull_request: false
             requires_buildkit_image: true
-          - label: BC BuildKit Backend + toolcache + mountcache
+          - label: BC BuildKit Backend + toolcache
             strategy: boringcache
             artifact_strategy: ""
             buildkit_backend: registry
             buildkit_cache_backend: boringcache
-            benchmark_id: posthog-bc-buildkit-toolcache-mountcache
+            benchmark_id: posthog-bc-buildkit-toolcache
             dockerfile_path: scenarios/posthog-toolcache/Dockerfile
             docker_tool_cache: turbo
-            buildkit_mountcache_offloader: true
+            buildkit_mountcache_offloader: false
             lane_filter: buildkit
             run_on_pull_request: false
             requires_buildkit_image: true

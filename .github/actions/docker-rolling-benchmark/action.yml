@@ -50,10 +50,6 @@ inputs:
   cli_platform:
     required: false
     default: linux-amd64
-  boringcache_cli_version:
-    description: "BoringCache CLI version to install through boringcache/one."
-    required: false
-    default: v1.13.79
   buildkit_image:
     description: "BuildKit daemon image used by benchmark-created builders."
     required: false
@@ -139,7 +135,6 @@ runs:
       if: ${{ inputs.strategy == 'boringcache' }}
       uses: boringcache/one@v1
       with:
-        cli-version: ${{ inputs.boringcache_cli_version }}
         setup: none
         mode: archive
         workspace: ${{ inputs.benchmark_workspace }}
@@ -270,7 +265,6 @@ runs:
       env:
         BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.buildkit_mountcache_offloader == 'true' && '1' || '' }}
       with:
-        cli-version: ${{ inputs.boringcache_cli_version }}
         setup: none
         cache-runtime: false
         mode: docker

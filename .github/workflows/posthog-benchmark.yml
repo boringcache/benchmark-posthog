@@ -38,11 +38,6 @@ on:
         required: false
         type: string
         default: ubuntu-latest
-      runner_group:
-        description: "GitHub Actions runner group for Docker build jobs."
-        required: false
-        type: string
-        default: Default
   schedule:
     - cron: "0 3 * * 3"
   pull_request:
@@ -69,9 +64,7 @@ permissions:
 jobs:
   docker-benchmark:
     name: ${{ matrix.label }}
-    runs-on:
-      group: ${{ inputs.runner_group || 'Default' }}
-      labels: ${{ inputs.runner_label || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     timeout-minutes: 180
     strategy:
       fail-fast: false

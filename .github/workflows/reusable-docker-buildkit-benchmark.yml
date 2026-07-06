@@ -458,7 +458,7 @@ jobs:
           fi
 
       - name: Upload build diagnostics
-        if: inputs.strategy == 'boringcache' && always()
+        if: ${{ inputs.strategy == 'boringcache' && !cancelled() }}
         uses: actions/upload-artifact@v6
         with:
           name: benchmark-diagnostics-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}
@@ -466,7 +466,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload BoringCache session summary
-        if: inputs.strategy == 'boringcache' && always()
+        if: ${{ inputs.strategy == 'boringcache' && !cancelled() }}
         uses: actions/upload-artifact@v6
         with:
           name: benchmark-session-summary-${{ inputs.benchmark_id }}-boringcache-${{ inputs.cache_lane }}
@@ -1063,7 +1063,7 @@ jobs:
         run: cat "${{ steps.artifact_files.outputs.md_path }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Storage comparison with GitHub Actions Cache
-        if: inputs.strategy == 'boringcache' && always() && steps.bc_cache_size.outputs.bytes
+        if: ${{ inputs.strategy == 'boringcache' && !cancelled() && steps.bc_cache_size.outputs.bytes }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

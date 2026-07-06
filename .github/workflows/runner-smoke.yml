@@ -1,0 +1,50 @@
+name: "Runner Smoke"
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Runner targeting mode."
+        required: true
+        type: choice
+        default: group
+        options:
+          - group
+          - label
+      runner_group:
+        description: "Runner group used when mode is group."
+        required: false
+        type: string
+        default: Large runners
+      runner_label:
+        description: "Runner label to test."
+        required: true
+        type: string
+        default: ubuntu-latest-8c-amd
+
+permissions:
+  contents: read
+
+jobs:
+  group:
+    name: Group and label
+    if: ${{ inputs.mode == 'group' }}
+    runs-on:
+      group: ${{ inputs.runner_group }}
+      labels: ${{ inputs.runner_label }}
+    timeout-minutes: 5
+    steps:
+      - run: |
+          uname -a
+          df -h /
+
+  label:
+    name: Label only
+    if: ${{ inputs.mode == 'label' }}
+    runs-on:
+      labels: ${{ inputs.runner_label }}
+    timeout-minutes: 5
+    steps:
+      - run: |
+          uname -a
+          df -h /

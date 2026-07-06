@@ -36,6 +36,11 @@ on:
         required: false
         type: string
         default: ubuntu-latest
+      runner_group:
+        description: "GitHub Actions runner group for benchmark jobs."
+        required: false
+        type: string
+        default: GitHub Actions
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -60,6 +65,7 @@ jobs:
           UPSTREAM_REF: ${{ inputs.upstream_ref }}
           LANE_FILTER: ${{ inputs.lane_filter || 'all' }}
           RUNNER_LABEL: ${{ inputs.runner_label || 'ubuntu-latest' }}
+          RUNNER_GROUP: ${{ inputs.runner_group || 'GitHub Actions' }}
         run: |
           set -euo pipefail
 
@@ -92,6 +98,7 @@ jobs:
             -f "benchmark_id_suffix=${BENCHMARK_ID_SUFFIX}"
             -f "lane_filter=${LANE_FILTER}"
             -f "runner_label=${RUNNER_LABEL}"
+            -f "runner_group=${RUNNER_GROUP}"
           )
           if [[ -n "$UPSTREAM_REF" ]]; then
             args+=(-f "upstream_ref=${UPSTREAM_REF}")

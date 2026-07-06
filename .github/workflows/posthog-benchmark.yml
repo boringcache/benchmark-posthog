@@ -1,12 +1,17 @@
 name: "PostHog Benchmark"
 run-name: >-
-  ${{ format('Benchmark Rolling | {0}', github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || github.event_name == 'schedule' && 'Scheduled' || format('Manual dispatch ({0})', github.ref_name)) }}
+  ${{ format('Benchmark Rolling | {0} | {1}', github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || github.event_name == 'schedule' && 'Scheduled' || format('Manual dispatch ({0})', github.ref_name), inputs.runner_label || 'ubuntu-latest') }}
 
 on:
   workflow_dispatch:
     inputs:
       prewarm_buildkit_image:
         description: "Optional experimental BuildKit image. When set, the rolling matrix includes BC BuildKit backend lanes."
+        required: false
+        type: string
+        default: ""
+      cli_version:
+        description: "Optional BoringCache CLI release tag for canary runs, for example vcli-canary."
         required: false
         type: string
         default: ""
@@ -28,6 +33,11 @@ on:
         options:
           - all
           - buildkit
+      runner_label:
+        description: "GitHub Actions runner label for Docker build jobs."
+        required: false
+        type: string
+        default: ubuntu-latest
   schedule:
     - cron: "0 3 * * 3"
   pull_request:
@@ -54,7 +64,7 @@ permissions:
 jobs:
   docker-benchmark:
     name: ${{ matrix.label }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -140,6 +150,7 @@ jobs:
       BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
       BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
       PREWARM_BUILDKIT_IMAGE: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
+      BORINGCACHE_CLI_VERSION: ${{ inputs.cli_version || vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION }}
     steps:
       - name: Skip disabled lane
         if: ${{ (github.event_name == 'pull_request' && !matrix.run_on_pull_request) || (matrix.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE == '') || (github.event_name == 'workflow_dispatch' && inputs.lane_filter != 'all' && inputs.lane_filter != matrix.lane_filter) }}
@@ -178,6 +189,7 @@ jobs:
           dockerfile_path: ${{ matrix.dockerfile_path }}
           docker_context: upstream
           image_tag: posthog-benchmark:latest
+          cli_version: ${{ env.BORINGCACHE_CLI_VERSION }}
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
           docker_tool_cache: ${{ matrix.docker_tool_cache }}

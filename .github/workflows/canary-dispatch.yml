@@ -40,7 +40,7 @@ on:
         description: "GitHub Actions runner group for benchmark jobs."
         required: false
         type: string
-        default: GitHub Actions
+        default: Default
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -65,7 +65,7 @@ jobs:
           UPSTREAM_REF: ${{ inputs.upstream_ref }}
           LANE_FILTER: ${{ inputs.lane_filter || 'all' }}
           RUNNER_LABEL: ${{ inputs.runner_label || 'ubuntu-latest' }}
-          RUNNER_GROUP: ${{ inputs.runner_group || 'GitHub Actions' }}
+          RUNNER_GROUP: ${{ inputs.runner_group || 'Default' }}
         run: |
           set -euo pipefail
 

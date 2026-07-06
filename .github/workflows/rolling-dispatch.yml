@@ -2,6 +2,30 @@ name: "Rolling Benchmark Dispatch"
 
 on:
   workflow_dispatch:
+    inputs:
+      cli_version:
+        description: "Optional BoringCache CLI release tag for canary runs, for example vcli-canary."
+        required: false
+        type: string
+        default: ""
+      prewarm_buildkit_image:
+        description: "Optional BuildKit image for managed backend canary lanes."
+        required: false
+        type: string
+        default: ""
+      benchmark_id_suffix:
+        description: "Optional suffix for isolated canary/cache scopes."
+        required: false
+        type: string
+        default: ""
+      lane_filter:
+        description: "Optional lane filter forwarded to the benchmark workflow."
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - buildkit
   push:
     branches:
       - main
@@ -26,15 +50,56 @@ jobs:
       - name: Dispatch rolling benchmark pair
         env:
           GH_TOKEN: ${{ github.token }}
+          CLI_VERSION: ${{ inputs.cli_version || vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION }}
+          PREWARM_BUILDKIT_IMAGE: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
+          BENCHMARK_ID_SUFFIX: ${{ inputs.benchmark_id_suffix || vars.POSTHOG_BENCHMARK_ID_SUFFIX }}
+          LANE_FILTER: ${{ inputs.lane_filter || 'all' }}
         run: |
           set -euo pipefail
+
+          wait_for_cli_release() {
+            local cli_version="$1"
+            [[ -n "$cli_version" ]] || return 0
+
+            local release_repo="${BORINGCACHE_CLI_RELEASE_REPOSITORY:-boringcache/cli}"
+            local max_attempts="${BORINGCACHE_CLI_RELEASE_WAIT_ATTEMPTS:-60}"
+            local attempt assets
+            for attempt in $(seq 1 "$max_attempts"); do
+              assets="$(gh release view "$cli_version" --repo "$release_repo" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+              if grep -Fxq boringcache-linux-amd64 <<< "$assets" && grep -Fxq SHA256SUMS <<< "$assets"; then
+                echo "Found ${release_repo}@${cli_version} canary assets."
+                return 0
+              fi
+              echo "::notice::Waiting for ${release_repo}@${cli_version} boringcache-linux-amd64 and SHA256SUMS (${attempt}/${max_attempts})"
+              sleep 10
+            done
+
+            echo "::error::Timed out waiting for ${release_repo}@${cli_version} boringcache-linux-amd64 and SHA256SUMS." >&2
+            exit 1
+          }
+
+          wait_for_cli_release "$CLI_VERSION"
 
           dispatch_workflow() {
             local workflow="$1"
             local attempt=1
             local max_attempts=3
+            local args=()
 
-            until gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}"; do
+            if [[ -n "${CLI_VERSION}" ]]; then
+              args+=(-f "cli_version=${CLI_VERSION}")
+            fi
+            if [[ -n "${PREWARM_BUILDKIT_IMAGE}" ]]; then
+              args+=(-f "prewarm_buildkit_image=${PREWARM_BUILDKIT_IMAGE}")
+            fi
+            if [[ -n "${BENCHMARK_ID_SUFFIX}" ]]; then
+              args+=(-f "benchmark_id_suffix=${BENCHMARK_ID_SUFFIX}")
+            fi
+            if [[ -n "${LANE_FILTER}" && "${LANE_FILTER}" != "all" ]]; then
+              args+=(-f "lane_filter=${LANE_FILTER}")
+            fi
+
+            until gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}" "${args[@]}"; do
               if [[ "$attempt" -ge "$max_attempts" ]]; then
                 echo "Failed to dispatch ${workflow} after ${attempt} attempts" >&2
                 return 1

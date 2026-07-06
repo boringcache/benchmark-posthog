@@ -226,6 +226,7 @@ jobs:
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ steps.scope.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
+          cache-backend: ${{ inputs.buildkit_cache_backend == 'boringcache' && 'boringcache' || 'registry' }}
           oci-hydration: ${{ inputs.oci_hydration }}
           no-platform: 'true'
           proxy-no-git: 'true'
@@ -486,6 +487,7 @@ jobs:
           workspace: ${{ env.BENCHMARK_WORKSPACE }}
           cache-tag: ${{ steps.scope.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
+          cache-backend: ${{ inputs.buildkit_cache_backend == 'boringcache' && 'boringcache' || 'registry' }}
           no-platform: 'true'
           proxy-no-git: 'true'
           proxy-no-platform: 'true'

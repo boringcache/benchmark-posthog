@@ -11,7 +11,6 @@ cache_scope="${CACHE_SCOPE:?Set CACHE_SCOPE}"
 outputs_file="${BENCHMARK_OUTPUTS_PATH:-benchmark-results/${benchmark_id}-boringcache-rolling.outputs.env}"
 project_repo="${BENCHMARK_PROJECT_REPO:-PostHog/posthog}"
 project_ref="${BENCHMARK_PROJECT_REF:-}"
-docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
 
 read_output() {
   local key="$1"
@@ -28,36 +27,12 @@ read_output() {
   ' "$outputs_file"
 }
 
-tool_cache_tags_csv() {
-  local requested="$1"
-  local tool_cache_value tool tag
-  local tags=()
-
-  for tool_cache_value in ${requested//,/ }; do
-    [[ -n "$tool_cache_value" ]] || continue
-    tool="${tool_cache_value%%:*}"
-    if [[ "$tool_cache_value" == *:* ]]; then
-      tag="${tool_cache_value#*:}"
-    else
-      tag="${cache_scope}-${tool}"
-    fi
-    [[ -n "$tag" ]] && tags+=("$tag")
-  done
-
-  local IFS=,
-  printf '%s\n' "${tags[*]}"
-}
-
 if [[ -z "$project_ref" ]]; then
   project_ref="$(git rev-parse HEAD:upstream 2>/dev/null || git -C upstream rev-parse HEAD 2>/dev/null || echo unknown)"
 fi
 
 mkdir -p benchmark-storage
-tool_cache_tags="$(tool_cache_tags_csv "$docker_tool_cache")"
 tags_csv="$cache_scope"
-if [[ -n "$tool_cache_tags" ]]; then
-  tags_csv="${tags_csv},${tool_cache_tags}"
-fi
 
 storage_breakdown_path="benchmark-storage/${benchmark_id}-boringcache-storage-breakdown.json"
 bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$storage_breakdown_path" BORINGCACHE_EXACT_TAGS="$tags_csv" \
@@ -85,6 +60,50 @@ fi
   --docker-cache-import-seconds "$(read_output docker_cache_import_seconds)" \
   --docker-cache-export-seconds "$(read_output docker_cache_export_seconds)" \
   --buildkit-cached-steps "$(read_output buildkit_cached_steps)" \
+  --buildkit-cache-prewarm-seconds "$(read_output buildkit_cache_prewarm_seconds)" \
+  --buildkit-cache-prepare-seconds "$(read_output buildkit_cache_prepare_seconds)" \
+  --buildkit-cache-send-seconds "$(read_output buildkit_cache_send_seconds)" \
+  --buildkit-cache-prewarm-queued "$(read_output buildkit_cache_prewarm_queued)" \
+  --buildkit-cache-prewarm-dropped "$(read_output buildkit_cache_prewarm_dropped)" \
+  --buildkit-cache-prewarm-canceled "$(read_output buildkit_cache_prewarm_canceled)" \
+  --buildkit-cache-prewarm-retried "$(read_output buildkit_cache_prewarm_retried)" \
+  --buildkit-cache-prewarm-deferred "$(read_output buildkit_cache_prewarm_deferred)" \
+  --buildkit-cache-prewarm-prepared "$(read_output buildkit_cache_prewarm_prepared)" \
+  --buildkit-cache-prewarm-body-prepared "$(read_output buildkit_cache_prewarm_body_prepared)" \
+  --buildkit-cache-prewarm-committed-bodies "$(read_output buildkit_cache_prewarm_committed_bodies)" \
+  --buildkit-cache-prewarm-delegated-bodies "$(read_output buildkit_cache_prewarm_delegated_bodies)" \
+  --buildkit-cache-prewarm-owned-bodies "$(read_output buildkit_cache_prewarm_owned_bodies)" \
+  --buildkit-cache-prewarm-owned-body-bytes "$(read_output buildkit_cache_prewarm_owned_body_bytes)" \
+  --buildkit-cache-prewarm-owned-body-max "$(read_output buildkit_cache_prewarm_owned_body_max)" \
+  --buildkit-cache-prewarm-resolved "$(read_output buildkit_cache_prewarm_resolved)" \
+  --buildkit-cache-prewarm-reused "$(read_output buildkit_cache_prewarm_reused)" \
+  --buildkit-cache-prewarm-uploaded "$(read_output buildkit_cache_prewarm_uploaded)" \
+  --buildkit-cache-prewarm-failed "$(read_output buildkit_cache_prewarm_failed)" \
+  --buildkit-cache-prewarm-recursive "$(read_output buildkit_cache_prewarm_recursive)" \
+  --buildkit-cache-prewarm-direct "$(read_output buildkit_cache_prewarm_direct)" \
+  --buildkit-cache-prewarm-missed "$(read_output buildkit_cache_prewarm_missed)" \
+  --buildkit-cache-prewarm-body-time-seconds "$(read_output buildkit_cache_prewarm_body_time_seconds)" \
+  --buildkit-cache-prewarm-body-max-seconds "$(read_output buildkit_cache_prewarm_body_max_seconds)" \
+  --buildkit-cache-prewarm-resolve-time-seconds "$(read_output buildkit_cache_prewarm_resolve_time_seconds)" \
+  --buildkit-cache-prewarm-resolve-max-seconds "$(read_output buildkit_cache_prewarm_resolve_max_seconds)" \
+  --buildkit-cache-prewarm-upload-time-seconds "$(read_output buildkit_cache_prewarm_upload_time_seconds)" \
+  --buildkit-cache-prewarm-upload-max-seconds "$(read_output buildkit_cache_prewarm_upload_max_seconds)" \
+  --buildkit-cache-prewarm-queue-depth "$(read_output buildkit_cache_prewarm_queue_depth)" \
+  --buildkit-cache-prewarm-max-queue-depth "$(read_output buildkit_cache_prewarm_max_queue_depth)" \
+  --buildkit-cache-prewarm-body-slot-limit "$(read_output buildkit_cache_prewarm_body_slot_limit)" \
+  --buildkit-cache-prewarm-body-slot-max "$(read_output buildkit_cache_prewarm_body_slot_max)" \
+  --buildkit-cache-prewarm-body-active "$(read_output buildkit_cache_prewarm_body_active)" \
+  --buildkit-cache-prewarm-body-active-max "$(read_output buildkit_cache_prewarm_body_active_max)" \
+  --buildkit-cache-prewarm-body-scaleups "$(read_output buildkit_cache_prewarm_body_scaleups)" \
+  --buildkit-cache-prewarm-body-downshifts "$(read_output buildkit_cache_prewarm_body_downshifts)" \
+  --buildkit-cache-prewarm-body-backlog-reliefs "$(read_output buildkit_cache_prewarm_body_backlog_reliefs)" \
+  --buildkit-cache-prewarm-cpu-pressure-seconds "$(read_output buildkit_cache_prewarm_cpu_pressure_seconds)" \
+  --buildkit-cache-prewarm-slot-limit-min "$(read_output buildkit_cache_prewarm_slot_limit_min)" \
+  --buildkit-cache-prewarm-slot-limit-max "$(read_output buildkit_cache_prewarm_slot_limit_max)" \
+  --buildkit-cache-prewarm-body-wait-seconds "$(read_output buildkit_cache_prewarm_body_wait_seconds)" \
+  --buildkit-cache-prewarm-body-wait-max-seconds "$(read_output buildkit_cache_prewarm_body_wait_max_seconds)" \
+  --buildkit-cache-prewarm-workers-current "$(read_output buildkit_cache_prewarm_workers_current)" \
+  --buildkit-cache-prewarm-workers-max "$(read_output buildkit_cache_prewarm_workers_max)" \
   --cache-storage-bytes "$bytes" \
   --cache-storage-source boringcache-check \
   --storage-breakdown-json "$storage_breakdown_path" \

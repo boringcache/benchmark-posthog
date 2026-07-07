@@ -58,9 +58,24 @@ This repo uses split BoringCache tokens as the standard CI shape:
 - `BORINGCACHE_SAVE_TOKEN` for trusted write paths
 - `BORINGCACHE_API_TOKEN` only where a single bearer variable is still required for compatibility
 
+## BoringBuild EC2 Shape Sweep
+
+Use [`scripts/run-boringbuild-ec2-shape-sweep.sh`](scripts/run-boringbuild-ec2-shape-sweep.sh) for private EC2 cold-plus-rolling checks across runner sizes. It generates ignored BoringBuild configs under `boringbuild/ec2-shape-sweep/`, stages a tiny source snapshot plus the local Linux `boringcache` binary, and runs the pinned PostHog `upstream/` commit window on AWS M-family general-purpose instances.
+
+```bash
+scripts/run-boringbuild-ec2-shape-sweep.sh --shapes 4c
+scripts/run-boringbuild-ec2-shape-sweep.sh --shapes 8c,16c --parallel
+```
+
+Defaults are 10 first-parent commits ending at the current `upstream` HEAD, 50 GB EBS, on-demand purchase, M-family spec resolution (`m7i,m6i`), and `BENCHMARK_WORKSPACE=boringcache/monolith` for the private EC2 cache scope. The first commit is a cold `seed-cache` build; later commits are rolling `full` builds against the same cache scope. The runner fails fast after a failed phase because rolling results are not meaningful after a failed seed; pass `--keep-going` to collect later failures anyway. Results come back in `benchmark-results/ec2-.../` inside the exported tar under `boringbuild/ec2-shape-sweep/`. If a remote build fails before artifact export, inspect the per-run `boringbuild.log` and the matching `~/.boringbuild/remote/runs/run-*.log`.
+
+The runner needs AWS CLI v2 on `PATH` because BoringBuild verifies EC2 credentials and key pairs with `aws sts`/`aws ec2` before launch. It sources `/Users/gaurav/boringcache/monorepo/.env`, resolves `BENCHMARK_WORKSPACE` after that file is loaded, then asks `bin/boringbuild-builders-env --provider aws` for AWS builder credentials. If credentials are missing or the helper emits warnings, check `boringbuild/ec2-shape-sweep/builders-env-*.log`. T-class families are rejected by the script; use M-family or another general-purpose family.
+
 ## Repo Layout
 
 - [`scripts/prepare-source.sh`](scripts/prepare-source.sh)
+- [`scripts/run-boringbuild-ec2-shape-sweep.sh`](scripts/run-boringbuild-ec2-shape-sweep.sh)
+- [`docs/buildkit-mountcache-planner-experiment.md`](docs/buildkit-mountcache-planner-experiment.md) records the BuildKit mountcache planner experiment and the BC BuildKit vs ECR comparison for the July 6, 2026 spike run.
 - [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, ECR, and explicit BoringCache OCI and BuildKit-backend product lanes side by side.
 - [`.github/workflows/rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml) runs the rolling lane after upstream sync.
 - [`.github/workflows/sync.yml`](.github/workflows/sync.yml) keeps the pinned upstream source current.

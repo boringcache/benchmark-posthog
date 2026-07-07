@@ -20,15 +20,6 @@ case "$lane" in
     benchmark_id="posthog"
     backend="registry"
     cache_backend=""
-    tool_cache=""
-    mountcache_offloader=""
-    ;;
-  oci-toolcache)
-    label="BC OCI + toolcache"
-    benchmark_id="posthog-oci-toolcache"
-    backend="registry"
-    cache_backend=""
-    tool_cache="turbo"
     mountcache_offloader=""
     ;;
   buildkit)
@@ -36,19 +27,10 @@ case "$lane" in
     benchmark_id="posthog-bc-buildkit-mountcache"
     backend="registry"
     cache_backend="boringcache"
-    tool_cache=""
-    mountcache_offloader=""
-    ;;
-  buildkit-toolcache)
-    label="BC BuildKit Backend + toolcache"
-    benchmark_id="posthog-bc-buildkit-toolcache-mountcache"
-    backend="registry"
-    cache_backend="boringcache"
-    tool_cache="turbo"
-    mountcache_offloader=""
+    mountcache_offloader="1"
     ;;
   *)
-    echo "Unknown POSTHOG_BORINGBUILD_LANE: $lane" >&2
+    echo "Unknown POSTHOG_BORINGBUILD_LANE: $lane (expected oci or buildkit)" >&2
     exit 1
     ;;
 esac
@@ -118,7 +100,6 @@ export BORINGCACHE_BUILDKIT_CACHE_BACKEND="$cache_backend"
 export BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER="$mountcache_offloader"
 export CACHE_LANE="${CACHE_LANE:-rolling}"
 export CACHE_SCOPE="${CACHE_SCOPE:-${BENCHMARK_ID}-run-rolling-${ref_slug}-${scope_suffix}}"
-export BORINGCACHE_DOCKER_TOOL_CACHE="$tool_cache"
 export BORINGCACHE_MANAGED_BUILDKIT_IMAGE="$buildkit_image"
 export BUILDKIT_IMAGE="$buildkit_image"
 if [[ "$cache_backend" == "boringcache" ]]; then

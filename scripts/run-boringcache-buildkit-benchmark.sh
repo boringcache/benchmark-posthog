@@ -4,8 +4,8 @@ set -euo pipefail
 proxy_port="${BORINGCACHE_PROXY_PORT:-5000}"
 proxy_log="${BORINGCACHE_PROXY_LOG_PATH:-/tmp/boringcache-proxy-${proxy_port}.log}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-build_log="$(mktemp /tmp/boringcache-build.XXXXXX.log)"
-status_snapshot_path="$(mktemp /tmp/boringcache-status.XXXXXX.json)"
+build_log="$(mktemp -t boringcache-build.XXXXXX)"
+status_snapshot_path="$(mktemp -t boringcache-status.XXXXXX)"
 max_attempts="${BORINGCACHE_BUILD_MAX_ATTEMPTS:-3}"
 cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob|400 Bad Request|broken pipe'
 mode="${1:-full}"
@@ -26,36 +26,20 @@ cache_promotion_refs="${BORINGCACHE_DOCKER_PROMOTION_REFS:-}"
 allow_rolling_bootstrap="${ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP:-false}"
 build_output="${BENCHMARK_BUILD_OUTPUT:-none}"
 oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
-docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
 docker_wrapper_mode="${BORINGCACHE_DOCKER_WRAPPER:-auto}"
 buildkit_cache_backend="${BORINGCACHE_BUILDKIT_CACHE_BACKEND:-${BORINGCACHE_CACHE_EXPORT_TYPE:-}}"
 buildkit_mountcache_offloader="${BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER:-}"
 cache_export_type="$buildkit_cache_backend"
 effective_cache_to=""
+cache_args=()
 export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS:-1}"
 start_proxy() { :; }
 stop_proxy() { :; }
 
-docker_tool_cache_enabled() {
-  local requested_tool="$1"
-  local tool
-  for tool in ${docker_tool_cache//,/ }; do
-    tool="${tool%%:*}"
-    [[ "$tool" == "$requested_tool" ]] && return 0
-  done
-  return 1
-}
-
-resolve_docker_tool_cache_value() {
-  local value="$1"
-  local tool="${value%%:*}"
-
-  if [[ "$value" == *:* ]]; then
-    printf '%s\n' "$value"
-  else
-    printf '%s:%s-%s\n' "$tool" "${CACHE_SCOPE:?Set CACHE_SCOPE}" "$tool"
-  fi
-}
+if [[ -n "${BORINGCACHE_DOCKER_TOOL_CACHE:-}" ]]; then
+  echo "BORINGCACHE_DOCKER_TOOL_CACHE is retired for PostHog benchmarks; use the upstream Dockerfile with BuildKit mountcache instead." >&2
+  exit 1
+fi
 
 cache_to_ref() {
   local ref="${CACHE_TO:-}"
@@ -92,11 +76,9 @@ use_wrapped_boringcache_build() {
       ;;
     auto)
       if [[ "$buildkit_cache_backend" == "boringcache" ]]; then
-        [[ -n "$docker_tool_cache" ]] && return 0
         [[ -z "${CACHE_TO:-}" ]] && return 0
         return 1
       fi
-      [[ -n "$docker_tool_cache" ]] && return 0
       [[ -z "${CACHE_FROM:-}" && -z "${CACHE_TO:-}" ]] && return 0
       return 1
       ;;
@@ -105,86 +87,6 @@ use_wrapped_boringcache_build() {
       exit 1
       ;;
   esac
-}
-
-verify_posthog_turbo_tool_cache_contract() {
-  docker_tool_cache_enabled turbo || return 0
-
-  local dockerfile_path="${DOCKERFILE_PATH:-}"
-  local dockerfile="${repo_root}/${dockerfile_path}"
-  if [[ ! -f "$dockerfile" ]]; then
-    echo "Docker tool-cache turbo requested, but Dockerfile does not exist: ${dockerfile_path:-none}" >&2
-    exit 1
-  fi
-
-  if ! grep -q "boringcache-tool-cache-env" "$dockerfile"; then
-    echo "Docker tool-cache turbo requested, but ${dockerfile_path} does not declare the static boringcache-tool-cache-env secret mount." >&2
-    echo "Use scenarios/posthog-toolcache/Dockerfile or another committed Dockerfile with the stable tool-cache contract." >&2
-    exit 1
-  fi
-
-  echo "Verified BoringCache Turbo remote cache secret mounts in ${dockerfile_path}"
-}
-
-assert_turbo_remote_cache_used() {
-  docker_tool_cache_enabled turbo || return 0
-
-  if grep -q "Remote caching disabled" "$build_log"; then
-    capture_proxy_status
-    write_build_metrics
-    write_build_diagnostics
-    echo "Turbo tool-cache was requested, but Turbo reported remote caching disabled." >&2
-    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env" "$build_log" | tail -n 120 >&2 || true
-    exit 1
-  fi
-
-  if ! grep -q "Remote caching enabled" "$build_log"; then
-    if turbo_tool_cache_layers_restored_from_docker_cache; then
-      echo "Turbo tool-cache was requested; Turbo RUN layers were restored from Docker cache before Turbo executed."
-      return 0
-    fi
-
-    capture_proxy_status
-    write_build_metrics
-    write_build_diagnostics
-    echo "Turbo tool-cache was requested, but the build log did not show Turbo remote caching enabled." >&2
-    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env" "$build_log" | tail -n 120 >&2 || true
-    exit 1
-  fi
-}
-
-turbo_tool_cache_layers_restored_from_docker_cache() {
-  local frontend_step=""
-  local plugin_step=""
-  local line
-
-  while IFS= read -r line; do
-    [[ "$line" == *"RUN "* ]] || continue
-    [[ "$line" == *"boringcache-tool-cache-env"* ]] || continue
-    [[ "$line" == *"bin/turbo"* ]] || continue
-    [[ "$line" =~ ^#([0-9]+)[[:space:]] ]] || continue
-
-    if [[ "$line" == *"@posthog/frontend build"* ]]; then
-      frontend_step="${BASH_REMATCH[1]}"
-    elif [[ "$line" == *"@posthog/plugin-transpiler build"* ]]; then
-      plugin_step="${BASH_REMATCH[1]}"
-    fi
-  done < "$build_log"
-
-  [[ -n "$frontend_step" && -n "$plugin_step" ]] || return 1
-  turbo_tool_cache_step_restored_from_docker_cache "$frontend_step" &&
-    turbo_tool_cache_step_restored_from_docker_cache "$plugin_step"
-}
-
-turbo_tool_cache_step_restored_from_docker_cache() {
-  local step_id="$1"
-
-  if grep -qE "^#${step_id} CACHED$" "$build_log"; then
-    return 0
-  fi
-
-  grep -qE "^#${step_id} (sha256:|extracting )" "$build_log" &&
-    ! grep -qE "^#${step_id} [0-9]+(\\.[0-9]+)?[[:space:]]" "$build_log"
 }
 
 ensure_proxy_available() {
@@ -258,6 +160,54 @@ summary_value() {
   printf '%s\n' "$details" | tr ' ' '\n' | awk -F= -v key="$name" '$1 == key { print $2; exit }'
 }
 
+duration_seconds_value() {
+  local raw="$1"
+  [[ -n "$raw" ]] || return 0
+  awk -v raw="$raw" '
+    function emit(value) {
+      if (value == int(value)) {
+        printf "%d", value
+      } else {
+        printf "%.3f", value
+      }
+    }
+
+    BEGIN {
+      rest = raw
+      total = 0
+
+      if (rest ~ /^[0-9.]+ms$/) {
+        sub(/ms$/, "", rest)
+        emit(rest / 1000)
+        exit
+      }
+
+      if (rest ~ /h/) {
+        split(rest, parts, "h")
+        total += parts[1] * 3600
+        rest = parts[2]
+      }
+
+      if (rest ~ /m/) {
+        split(rest, parts, "m")
+        total += parts[1] * 60
+        rest = parts[2]
+      }
+
+      if (rest ~ /s$/) {
+        sub(/s$/, "", rest)
+        if (rest != "") {
+          total += rest
+        }
+      } else if (rest ~ /^[0-9.]+$/) {
+        total += rest
+      }
+
+      emit(total)
+    }
+  '
+}
+
 write_build_metrics() {
   local output_path="${BENCHMARK_METRICS_OUTPUT:-}"
   [[ -n "$output_path" ]] || return 0
@@ -307,13 +257,51 @@ write_build_metrics() {
     echo "buildkit_cache_send_seconds=$send_seconds" >> "$output_path"
   fi
   if [[ -n "$prewarm_summary" ]]; then
+    write_prewarm_value() {
+      local key="$1"
+      local name="$2"
+      echo "${key}=$(summary_value "$prewarm_summary" "$name")" >> "$output_path"
+    }
+
+    write_prewarm_duration() {
+      local key="$1"
+      local name="$2"
+      local raw=""
+      raw="$(summary_value "$prewarm_summary" "$name")"
+      if [[ -n "$raw" ]]; then
+        echo "${key}=$(duration_seconds_value "$raw")" >> "$output_path"
+      else
+        echo "${key}=" >> "$output_path"
+      fi
+    }
+
+    write_prewarm_pair() {
+      local first_key="$1"
+      local second_key="$2"
+      local name="$3"
+      local raw=""
+      raw="$(summary_value "$prewarm_summary" "$name")"
+      if [[ "$raw" == */* ]]; then
+        echo "${first_key}=${raw%%/*}" >> "$output_path"
+        echo "${second_key}=${raw##*/}" >> "$output_path"
+      else
+        echo "${first_key}=" >> "$output_path"
+        echo "${second_key}=" >> "$output_path"
+      fi
+    }
+
     echo "buildkit_cache_prewarm_queued=$(summary_value "$prewarm_summary" queued)" >> "$output_path"
     echo "buildkit_cache_prewarm_dropped=$(summary_value "$prewarm_summary" dropped)" >> "$output_path"
     echo "buildkit_cache_prewarm_canceled=$(summary_value "$prewarm_summary" canceled)" >> "$output_path"
+    echo "buildkit_cache_prewarm_retried=$(summary_value "$prewarm_summary" retried)" >> "$output_path"
+    echo "buildkit_cache_prewarm_deferred=$(summary_value "$prewarm_summary" deferred)" >> "$output_path"
     echo "buildkit_cache_prewarm_prepared=$(summary_value "$prewarm_summary" prepared)" >> "$output_path"
     echo "buildkit_cache_prewarm_body_prepared=$(summary_value "$prewarm_summary" body_prepared)" >> "$output_path"
     echo "buildkit_cache_prewarm_committed_bodies=$(summary_value "$prewarm_summary" committed_bodies)" >> "$output_path"
     echo "buildkit_cache_prewarm_delegated_bodies=$(summary_value "$prewarm_summary" delegated_bodies)" >> "$output_path"
+    echo "buildkit_cache_prewarm_owned_bodies=$(summary_value "$prewarm_summary" owned_bodies)" >> "$output_path"
+    echo "buildkit_cache_prewarm_owned_body_bytes=$(summary_value "$prewarm_summary" owned_body_bytes)" >> "$output_path"
+    echo "buildkit_cache_prewarm_owned_body_max=$(summary_value "$prewarm_summary" owned_body_max)" >> "$output_path"
     echo "buildkit_cache_prewarm_resolved=$(summary_value "$prewarm_summary" resolved)" >> "$output_path"
     echo "buildkit_cache_prewarm_reused=$(summary_value "$prewarm_summary" reused)" >> "$output_path"
     echo "buildkit_cache_prewarm_uploaded=$(summary_value "$prewarm_summary" uploaded)" >> "$output_path"
@@ -321,9 +309,26 @@ write_build_metrics() {
     echo "buildkit_cache_prewarm_recursive=$(summary_value "$prewarm_summary" recursive)" >> "$output_path"
     echo "buildkit_cache_prewarm_direct=$(summary_value "$prewarm_summary" direct)" >> "$output_path"
     echo "buildkit_cache_prewarm_missed=$(summary_value "$prewarm_summary" missed)" >> "$output_path"
-  fi
-  if [[ -n "$docker_tool_cache" ]]; then
-    echo "docker_tool_cache=${docker_tool_cache}" >> "$output_path"
+    write_prewarm_duration buildkit_cache_prewarm_body_time_seconds body_time
+    write_prewarm_duration buildkit_cache_prewarm_body_max_seconds body_max
+    write_prewarm_duration buildkit_cache_prewarm_resolve_time_seconds resolve_time
+    write_prewarm_duration buildkit_cache_prewarm_resolve_max_seconds resolve_max
+    write_prewarm_duration buildkit_cache_prewarm_upload_time_seconds upload_time
+    write_prewarm_duration buildkit_cache_prewarm_upload_max_seconds upload_max
+    write_prewarm_value buildkit_cache_prewarm_queue_depth queue_depth
+    write_prewarm_value buildkit_cache_prewarm_max_queue_depth max_queue_depth
+    write_prewarm_pair buildkit_cache_prewarm_body_slot_limit buildkit_cache_prewarm_body_slot_max body_slots
+    write_prewarm_value buildkit_cache_prewarm_body_active body_active
+    write_prewarm_value buildkit_cache_prewarm_body_active_max body_active_max
+    write_prewarm_value buildkit_cache_prewarm_body_scaleups body_scaleups
+    write_prewarm_value buildkit_cache_prewarm_body_downshifts body_downshifts
+    write_prewarm_value buildkit_cache_prewarm_body_backlog_reliefs body_backlog_reliefs
+    write_prewarm_value buildkit_cache_prewarm_cpu_pressure_seconds cpu_pressure_seconds
+    write_prewarm_value buildkit_cache_prewarm_slot_limit_min slot_limit_min
+    write_prewarm_value buildkit_cache_prewarm_slot_limit_max slot_limit_max
+    write_prewarm_duration buildkit_cache_prewarm_body_wait_seconds body_wait
+    write_prewarm_duration buildkit_cache_prewarm_body_wait_max_seconds body_wait_max
+    write_prewarm_pair buildkit_cache_prewarm_workers_current buildkit_cache_prewarm_workers_max workers
   fi
   if [[ -n "$buildkit_mountcache_offloader" ]]; then
     echo "buildkit_mountcache_offloader=${buildkit_mountcache_offloader}" >> "$output_path"
@@ -496,9 +501,10 @@ write_build_diagnostics() {
     echo "effective_cache_to=${effective_cache_to}"
     echo "cache_export_type=${cache_export_type}"
     echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
-    echo "docker_tool_cache=${docker_tool_cache}"
     printf 'cache_args='
-    printf '%q ' "${cache_args[@]}"
+    if [[ "${cache_args[*]-}" != "" ]]; then
+      printf '%q ' "${cache_args[@]}"
+    fi
     printf '\n'
     echo "import_status=$(build_import_status)"
     echo "cached_steps=${cached_steps}"
@@ -508,8 +514,11 @@ write_build_diagnostics() {
     echo "export_lines<<EOF"
     grep -E 'exporting cache to (registry|boringcache)|waiting for cache prewarm|cache prewarm|preparing build cache for export|sending cache export|writing (config|cache image manifest)|DONE [0-9.]+s$' "$build_log" | tail -n 120 || true
     echo "EOF"
+    echo "mountcache_lines<<EOF"
+    grep -E 'boringcache cache mount (hydrate|publish)' "$build_log" | tail -n 160 || true
+    echo "EOF"
     echo "proxy_summary<<EOF"
-    grep -E 'Mode:|OCI Human Tags|Internal Registry Root Tag|Startup mode|Full-tag hydration|OCI body hydration|OCI HEAD|SESSION tool=oci|KV flush|root publish|error|warn' "$proxy_log" | tail -n 160 || true
+    grep -E 'Mode:|OCI Human Tags|Internal Registry Root Tag|Startup mode|Full-tag hydration|OCI body hydration|OCI HEAD|SESSION tool=oci|KV flush|root publish|boringcache cache mount|error|warn' "$proxy_log" | tail -n 160 || true
     echo "EOF"
     echo "proxy_status<<EOF"
     if [[ -s "$status_snapshot_path" ]]; then
@@ -560,20 +569,6 @@ run_wrapped_boringcache_build() {
     --fail-on-cache-error
   )
 
-  if [[ -n "$docker_tool_cache" && "${BORINGCACHE_DOCKER_TOOL_CACHE_ON_DEMAND:-false}" == "true" ]]; then
-    boringcache_args+=(--on-demand)
-  fi
-
-  if [[ -n "$docker_tool_cache" ]]; then
-    local tool_cache_value
-    local resolved_tool_cache_value
-    for tool_cache_value in ${docker_tool_cache//,/ }; do
-      [[ -n "$tool_cache_value" ]] || continue
-      resolved_tool_cache_value="$(resolve_docker_tool_cache_value "$tool_cache_value")"
-      boringcache_args+=(--tool-cache "$resolved_tool_cache_value")
-    done
-  fi
-
   if [[ "$mode" == "partial-warm" ]]; then
     boringcache_args+=(--read-only)
   fi
@@ -589,14 +584,16 @@ run_wrapped_boringcache_build() {
 
   local wrapped_cache_args=()
   local cache_arg
-  for cache_arg in "${cache_args[@]}"; do
-    if [[ "$cache_arg" == "--no-cache" ]]; then
-      wrapped_cache_args+=("$cache_arg")
-    fi
-  done
+  if [[ "${cache_args[*]-}" != "" ]]; then
+    for cache_arg in "${cache_args[@]}"; do
+      if [[ "$cache_arg" == "--no-cache" ]]; then
+        wrapped_cache_args+=("$cache_arg")
+      fi
+    done
+  fi
 
   : > "$build_log"
-  set +e
+  set +e +u
   DOCKER_BUILDKIT=1 BORINGCACHE_TIMING_TRACE=1 "${boringcache_cmd[@]}" "${boringcache_args[@]:1}" -- \
     docker buildx build \
     "${builder_args[@]}" \
@@ -608,12 +605,11 @@ run_wrapped_boringcache_build() {
     "${output_args[@]}" \
     "$BENCHMARK_DOCKER_CONTEXT" 2>&1 | tee "$build_log"
   status=${PIPESTATUS[0]}
-  set -e
+  set -e -u
 }
 
 
 attempt=1
-verify_posthog_turbo_tool_cache_contract
 while true; do
   cache_args=()
   extra_args=()
@@ -685,9 +681,11 @@ while true; do
 
     : > "$build_log"
     echo "Effective cache args:"
-    printf '  %q' "${cache_args[@]}"
+    if [[ "${cache_args[*]-}" != "" ]]; then
+      printf '  %q' "${cache_args[@]}"
+    fi
     printf '\n'
-    set +e
+    set +e +u
     DOCKER_BUILDKIT=1 docker buildx build \
       --builder "$BUILDER" \
       --file "$DOCKERFILE_PATH" \
@@ -698,11 +696,10 @@ while true; do
       "${output_args[@]}" \
       "$BENCHMARK_DOCKER_CONTEXT" 2>&1 | tee "$build_log"
     status=${PIPESTATUS[0]}
-    set -e
+    set -e -u
   fi
 
   if [[ "$status" -eq 0 ]]; then
-    assert_turbo_remote_cache_used
     import_status="$(build_import_status)"
     if [[ "$mode" == "partial-warm" && "$import_status" != "ok" ]]; then
       capture_proxy_status

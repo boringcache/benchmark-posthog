@@ -135,6 +135,28 @@ runs:
           exit 1
         fi
 
+    - name: Detect BoringCache client region
+      if: ${{ inputs.strategy == 'boringcache' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        region="${BORINGCACHE_CLIENT_REGION:-${BORINGCACHE_RUNNER_REGION:-${RUNNER_REGION:-}}}"
+        if [[ -z "$region" ]]; then
+          region="$(curl --fail --silent --show-error --max-time 2 --connect-timeout 1 \
+            -H Metadata:true \
+            "http://169.254.169.254/metadata/instance/compute/location?api-version=2021-02-01&format=text" \
+            2>/dev/null || true)"
+        fi
+
+        region="$(printf '%s' "$region" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
+        if [[ -n "$region" ]]; then
+          echo "BORINGCACHE_CLIENT_REGION=$region" >> "$GITHUB_ENV"
+          echo "BoringCache client region: $region"
+        else
+          echo "::notice::BoringCache client region unavailable; Rails will use the default edge endpoint."
+        fi
+
     - name: Log in to private GHCR images
       if: ${{ startsWith(inputs.buildkit_image, 'ghcr.io/') }}
       uses: docker/login-action@v4.2.0

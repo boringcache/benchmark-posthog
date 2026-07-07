@@ -63,8 +63,12 @@ inputs:
   artifact_strategy:
     required: false
     default: ""
-  docker_tool_cache:
-    description: "Optional Dockerfile tool-cache bridge. Use turbo shorthand or TOOL:TAG."
+  build_mode:
+    description: "Build mode passed to the BoringCache benchmark script. Use partial-warm for read-only cache replay."
+    required: false
+    default: "full"
+  cache_scope_ref_slug:
+    description: "Optional ref slug used for cache scope selection instead of the workflow branch name."
     required: false
     default: ""
   turbo_cache_mounts:
@@ -220,31 +224,11 @@ runs:
       env:
         STRATEGY: ${{ inputs.strategy }}
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
-        DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
+        CACHE_SCOPE_REF_SLUG: ${{ inputs.cache_scope_ref_slug }}
       run: |
         set -euo pipefail
-        tool_cache_tags_csv() {
-          local cache_scope="$1"
-          local requested="$2"
-          local tool_cache_value tool tag
-          local tags=()
-
-          for tool_cache_value in ${requested//,/ }; do
-            [[ -n "$tool_cache_value" ]] || continue
-            tool="${tool_cache_value%%:*}"
-            if [[ "$tool_cache_value" == *:* ]]; then
-              tag="${tool_cache_value#*:}"
-            else
-              tag="${cache_scope}-${tool}"
-            fi
-            [[ -n "$tag" ]] && tags+=("$tag")
-          done
-
-          local IFS=,
-          printf '%s\n' "${tags[*]}"
-        }
-
-        ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
+        ref_name="${CACHE_SCOPE_REF_SLUG:-$GITHUB_REF_NAME}"
+        ref_slug="$(printf '%s' "${ref_name}" | tr -c 'A-Za-z0-9._-' '-')"
         ref_slug="${ref_slug#-}"
         ref_slug="${ref_slug%-}"
         ref_slug="${ref_slug:-main}"
@@ -253,15 +237,10 @@ runs:
 
         if [[ "$STRATEGY" == "boringcache" ]]; then
           cache_scope="${BENCHMARK_ID}-run-rolling-${ref_slug}"
-          tool_cache_tags="$(tool_cache_tags_csv "$cache_scope" "$DOCKER_TOOL_CACHE")"
           tags_csv="${cache_scope}"
-          if [[ -n "$tool_cache_tags" ]]; then
-            tags_csv="${tags_csv},${tool_cache_tags}"
-          fi
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "registry_proxy_tags=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
-          echo "tool_cache_tags_csv=${tool_cache_tags}" >> "$GITHUB_OUTPUT"
         else
           cache_scope_primary="${BENCHMARK_ID}-rolling-${ref_slug}"
           cache_scope_fallback="${BENCHMARK_ID}-rolling-${ref_slug}-fallback"
@@ -270,7 +249,7 @@ runs:
         fi
 
     - name: Configure boringcache/one for Docker
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' }}
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' }}
       id: docker_cache
       uses: boringcache/one@v1
       env:
@@ -293,15 +272,6 @@ runs:
           image=${{ inputs.buildkit_image }}
           network=host
         verbose: true
-
-    - name: Set up Docker Buildx for BoringCache wrapped build
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.buildkit_cache_backend != 'boringcache' && inputs.docker_tool_cache != '' }}
-      id: tool_cache_buildx
-      uses: docker/setup-buildx-action@v4
-      with:
-        driver-opts: |
-          image=${{ inputs.buildkit_image }}
-          network=host
 
     - name: Set up Docker Buildx
       if: ${{ inputs.strategy == 'actions-cache' || inputs.strategy == 'ecr-cache' }}
@@ -402,14 +372,14 @@ runs:
         BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
         BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
         BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
-        BORINGCACHE_DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
         BORINGCACHE_BUILDKIT_CACHE_BACKEND: ${{ inputs.buildkit_cache_backend }}
         BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.buildkit_mountcache_offloader == 'true' && '1' || '' }}
         BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
         BORINGCACHE_OCI_HYDRATION: ${{ inputs.oci_hydration }}
+        BORINGCACHE_DOCKER_WRAPPER: ${{ inputs.strategy == 'boringcache' && 'never' || '' }}
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
-        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.buildkit_cache_backend != 'boringcache' && inputs.docker_tool_cache != '' && steps.tool_cache_buildx.outputs.name || steps.buildx.outputs.name || '' }}
+        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name || '' }}
         CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
         CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
         CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
@@ -418,6 +388,7 @@ runs:
         BORINGCACHE_REGISTRY_PROXY_TAGS: ${{ steps.scope.outputs.registry_proxy_tags }}
         BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-commit-observability.jsonl
         ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP: "true"
+        BENCHMARK_BUILD_MODE: ${{ inputs.build_mode }}
         ECR_CACHE_REF: ${{ steps.ecr_cache.outputs.cache_ref }}
         ECR_REPOSITORY: ${{ steps.ecr_cache.outputs.repository }}
         ECR_REGION: ${{ inputs.ecr_region }}
@@ -441,7 +412,7 @@ runs:
           BENCHMARK_PHASE_STARTED_AT="$phase_start" \
             BENCHMARK_METRICS_OUTPUT="${RUNNER_TEMP}/rolling-build-metrics.env" \
             BENCHMARK_DIAGNOSTICS_OUTPUT="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-rolling-commit.txt" \
-            ./scripts/run-boringcache-docker-lane.sh full
+            ./scripts/run-boringcache-docker-lane.sh "${BENCHMARK_BUILD_MODE:-full}"
         else
           build_log="$(mktemp /tmp/${BENCHMARK_ID}-ac-rolling.XXXXXX.log)"
           find_step_id() {
@@ -652,10 +623,15 @@ runs:
           --buildkit-cache-prewarm-queued "${{ steps.build.outputs.buildkit_cache_prewarm_queued }}" \
           --buildkit-cache-prewarm-dropped "${{ steps.build.outputs.buildkit_cache_prewarm_dropped }}" \
           --buildkit-cache-prewarm-canceled "${{ steps.build.outputs.buildkit_cache_prewarm_canceled }}" \
+          --buildkit-cache-prewarm-retried "${{ steps.build.outputs.buildkit_cache_prewarm_retried }}" \
+          --buildkit-cache-prewarm-deferred "${{ steps.build.outputs.buildkit_cache_prewarm_deferred }}" \
           --buildkit-cache-prewarm-prepared "${{ steps.build.outputs.buildkit_cache_prewarm_prepared }}" \
           --buildkit-cache-prewarm-body-prepared "${{ steps.build.outputs.buildkit_cache_prewarm_body_prepared }}" \
           --buildkit-cache-prewarm-committed-bodies "${{ steps.build.outputs.buildkit_cache_prewarm_committed_bodies }}" \
           --buildkit-cache-prewarm-delegated-bodies "${{ steps.build.outputs.buildkit_cache_prewarm_delegated_bodies }}" \
+          --buildkit-cache-prewarm-owned-bodies "${{ steps.build.outputs.buildkit_cache_prewarm_owned_bodies }}" \
+          --buildkit-cache-prewarm-owned-body-bytes "${{ steps.build.outputs.buildkit_cache_prewarm_owned_body_bytes }}" \
+          --buildkit-cache-prewarm-owned-body-max "${{ steps.build.outputs.buildkit_cache_prewarm_owned_body_max }}" \
           --buildkit-cache-prewarm-resolved "${{ steps.build.outputs.buildkit_cache_prewarm_resolved }}" \
           --buildkit-cache-prewarm-reused "${{ steps.build.outputs.buildkit_cache_prewarm_reused }}" \
           --buildkit-cache-prewarm-uploaded "${{ steps.build.outputs.buildkit_cache_prewarm_uploaded }}" \
@@ -663,6 +639,28 @@ runs:
           --buildkit-cache-prewarm-recursive "${{ steps.build.outputs.buildkit_cache_prewarm_recursive }}" \
           --buildkit-cache-prewarm-direct "${{ steps.build.outputs.buildkit_cache_prewarm_direct }}" \
           --buildkit-cache-prewarm-missed "${{ steps.build.outputs.buildkit_cache_prewarm_missed }}" \
+          --buildkit-cache-prewarm-body-time-seconds "${{ steps.build.outputs.buildkit_cache_prewarm_body_time_seconds }}" \
+          --buildkit-cache-prewarm-body-max-seconds "${{ steps.build.outputs.buildkit_cache_prewarm_body_max_seconds }}" \
+          --buildkit-cache-prewarm-resolve-time-seconds "${{ steps.build.outputs.buildkit_cache_prewarm_resolve_time_seconds }}" \
+          --buildkit-cache-prewarm-resolve-max-seconds "${{ steps.build.outputs.buildkit_cache_prewarm_resolve_max_seconds }}" \
+          --buildkit-cache-prewarm-upload-time-seconds "${{ steps.build.outputs.buildkit_cache_prewarm_upload_time_seconds }}" \
+          --buildkit-cache-prewarm-upload-max-seconds "${{ steps.build.outputs.buildkit_cache_prewarm_upload_max_seconds }}" \
+          --buildkit-cache-prewarm-queue-depth "${{ steps.build.outputs.buildkit_cache_prewarm_queue_depth }}" \
+          --buildkit-cache-prewarm-max-queue-depth "${{ steps.build.outputs.buildkit_cache_prewarm_max_queue_depth }}" \
+          --buildkit-cache-prewarm-body-slot-limit "${{ steps.build.outputs.buildkit_cache_prewarm_body_slot_limit }}" \
+          --buildkit-cache-prewarm-body-slot-max "${{ steps.build.outputs.buildkit_cache_prewarm_body_slot_max }}" \
+          --buildkit-cache-prewarm-body-active "${{ steps.build.outputs.buildkit_cache_prewarm_body_active }}" \
+          --buildkit-cache-prewarm-body-active-max "${{ steps.build.outputs.buildkit_cache_prewarm_body_active_max }}" \
+          --buildkit-cache-prewarm-body-scaleups "${{ steps.build.outputs.buildkit_cache_prewarm_body_scaleups }}" \
+          --buildkit-cache-prewarm-body-downshifts "${{ steps.build.outputs.buildkit_cache_prewarm_body_downshifts }}" \
+          --buildkit-cache-prewarm-body-backlog-reliefs "${{ steps.build.outputs.buildkit_cache_prewarm_body_backlog_reliefs }}" \
+          --buildkit-cache-prewarm-cpu-pressure-seconds "${{ steps.build.outputs.buildkit_cache_prewarm_cpu_pressure_seconds }}" \
+          --buildkit-cache-prewarm-slot-limit-min "${{ steps.build.outputs.buildkit_cache_prewarm_slot_limit_min }}" \
+          --buildkit-cache-prewarm-slot-limit-max "${{ steps.build.outputs.buildkit_cache_prewarm_slot_limit_max }}" \
+          --buildkit-cache-prewarm-body-wait-seconds "${{ steps.build.outputs.buildkit_cache_prewarm_body_wait_seconds }}" \
+          --buildkit-cache-prewarm-body-wait-max-seconds "${{ steps.build.outputs.buildkit_cache_prewarm_body_wait_max_seconds }}" \
+          --buildkit-cache-prewarm-workers-current "${{ steps.build.outputs.buildkit_cache_prewarm_workers_current }}" \
+          --buildkit-cache-prewarm-workers-max "${{ steps.build.outputs.buildkit_cache_prewarm_workers_max }}" \
           --cache-storage-bytes "${{ steps.storage.outputs.bytes }}" \
           --cache-storage-source "${{ steps.storage.outputs.source }}" \
           --storage-breakdown-json "${{ steps.storage.outputs.breakdown_path }}" \

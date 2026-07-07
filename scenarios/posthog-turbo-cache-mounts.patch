@@ -1,0 +1,10 @@
+diff --git a/Dockerfile b/Dockerfile
+index cf271ab8..5bfb65ea 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -48 +48,2 @@ COPY frontend/ frontend/
+-RUN bin/turbo --filter=@posthog/frontend build
++RUN --mount=type=cache,id=turbo-frontend,target=/code/.turbo/cache \
++    bin/turbo --filter=@posthog/frontend build
+@@ -117,0 +119 @@ RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \
++    --mount=type=cache,id=turbo-plugin-transpiler,target=/code/.turbo/cache \

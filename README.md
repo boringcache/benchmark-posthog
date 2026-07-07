@@ -73,3 +73,7 @@ Each workflow uploads:
 - markdown summary
 
 Those artifacts are intended to be ingested later by the central [`boringcache/benchmarks`](https://github.com/boringcache/benchmarks) publisher.
+
+## Notes
+
+- [2026-07-07 larger-runner accounting](docs/larger-runner-accounting-2026-07-07.md) records the 8c vs 16c GitHub larger-runner seed runs and a Depot runner-cost comparison.

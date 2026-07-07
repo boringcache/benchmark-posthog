@@ -14,11 +14,9 @@ This repo exists separately from [`boringcache/benchmarks`](https://github.com/b
 - Upstream app source lives in the pinned `upstream/` submodule.
 - Plain Docker cache lanes use the pinned upstream `upstream/Dockerfile`
   directly with `upstream/` as the build context.
-- Tool-cache lanes use the committed
-  `scenarios/posthog-toolcache/Dockerfile` fixture. The fixture tracks the
-  pinned upstream Dockerfile and adds only the stable optional
-  `boringcache-tool-cache-env` secret mount around PostHog's Turbo build
-  commands.
+- The BuildKit backend lane can apply the benchmark-only
+  `scenarios/posthog-turbo-cache-mounts.patch` patch so Turbo writes through
+  BuildKit-owned cache mounts instead of the retired tool-cache bridge.
 - `scripts/prepare-source.sh` only resets the upstream checkout and applies named benchmark scenarios.
 
 Pinned upstream source:
@@ -33,14 +31,11 @@ Fresh runs use the scenario set:
 - `warm1`
 
 BoringCache lanes are split so product capabilities are visible instead of
-mixed into one number: `BC OCI`, `BC OCI + toolcache`,
-`BC BuildKit Backend`, and `BC BuildKit Backend + toolcache`.
-Tool-cache uses PostHog's
-Turbo build commands while BoringCache still runs outside the Dockerfile; only
-`+ toolcache` lanes use the committed Dockerfile fixture, and the fixture keeps
-dependency-install steps upstream-shaped so the tool-cache secret only affects
-Turbo execution. Managed BuildKit lanes run without BuildKit-owned cache-mount
-archive offload unless the benchmark explicitly enables that diagnostic mode.
+mixed into one number: `BC OCI` and `BC BuildKit Backend`. Treat `BC BuildKit
+Backend` as the current fast lane for the headline rolling signal: it uses the
+managed BuildKit backend, BuildKit-owned cache-mount archive offload, and the
+Turbo cache-mount patch. The old `+ toolcache` bridge lanes are retired from
+the main matrix.
 Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not
 blocked by Docker Hub anonymous pull limits.
@@ -66,7 +61,7 @@ This repo uses split BoringCache tokens as the standard CI shape:
 ## Repo Layout
 
 - [`scripts/prepare-source.sh`](scripts/prepare-source.sh)
-- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, ECR, and explicit BoringCache OCI, BuildKit-backend, and tool-cache product lanes side by side.
+- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, ECR, and explicit BoringCache OCI and BuildKit-backend product lanes side by side.
 - [`.github/workflows/rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml) runs the rolling lane after upstream sync.
 - [`.github/workflows/sync.yml`](.github/workflows/sync.yml) keeps the pinned upstream source current.
 

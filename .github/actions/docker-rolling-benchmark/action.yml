@@ -67,6 +67,10 @@ inputs:
     description: "Optional Dockerfile tool-cache bridge. Use turbo shorthand or TOOL:TAG."
     required: false
     default: ""
+  turbo_cache_mounts:
+    description: "Apply the benchmark-only PostHog Dockerfile patch that declares Turbo cache mounts."
+    required: false
+    default: "false"
   cache_export_type:
     description: "Legacy compatibility alias for buildkit_cache_backend. Prefer buildkit_cache_backend for BuildKit backend lanes."
     required: false
@@ -166,6 +170,8 @@ runs:
 
     - name: Prepare base benchmark source tree
       shell: bash
+      env:
+        POSTHOG_TURBO_CACHE_MOUNTS: ${{ inputs.turbo_cache_mounts == 'true' && '1' || '' }}
       run: ./scripts/prepare-source.sh base
 
     - name: Setup Node for Docker build artifacts

@@ -6,10 +6,12 @@ scenario="${1:-base}"
 
 git -C "${repo_root}/upstream" reset --hard
 git -C "${repo_root}/upstream" clean -fdx
-"${repo_root}/scripts/check-posthog-toolcache-dockerfile.sh"
 
 case "${scenario}" in
   base|warm1)
+    if [[ "${POSTHOG_TURBO_CACHE_MOUNTS:-}" == "1" ]]; then
+      git -C "${repo_root}/upstream" apply --unidiff-zero "${repo_root}/scenarios/posthog-turbo-cache-mounts.patch"
+    fi
     ;;
   *)
     echo "Unknown scenario: ${scenario}" >&2

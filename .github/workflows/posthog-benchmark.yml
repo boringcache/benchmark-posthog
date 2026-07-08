@@ -57,7 +57,7 @@ on:
           - all
           - buildkit
       runner_label:
-        description: "Optional GitHub Actions runner label override. Empty uses the platform defaults."
+        description: "Optional GitHub Actions runner label override. Empty uses the dual-platform amd64 host default."
         required: false
         type: string
         default: ""
@@ -93,16 +93,11 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - label: amd64
+          - label: dual
             runner_label: ubuntu-latest
             cli_platform: linux-amd64
-            docker_platform: linux/amd64
-            benchmark_id_suffix: ""
-          - label: arm64
-            runner_label: ubuntu-24.04-arm
-            cli_platform: linux-arm64
-            docker_platform: linux/arm64
-            benchmark_id_suffix: -arm64
+            docker_platform: linux/arm64,linux/amd64
+            benchmark_id_prefix: dual-
         lane:
           - label: GHA
             strategy: actions-cache
@@ -184,6 +179,12 @@ jobs:
         shell: bash
         run: ./scripts/free-runner-disk.sh
 
+      - name: Set up QEMU for arm64 Docker builds
+        if: ${{ contains(matrix.platform.docker_platform, 'linux/arm64') && (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) }}
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: ${{ format('{0} {1}', matrix.lane.label, matrix.platform.label) }}
         if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) }}
         uses: ./.github/actions/docker-rolling-benchmark
@@ -200,7 +201,7 @@ jobs:
           cache_scope_ref_slug: ${{ inputs.cache_scope_ref_slug }}
           turbo_cache_mounts: ${{ matrix.lane.turbo_cache_mounts && 'true' || 'false' }}
           buildkit_image: ${{ matrix.lane.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE || 'mirror.gcr.io/moby/buildkit:buildx-stable-1' }}
-          benchmark_id: ${{ format('{0}{1}{2}', matrix.lane.benchmark_id, matrix.platform.benchmark_id_suffix, inputs.benchmark_id_suffix) }}
+          benchmark_id: ${{ format('{0}{1}{2}', matrix.platform.benchmark_id_prefix, matrix.lane.benchmark_id, inputs.benchmark_id_suffix) }}
           docker_platform: ${{ matrix.platform.docker_platform }}
           docker_build_args: |-
             ${{ inputs.force_turbo_exec && '--no-cache-filter' || '' }}

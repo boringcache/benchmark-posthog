@@ -73,7 +73,7 @@ jobs:
             for attempt in $(seq 1 "$max_attempts"); do
               assets="$(gh release view "$cli_version" --repo "$release_repo" --json assets --jq '.assets[].name' 2>/dev/null || true)"
               missing_assets=()
-              for asset in boringcache-linux-amd64 boringcache-linux-arm64 SHA256SUMS; do
+              for asset in boringcache-linux-amd64 SHA256SUMS; do
                 if ! grep -Fxq "$asset" <<< "$assets"; then
                   missing_assets+=("$asset")
                 fi
@@ -86,7 +86,7 @@ jobs:
               sleep 10
             done
 
-            echo "::error::Timed out waiting for ${release_repo}@${cli_version} linux amd64/arm64 assets and SHA256SUMS." >&2
+            echo "::error::Timed out waiting for ${release_repo}@${cli_version} linux amd64 asset and SHA256SUMS." >&2
             exit 1
           }
 

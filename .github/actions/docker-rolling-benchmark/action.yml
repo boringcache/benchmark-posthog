@@ -41,7 +41,7 @@ inputs:
     required: false
     default: ""
   docker_platform:
-    description: "Optional Docker Buildx platform, for example linux/amd64 or linux/arm64."
+    description: "Optional Docker Buildx platform list, for example linux/amd64 or linux/arm64,linux/amd64."
     required: false
     default: ""
   image_tag:

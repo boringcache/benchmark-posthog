@@ -38,6 +38,11 @@ on:
         required: false
         type: boolean
         default: false
+      force_turbo_exec:
+        description: "Force PostHog Turbo stages to execute while keeping source inputs stable, useful for tool-cache canary probes."
+        required: false
+        type: boolean
+        default: false
       upstream_ref:
         description: "Optional PostHog ref/SHA to benchmark instead of the pinned upstream submodule commit."
         required: false
@@ -185,6 +190,11 @@ jobs:
           turbo_cache_mounts: ${{ matrix.turbo_cache_mounts && 'true' || 'false' }}
           buildkit_image: ${{ matrix.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE || 'mirror.gcr.io/moby/buildkit:buildx-stable-1' }}
           benchmark_id: ${{ format('{0}{1}', matrix.benchmark_id, inputs.benchmark_id_suffix) }}
+          docker_build_args: |-
+            ${{ inputs.force_turbo_exec && '--no-cache-filter' || '' }}
+            ${{ inputs.force_turbo_exec && 'frontend-build' || '' }}
+            ${{ inputs.force_turbo_exec && '--no-cache-filter' || '' }}
+            ${{ inputs.force_turbo_exec && 'node-scripts-build' || '' }}
           project_repo: PostHog/posthog
           project_ref: ${{ inputs.upstream_ref }}
           dockerfile_path: ${{ matrix.dockerfile_path }}

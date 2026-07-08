@@ -247,8 +247,30 @@ runs:
         STRATEGY: ${{ inputs.strategy }}
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
         CACHE_SCOPE_REF_SLUG: ${{ inputs.cache_scope_ref_slug }}
+        DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
       run: |
         set -euo pipefail
+        tool_cache_tags_csv() {
+          local cache_scope="$1"
+          local requested="$2"
+          local tool_cache_value tool tag
+          local tags=()
+
+          for tool_cache_value in ${requested//,/ }; do
+            [[ -n "$tool_cache_value" ]] || continue
+            tool="${tool_cache_value%%:*}"
+            if [[ "$tool_cache_value" == *:* ]]; then
+              tag="${tool_cache_value#*:}"
+            else
+              tag="${cache_scope}-${tool}"
+            fi
+            [[ -n "$tag" ]] && tags+=("$tag")
+          done
+
+          local IFS=,
+          printf '%s\n' "${tags[*]}"
+        }
+
         ref_name="${CACHE_SCOPE_REF_SLUG:-$GITHUB_REF_NAME}"
         ref_slug="$(printf '%s' "${ref_name}" | tr -c 'A-Za-z0-9._-' '-')"
         ref_slug="${ref_slug#-}"
@@ -259,10 +281,15 @@ runs:
 
         if [[ "$STRATEGY" == "boringcache" ]]; then
           cache_scope="${BENCHMARK_ID}-run-rolling-${ref_slug}"
+          tool_cache_tags="$(tool_cache_tags_csv "$cache_scope" "$DOCKER_TOOL_CACHE")"
           tags_csv="${cache_scope}"
+          if [[ -n "$tool_cache_tags" ]]; then
+            tags_csv="${tags_csv},${tool_cache_tags}"
+          fi
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "registry_proxy_tags=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
+          echo "tool_cache_tags_csv=${tool_cache_tags}" >> "$GITHUB_OUTPUT"
         else
           cache_scope_primary="${BENCHMARK_ID}-rolling-${ref_slug}"
           cache_scope_fallback="${BENCHMARK_ID}-rolling-${ref_slug}-fallback"
@@ -271,7 +298,7 @@ runs:
         fi
 
     - name: Configure boringcache/one for Docker
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' }}
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' }}
       id: docker_cache
       uses: boringcache/one@v1
       env:
@@ -294,6 +321,15 @@ runs:
           image=${{ inputs.buildkit_image }}
           network=host
         verbose: true
+
+    - name: Set up Docker Buildx for BoringCache wrapped build
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.buildkit_cache_backend != 'boringcache' && inputs.docker_tool_cache != '' }}
+      id: tool_cache_buildx
+      uses: docker/setup-buildx-action@v4
+      with:
+        driver-opts: |
+          image=${{ inputs.buildkit_image }}
+          network=host
 
     - name: Set up Docker Buildx
       if: ${{ inputs.strategy == 'actions-cache' || inputs.strategy == 'ecr-cache' }}
@@ -394,14 +430,15 @@ runs:
         BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
         BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
         BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
+        BORINGCACHE_DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
         BORINGCACHE_BUILDKIT_CACHE_BACKEND: ${{ inputs.buildkit_cache_backend }}
         BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.buildkit_mountcache_offloader == 'true' && '1' || '' }}
         BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
         BORINGCACHE_OCI_HYDRATION: ${{ inputs.oci_hydration }}
-        BORINGCACHE_DOCKER_WRAPPER: ${{ inputs.strategy == 'boringcache' && 'never' || '' }}
+        BORINGCACHE_DOCKER_WRAPPER: ${{ inputs.strategy == 'boringcache' && inputs.docker_tool_cache == '' && 'never' || '' }}
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
-        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && steps.docker_cache.outputs.buildx-name || steps.buildx.outputs.name || '' }}
+        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.buildkit_cache_backend != 'boringcache' && inputs.docker_tool_cache != '' && steps.tool_cache_buildx.outputs.name || steps.buildx.outputs.name || '' }}
         CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
         CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
         CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}

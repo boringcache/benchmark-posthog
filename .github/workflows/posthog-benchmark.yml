@@ -95,6 +95,7 @@ jobs:
             buildkit_backend: registry
             buildkit_cache_backend: ""
             dockerfile_path: upstream/Dockerfile
+            docker_tool_cache: ""
             buildkit_mountcache_offloader: false
             turbo_cache_mounts: false
             lane_filter: default
@@ -107,6 +108,7 @@ jobs:
             buildkit_backend: registry
             buildkit_cache_backend: ""
             dockerfile_path: upstream/Dockerfile
+            docker_tool_cache: ""
             buildkit_mountcache_offloader: false
             turbo_cache_mounts: false
             lane_filter: default
@@ -119,6 +121,7 @@ jobs:
             buildkit_cache_backend: ""
             benchmark_id: posthog
             dockerfile_path: upstream/Dockerfile
+            docker_tool_cache: ""
             buildkit_mountcache_offloader: false
             turbo_cache_mounts: false
             lane_filter: default
@@ -129,10 +132,11 @@ jobs:
             artifact_strategy: ""
             buildkit_backend: registry
             buildkit_cache_backend: boringcache
-            benchmark_id: posthog-bc-buildkit-mountcache
-            dockerfile_path: upstream/Dockerfile
-            buildkit_mountcache_offloader: true
-            turbo_cache_mounts: true
+            benchmark_id: posthog-bc-buildkit-toolcache
+            dockerfile_path: scenarios/posthog-toolcache/Dockerfile
+            docker_tool_cache: turbo
+            buildkit_mountcache_offloader: false
+            turbo_cache_mounts: false
             lane_filter: buildkit
             run_on_pull_request: false
             requires_buildkit_image: true
@@ -189,6 +193,7 @@ jobs:
           cli_version: ${{ env.BORINGCACHE_CLI_VERSION }}
           cli_platform: linux-amd64
           benchmark_workspace: ${{ github.repository }}
+          docker_tool_cache: ${{ matrix.docker_tool_cache }}
           ecr_region: ${{ vars.DOCKER_BENCHMARK_ECR_REGION || 'us-east-1' }}
           ecr_role_arn: ${{ vars.DOCKER_BENCHMARK_ECR_ROLE_ARN }}
           ecr_registry: ${{ vars.DOCKER_BENCHMARK_ECR_REGISTRY }}

@@ -24,10 +24,10 @@ case "$lane" in
     ;;
   buildkit)
     label="BC BuildKit Backend"
-    benchmark_id="posthog-bc-buildkit-mountcache"
+    benchmark_id="posthog-bc-buildkit-toolcache"
     backend="registry"
     cache_backend="boringcache"
-    mountcache_offloader="1"
+    mountcache_offloader=""
     ;;
   *)
     echo "Unknown POSTHOG_BORINGBUILD_LANE: $lane (expected oci or buildkit)" >&2
@@ -98,6 +98,9 @@ export BENCHMARK_PROJECT_REPO="${BENCHMARK_PROJECT_REPO:-PostHog/posthog}"
 export BUILDKIT_BACKEND="$backend"
 export BORINGCACHE_BUILDKIT_CACHE_BACKEND="$cache_backend"
 export BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER="$mountcache_offloader"
+if [[ "$lane" == "buildkit" ]]; then
+  export BORINGCACHE_DOCKER_TOOL_CACHE="${BORINGCACHE_DOCKER_TOOL_CACHE:-turbo}"
+fi
 export CACHE_LANE="${CACHE_LANE:-rolling}"
 export CACHE_SCOPE="${CACHE_SCOPE:-${BENCHMARK_ID}-run-rolling-${ref_slug}-${scope_suffix}}"
 export BORINGCACHE_MANAGED_BUILDKIT_IMAGE="$buildkit_image"
@@ -112,7 +115,11 @@ export BORINGCACHE_PROXY_PORT="${BORINGCACHE_PROXY_PORT:-5310}"
 export BORINGCACHE_OBSERVABILITY_JSONL_PATH="${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-/tmp/${BENCHMARK_ID}-boringcache-commit-observability.jsonl}"
 export ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP=true
 export IMAGE_TAG="${IMAGE_TAG:-posthog-benchmark:${lane}}"
-export DOCKERFILE_PATH="${DOCKERFILE_PATH:-upstream/Dockerfile}"
+if [[ "$lane" == "buildkit" ]]; then
+  export DOCKERFILE_PATH="${DOCKERFILE_PATH:-scenarios/posthog-toolcache/Dockerfile}"
+else
+  export DOCKERFILE_PATH="${DOCKERFILE_PATH:-upstream/Dockerfile}"
+fi
 export BENCHMARK_DOCKER_CONTEXT="${BENCHMARK_DOCKER_CONTEXT:-upstream}"
 export BENCHMARK_OUTPUTS_PATH="${BENCHMARK_OUTPUTS_PATH:-benchmark-results/${BENCHMARK_ID}-boringcache-rolling.outputs.env}"
 export BENCHMARK_PROJECT_REF="${BENCHMARK_PROJECT_REF:-}"

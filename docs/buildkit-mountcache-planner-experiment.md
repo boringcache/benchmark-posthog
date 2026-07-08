@@ -4,8 +4,10 @@ This note is the cheap test path for turning BuildKit cache demand into a planne
 
 ## Current Benchmark Shape
 
-PostHog benchmark lanes now use the pinned upstream `upstream/Dockerfile` directly.
-The old Dockerfile tool-cache fixture and Turbo secret bootstrap path are retired.
+PostHog's plain Docker cache lanes use the pinned upstream `upstream/Dockerfile`
+directly. The BuildKit backend lane uses
+`scenarios/posthog-toolcache/Dockerfile` so Turbo can talk to BoringCache's
+remote-cache protocol inside the Docker build.
 
 The upstream Dockerfile already uses BuildKit cache mounts for dependency stores:
 
@@ -16,6 +18,16 @@ The upstream Dockerfile already uses BuildKit cache mounts for dependency stores
 Turbo itself is not mounted as a first-class cache path in the upstream Dockerfile.
 The frontend Turbo build is a plain `RUN bin/turbo --filter=@posthog/frontend build`.
 The plugin-transpiler Turbo build shares the same `RUN` as the second pnpm install, so it can benefit from the pnpm store mount but not from a separate Turbo task-cache mount.
+
+As of 2026-07-08, the rolling `BC BuildKit Backend` lane intentionally leaves
+the benchmark-only Turbo cache-mount patch and mountcache offloader disabled.
+Instead it uses `scenarios/posthog-toolcache/Dockerfile`, which injects the
+stable `boringcache-tool-cache-env` secret around Turbo so the Docker build can
+use BoringCache's Turbo remote-cache protocol. The raw `.turbo/cache` directory
+accumulates task-output artifacts, and storing it as one BuildKit cache-mount
+archive made later restores pay for old artifacts that the current build might
+not need. Keep Turbo task-output caching on the protocol-aware remote-cache path
+until mountcache has size guards and per-artifact demand behavior.
 
 ## Spike Reference
 
@@ -84,7 +96,8 @@ The corresponding execution event should include vertex name, start time, end ti
 
 ## Local Mac Experiment
 
-Use the same upstream commit and compare one mountcache-only run against the prior manifest:
+Use the same upstream commit and compare one BuildKit-backend plus Turbo
+toolcache run against the prior manifest:
 
 ```bash
 cd /Users/gaurav/boringcache/benchmarks-repos/benchmark-posthog
@@ -93,8 +106,8 @@ git -C upstream checkout --detach a0598d99ea23845630262be50f940fd49ec3f5fb
 ./scripts/prepare-source.sh base
 
 POSTHOG_BORINGBUILD_LANE=buildkit \
-POSTHOG_BORINGBUILD_SCOPE_SUFFIX=local-mountcache-planner \
-BORINGCACHE_OBSERVABILITY_JSONL_PATH=/tmp/posthog-buildkit-mountcache-planner.jsonl \
+POSTHOG_BORINGBUILD_SCOPE_SUFFIX=local-buildkit-toolcache \
+BORINGCACHE_OBSERVABILITY_JSONL_PATH=/tmp/posthog-buildkit-toolcache.jsonl \
 ./scripts/run-boringbuild-docker-lane.sh full
 ```
 

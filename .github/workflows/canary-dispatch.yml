@@ -2,6 +2,9 @@ name: "Canary Benchmark Dispatch"
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - prefetch-ranged-canary
     inputs:
       cli_version:
         description: "BoringCache CLI release tag to test."

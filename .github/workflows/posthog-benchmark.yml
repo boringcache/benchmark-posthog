@@ -134,7 +134,7 @@ jobs:
             buildkit_cache_backend: boringcache
             benchmark_id: posthog-bc-buildkit-mountcache
             dockerfile_path: upstream/Dockerfile
-            docker_tool_cache: ""
+            docker_tool_cache: turbo
             buildkit_mountcache_offloader: true
             turbo_cache_mounts: false
             lane_filter: buildkit

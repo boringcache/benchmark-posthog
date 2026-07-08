@@ -16,7 +16,8 @@ This repo exists separately from [`boringcache/benchmarks`](https://github.com/b
   directly with `upstream/` as the build context.
 - The BuildKit backend lane uses the pinned upstream `upstream/Dockerfile`
   with native BoringCache BuildKit mountcache offload enabled for the upstream
-  cache mounts such as `pnpm` and `uv`.
+  cache mounts such as `pnpm` and `uv`, plus native BoringCache BuildKit
+  tool-cache env injection for Turbo.
 - The benchmark-only `scenarios/posthog-turbo-cache-mounts.patch` patch is kept
   for targeted mountcache experiments, but it is not part of the default rolling
   BuildKit lane. Turbo's local cache grows as a task-output store, so preserving
@@ -41,8 +42,9 @@ BoringCache lanes are split so product capabilities are visible instead of
 mixed into one number: `BC OCI` and `BC BuildKit Backend`. Treat `BC BuildKit
 Backend` as the current fast lane for the headline rolling signal: it uses the
 managed BuildKit backend for layer cache bodies plus native cache-mount
-offload against the upstream Dockerfile. Turbo's local task cache stays out of
-BuildKit cache-mount archive offload.
+offload and native Turbo tool-cache env injection against the upstream
+Dockerfile. Turbo's local task cache stays out of BuildKit cache-mount archive
+offload.
 Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not
 blocked by Docker Hub anonymous pull limits.

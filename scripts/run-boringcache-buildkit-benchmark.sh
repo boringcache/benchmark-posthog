@@ -108,8 +108,17 @@ use_wrapped_boringcache_build() {
   esac
 }
 
+native_buildkit_tool_cache_injection() {
+  [[ "$buildkit_cache_backend" == "boringcache" ]]
+}
+
 verify_posthog_turbo_tool_cache_contract() {
   docker_tool_cache_enabled turbo || return 0
+
+  if native_buildkit_tool_cache_injection; then
+    echo "Using native BoringCache BuildKit Turbo tool-cache injection for ${DOCKERFILE_PATH:-Dockerfile}"
+    return 0
+  fi
 
   local dockerfile_path="${DOCKERFILE_PATH:-}"
   local dockerfile="${repo_root}/${dockerfile_path}"
@@ -135,7 +144,7 @@ assert_turbo_remote_cache_used() {
     write_build_metrics
     write_build_diagnostics
     echo "Turbo tool-cache was requested, but Turbo reported remote caching disabled." >&2
-    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env" "$build_log" | tail -n 120 >&2 || true
+    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env|tool env" "$build_log" | tail -n 120 >&2 || true
     exit 1
   fi
 
@@ -149,7 +158,7 @@ assert_turbo_remote_cache_used() {
     write_build_metrics
     write_build_diagnostics
     echo "Turbo tool-cache was requested, but the build log did not show Turbo remote caching enabled." >&2
-    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env" "$build_log" | tail -n 120 >&2 || true
+    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env|tool env" "$build_log" | tail -n 120 >&2 || true
     exit 1
   fi
 }
@@ -161,7 +170,6 @@ turbo_tool_cache_layers_restored_from_docker_cache() {
 
   while IFS= read -r line; do
     [[ "$line" == *"RUN "* ]] || continue
-    [[ "$line" == *"boringcache-tool-cache-env"* ]] || continue
     [[ "$line" == *"bin/turbo"* ]] || continue
     [[ "$line" =~ ^#([0-9]+)[[:space:]] ]] || continue
 

@@ -34,7 +34,7 @@ inputs:
     required: false
     default: upstream
   docker_tool_cache:
-    description: "Optional Dockerfile tool-cache bridge. Use turbo shorthand or TOOL:TAG."
+    description: "Optional Docker tool-cache adapter. Native BuildKit backend injects it without Dockerfile changes; legacy registry lanes require a Dockerfile bridge."
     required: false
     default: ""
   docker_build_args:

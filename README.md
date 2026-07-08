@@ -48,6 +48,9 @@ offload.
 Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not
 blocked by Docker Hub anonymous pull limits.
+The GitHub Actions workflow runs the product lane matrix on amd64 and arm64;
+amd64 keeps the historical benchmark IDs, while arm64 appends `-arm64` so cache
+scopes and artifacts do not collide across architectures.
 
 Rolling runs record the upstream commit build as-is after upstream sync against the stable rolling cache tags. They do not run a separate `warm1` follow-up.
 

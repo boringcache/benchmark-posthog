@@ -40,6 +40,10 @@ inputs:
   docker_build_args:
     required: false
     default: ""
+  docker_platform:
+    description: "Optional Docker Buildx platform, for example linux/amd64 or linux/arm64."
+    required: false
+    default: ""
   image_tag:
     required: true
   prepare_install_command:
@@ -459,13 +463,21 @@ runs:
         DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
         BENCHMARK_DOCKER_CONTEXT: ${{ inputs.docker_context }}
         DOCKER_BUILD_EXTRA_ARGS: ${{ inputs.docker_build_args }}
+        DOCKER_PLATFORM: ${{ inputs.docker_platform }}
       run: |
         set -euo pipefail
         docker_extra_args=()
+        if [[ -n "${DOCKER_PLATFORM:-}" ]]; then
+          docker_extra_args+=(--platform "$DOCKER_PLATFORM")
+        fi
         if [[ -n "${DOCKER_BUILD_EXTRA_ARGS:-}" ]]; then
           while IFS= read -r arg; do
             [[ -n "$arg" ]] && docker_extra_args+=("$arg")
           done <<< "$DOCKER_BUILD_EXTRA_ARGS"
+        fi
+        effective_docker_build_args=""
+        if ((${#docker_extra_args[@]})); then
+          effective_docker_build_args="$(printf '%s\n' "${docker_extra_args[@]}")"
         fi
 
         phase_start="${{ steps.timing_start.outputs.started_at }}"
@@ -475,6 +487,7 @@ runs:
           BENCHMARK_PHASE_STARTED_AT="$phase_start" \
             BENCHMARK_METRICS_OUTPUT="${RUNNER_TEMP}/rolling-build-metrics.env" \
             BENCHMARK_DIAGNOSTICS_OUTPUT="benchmark-diagnostics/${BENCHMARK_ID}-boringcache-rolling-commit.txt" \
+            DOCKER_BUILD_EXTRA_ARGS="$effective_docker_build_args" \
             ./scripts/run-boringcache-docker-lane.sh "${BENCHMARK_BUILD_MODE:-full}"
         else
           build_log="$(mktemp /tmp/${BENCHMARK_ID}-ac-rolling.XXXXXX.log)"

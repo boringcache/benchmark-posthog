@@ -1,6 +1,6 @@
 name: "PostHog Benchmark"
 run-name: >-
-  ${{ format('Benchmark Rolling | {0} | {1}', github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || github.event_name == 'schedule' && 'Scheduled' || format('Manual dispatch ({0})', github.ref_name), inputs.runner_label || 'ubuntu-latest') }}
+  ${{ format('Benchmark Rolling | {0} | {1}', github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || github.event_name == 'schedule' && 'Scheduled' || format('Manual dispatch ({0})', github.ref_name), inputs.runner_label || 'platform defaults') }}
 
 on:
   workflow_dispatch:
@@ -57,10 +57,10 @@ on:
           - all
           - buildkit
       runner_label:
-        description: "GitHub Actions runner label for Docker build jobs."
+        description: "Optional GitHub Actions runner label override. Empty uses the platform defaults."
         required: false
         type: string
-        default: ubuntu-latest
+        default: ""
   schedule:
     - cron: "0 3 * * 3"
   pull_request:
@@ -86,13 +86,24 @@ permissions:
 
 jobs:
   docker-benchmark:
-    name: ${{ matrix.label }}
-    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
+    name: ${{ format('{0} {1}', matrix.lane.label, matrix.platform.label) }}
+    runs-on: ${{ inputs.runner_label || matrix.platform.runner_label }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        include:
+        platform:
+          - label: amd64
+            runner_label: ubuntu-latest
+            cli_platform: linux-amd64
+            docker_platform: linux/amd64
+            benchmark_id_suffix: ""
+          - label: arm64
+            runner_label: ubuntu-24.04-arm
+            cli_platform: linux-arm64
+            docker_platform: linux/arm64
+            benchmark_id_suffix: -arm64
+        lane:
           - label: GHA
             strategy: actions-cache
             artifact_strategy: ""
@@ -156,40 +167,41 @@ jobs:
       BORINGCACHE_CLI_VERSION: ${{ inputs.cli_version || vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION }}
     steps:
       - name: Skip disabled lane
-        if: ${{ (github.event_name == 'pull_request' && !matrix.run_on_pull_request) || (matrix.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE == '') || (github.event_name == 'workflow_dispatch' && inputs.lane_filter != 'all' && inputs.lane_filter != matrix.lane_filter) }}
+        if: ${{ (github.event_name == 'pull_request' && !matrix.lane.run_on_pull_request) || (matrix.lane.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE == '') || (github.event_name == 'workflow_dispatch' && inputs.lane_filter != 'all' && inputs.lane_filter != matrix.lane.lane_filter) }}
         shell: bash
         run: |
-          echo "Skipping ${{ matrix.label }} for this event/configuration."
+          echo "Skipping ${{ matrix.lane.label }} ${{ matrix.platform.label }} for this event/configuration."
 
       - name: Checkout benchmark repo
-        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane_filter) }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) }}
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
           submodules: false
 
       - name: Free disk space
-        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane_filter) }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) }}
         shell: bash
         run: ./scripts/free-runner-disk.sh
 
-      - name: ${{ matrix.label }}
-        if: ${{ (github.event_name != 'pull_request' || matrix.run_on_pull_request) && (!matrix.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane_filter) }}
+      - name: ${{ format('{0} {1}', matrix.lane.label, matrix.platform.label) }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) }}
         uses: ./.github/actions/docker-rolling-benchmark
         env:
-          BORINGCACHE_OCI_DEMAND_PREFETCH: ${{ matrix.buildkit_cache_backend == 'boringcache' && 'false' || '' }}
-          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ matrix.buildkit_mountcache_offloader && '1' || '' }}
+          BORINGCACHE_OCI_DEMAND_PREFETCH: ${{ matrix.lane.buildkit_cache_backend == 'boringcache' && 'false' || '' }}
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ matrix.lane.buildkit_mountcache_offloader && '1' || '' }}
         with:
-          strategy: ${{ matrix.strategy }}
-          artifact_strategy: ${{ matrix.artifact_strategy }}
-          buildkit_backend: ${{ matrix.buildkit_backend }}
-          buildkit_cache_backend: ${{ matrix.buildkit_cache_backend }}
-          buildkit_mountcache_offloader: ${{ matrix.buildkit_mountcache_offloader }}
+          strategy: ${{ matrix.lane.strategy }}
+          artifact_strategy: ${{ matrix.lane.artifact_strategy }}
+          buildkit_backend: ${{ matrix.lane.buildkit_backend }}
+          buildkit_cache_backend: ${{ matrix.lane.buildkit_cache_backend }}
+          buildkit_mountcache_offloader: ${{ matrix.lane.buildkit_mountcache_offloader }}
           build_mode: ${{ inputs.build_mode || 'full' }}
           cache_scope_ref_slug: ${{ inputs.cache_scope_ref_slug }}
-          turbo_cache_mounts: ${{ matrix.turbo_cache_mounts && 'true' || 'false' }}
-          buildkit_image: ${{ matrix.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE || 'mirror.gcr.io/moby/buildkit:buildx-stable-1' }}
-          benchmark_id: ${{ format('{0}{1}', matrix.benchmark_id, inputs.benchmark_id_suffix) }}
+          turbo_cache_mounts: ${{ matrix.lane.turbo_cache_mounts && 'true' || 'false' }}
+          buildkit_image: ${{ matrix.lane.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE || 'mirror.gcr.io/moby/buildkit:buildx-stable-1' }}
+          benchmark_id: ${{ format('{0}{1}{2}', matrix.lane.benchmark_id, matrix.platform.benchmark_id_suffix, inputs.benchmark_id_suffix) }}
+          docker_platform: ${{ matrix.platform.docker_platform }}
           docker_build_args: |-
             ${{ inputs.force_turbo_exec && '--no-cache-filter' || '' }}
             ${{ inputs.force_turbo_exec && 'frontend-build' || '' }}
@@ -197,13 +209,13 @@ jobs:
             ${{ inputs.force_turbo_exec && 'node-scripts-build' || '' }}
           project_repo: PostHog/posthog
           project_ref: ${{ inputs.upstream_ref }}
-          dockerfile_path: ${{ matrix.dockerfile_path }}
+          dockerfile_path: ${{ matrix.lane.dockerfile_path }}
           docker_context: upstream
           image_tag: posthog-benchmark:latest
           cli_version: ${{ env.BORINGCACHE_CLI_VERSION }}
-          cli_platform: linux-amd64
+          cli_platform: ${{ matrix.platform.cli_platform }}
           benchmark_workspace: ${{ github.repository }}
-          docker_tool_cache: ${{ matrix.docker_tool_cache }}
+          docker_tool_cache: ${{ matrix.lane.docker_tool_cache }}
           ecr_region: ${{ vars.DOCKER_BENCHMARK_ECR_REGION || 'us-east-1' }}
           ecr_role_arn: ${{ vars.DOCKER_BENCHMARK_ECR_ROLE_ARN }}
           ecr_registry: ${{ vars.DOCKER_BENCHMARK_ECR_REGISTRY }}

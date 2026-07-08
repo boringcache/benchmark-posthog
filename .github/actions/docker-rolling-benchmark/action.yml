@@ -33,6 +33,10 @@ inputs:
   docker_context:
     required: false
     default: upstream
+  docker_tool_cache:
+    description: "Optional Dockerfile tool-cache bridge. Use turbo shorthand or TOOL:TAG."
+    required: false
+    default: ""
   docker_build_args:
     required: false
     default: ""

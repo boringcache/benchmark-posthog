@@ -14,9 +14,15 @@ This repo exists separately from [`boringcache/benchmarks`](https://github.com/b
 - Upstream app source lives in the pinned `upstream/` submodule.
 - Plain Docker cache lanes use the pinned upstream `upstream/Dockerfile`
   directly with `upstream/` as the build context.
-- The BuildKit backend lane can apply the benchmark-only
-  `scenarios/posthog-turbo-cache-mounts.patch` patch so Turbo writes through
-  BuildKit-owned cache mounts instead of the retired tool-cache bridge.
+- The BuildKit backend lane uses `scenarios/posthog-toolcache/Dockerfile`,
+  which is the pinned upstream Dockerfile plus static
+  `boringcache-tool-cache-env` secret mounts around the two Turbo build steps.
+  That lets Turbo use the BoringCache remote-cache protocol inside the Docker
+  build without preserving `.turbo/cache` as a whole directory archive.
+- The benchmark-only `scenarios/posthog-turbo-cache-mounts.patch` patch is kept
+  for targeted mountcache experiments, but it is not part of the default rolling
+  BuildKit lane. Turbo's local cache grows as a task-output store, so preserving
+  it as a whole cache-mount archive can make every future restore slower.
 - `scripts/prepare-source.sh` only resets the upstream checkout and applies named benchmark scenarios.
 
 Pinned upstream source:
@@ -33,9 +39,9 @@ Fresh runs use the scenario set:
 BoringCache lanes are split so product capabilities are visible instead of
 mixed into one number: `BC OCI` and `BC BuildKit Backend`. Treat `BC BuildKit
 Backend` as the current fast lane for the headline rolling signal: it uses the
-managed BuildKit backend, BuildKit-owned cache-mount archive offload, and the
-Turbo cache-mount patch. The old `+ toolcache` bridge lanes are retired from
-the main matrix.
+managed BuildKit backend for layer cache bodies plus the Turbo toolcache bridge
+inside the Dockerfile. Turbo's local task cache stays out of BuildKit
+cache-mount archive offload.
 Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not
 blocked by Docker Hub anonymous pull limits.
@@ -74,6 +80,7 @@ The runner needs AWS CLI v2 on `PATH` because BoringBuild verifies EC2 credentia
 ## Repo Layout
 
 - [`scripts/prepare-source.sh`](scripts/prepare-source.sh)
+- [`scripts/check-posthog-toolcache-dockerfile.sh`](scripts/check-posthog-toolcache-dockerfile.sh) verifies the toolcache Dockerfile stays equal to the pinned upstream Dockerfile plus the static Turbo remote-cache secret hooks.
 - [`scripts/run-boringbuild-ec2-shape-sweep.sh`](scripts/run-boringbuild-ec2-shape-sweep.sh)
 - [`docs/buildkit-mountcache-planner-experiment.md`](docs/buildkit-mountcache-planner-experiment.md) records the BuildKit mountcache planner experiment and the BC BuildKit vs ECR comparison for the July 6, 2026 spike run.
 - [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, ECR, and explicit BoringCache OCI and BuildKit-backend product lanes side by side.

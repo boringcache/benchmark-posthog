@@ -33,6 +33,22 @@ fi
 
 mkdir -p benchmark-storage
 tags_csv="$cache_scope"
+docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
+if [[ -n "$docker_tool_cache" ]]; then
+  tool_tags=()
+  for tool_cache_value in ${docker_tool_cache//,/ }; do
+    [[ -n "$tool_cache_value" ]] || continue
+    if [[ "$tool_cache_value" == *:* ]]; then
+      tool_tags+=("${tool_cache_value#*:}")
+    else
+      tool_tags+=("${cache_scope}-${tool_cache_value%%:*}")
+    fi
+  done
+  if ((${#tool_tags[@]} > 0)); then
+    tool_tags_csv="$(IFS=,; printf '%s' "${tool_tags[*]}")"
+    tags_csv="${tags_csv},${tool_tags_csv}"
+  fi
+fi
 
 storage_breakdown_path="benchmark-storage/${benchmark_id}-boringcache-storage-breakdown.json"
 bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$storage_breakdown_path" BORINGCACHE_EXACT_TAGS="$tags_csv" \

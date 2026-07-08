@@ -26,6 +26,7 @@ cache_promotion_refs="${BORINGCACHE_DOCKER_PROMOTION_REFS:-}"
 allow_rolling_bootstrap="${ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP:-false}"
 build_output="${BENCHMARK_BUILD_OUTPUT:-none}"
 oci_hydration="${BORINGCACHE_OCI_HYDRATION:-metadata-only}"
+docker_tool_cache="${BORINGCACHE_DOCKER_TOOL_CACHE:-}"
 docker_wrapper_mode="${BORINGCACHE_DOCKER_WRAPPER:-auto}"
 buildkit_cache_backend="${BORINGCACHE_BUILDKIT_CACHE_BACKEND:-${BORINGCACHE_CACHE_EXPORT_TYPE:-}}"
 buildkit_mountcache_offloader="${BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER:-}"
@@ -36,10 +37,26 @@ export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_
 start_proxy() { :; }
 stop_proxy() { :; }
 
-if [[ -n "${BORINGCACHE_DOCKER_TOOL_CACHE:-}" ]]; then
-  echo "BORINGCACHE_DOCKER_TOOL_CACHE is retired for PostHog benchmarks; use the upstream Dockerfile with BuildKit mountcache instead." >&2
-  exit 1
-fi
+docker_tool_cache_enabled() {
+  local requested_tool="$1"
+  local tool
+  for tool in ${docker_tool_cache//,/ }; do
+    tool="${tool%%:*}"
+    [[ "$tool" == "$requested_tool" ]] && return 0
+  done
+  return 1
+}
+
+resolve_docker_tool_cache_value() {
+  local value="$1"
+  local tool="${value%%:*}"
+
+  if [[ "$value" == *:* ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s:%s-%s\n' "$tool" "${CACHE_SCOPE:?Set CACHE_SCOPE}" "$tool"
+  fi
+}
 
 cache_to_ref() {
   local ref="${CACHE_TO:-}"
@@ -76,9 +93,11 @@ use_wrapped_boringcache_build() {
       ;;
     auto)
       if [[ "$buildkit_cache_backend" == "boringcache" ]]; then
+        [[ -n "$docker_tool_cache" ]] && return 0
         [[ -z "${CACHE_TO:-}" ]] && return 0
         return 1
       fi
+      [[ -n "$docker_tool_cache" ]] && return 0
       [[ -z "${CACHE_FROM:-}" && -z "${CACHE_TO:-}" ]] && return 0
       return 1
       ;;
@@ -87,6 +106,86 @@ use_wrapped_boringcache_build() {
       exit 1
       ;;
   esac
+}
+
+verify_posthog_turbo_tool_cache_contract() {
+  docker_tool_cache_enabled turbo || return 0
+
+  local dockerfile_path="${DOCKERFILE_PATH:-}"
+  local dockerfile="${repo_root}/${dockerfile_path}"
+  if [[ ! -f "$dockerfile" ]]; then
+    echo "Docker tool-cache turbo requested, but Dockerfile does not exist: ${dockerfile_path:-none}" >&2
+    exit 1
+  fi
+
+  if ! grep -q "boringcache-tool-cache-env" "$dockerfile"; then
+    echo "Docker tool-cache turbo requested, but ${dockerfile_path} does not declare the static boringcache-tool-cache-env secret mount." >&2
+    echo "Use scenarios/posthog-toolcache/Dockerfile or another committed Dockerfile with the stable tool-cache contract." >&2
+    exit 1
+  fi
+
+  echo "Verified BoringCache Turbo remote cache secret mounts in ${dockerfile_path}"
+}
+
+assert_turbo_remote_cache_used() {
+  docker_tool_cache_enabled turbo || return 0
+
+  if grep -q "Remote caching disabled" "$build_log"; then
+    capture_proxy_status
+    write_build_metrics
+    write_build_diagnostics
+    echo "Turbo tool-cache was requested, but Turbo reported remote caching disabled." >&2
+    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env" "$build_log" | tail -n 120 >&2 || true
+    exit 1
+  fi
+
+  if ! grep -q "Remote caching enabled" "$build_log"; then
+    if turbo_tool_cache_layers_restored_from_docker_cache; then
+      echo "Turbo tool-cache was requested; Turbo RUN layers were restored from Docker cache before Turbo executed."
+      return 0
+    fi
+
+    capture_proxy_status
+    write_build_metrics
+    write_build_diagnostics
+    echo "Turbo tool-cache was requested, but the build log did not show Turbo remote caching enabled." >&2
+    grep -E "bin/turbo|Remote caching|TURBO_|boringcache-tool-cache-env" "$build_log" | tail -n 120 >&2 || true
+    exit 1
+  fi
+}
+
+turbo_tool_cache_layers_restored_from_docker_cache() {
+  local frontend_step=""
+  local plugin_step=""
+  local line
+
+  while IFS= read -r line; do
+    [[ "$line" == *"RUN "* ]] || continue
+    [[ "$line" == *"boringcache-tool-cache-env"* ]] || continue
+    [[ "$line" == *"bin/turbo"* ]] || continue
+    [[ "$line" =~ ^#([0-9]+)[[:space:]] ]] || continue
+
+    if [[ "$line" == *"@posthog/frontend build"* ]]; then
+      frontend_step="${BASH_REMATCH[1]}"
+    elif [[ "$line" == *"@posthog/plugin-transpiler build"* ]]; then
+      plugin_step="${BASH_REMATCH[1]}"
+    fi
+  done < "$build_log"
+
+  [[ -n "$frontend_step" && -n "$plugin_step" ]] || return 1
+  turbo_tool_cache_step_restored_from_docker_cache "$frontend_step" &&
+    turbo_tool_cache_step_restored_from_docker_cache "$plugin_step"
+}
+
+turbo_tool_cache_step_restored_from_docker_cache() {
+  local step_id="$1"
+
+  if grep -qE "^#${step_id} CACHED$" "$build_log"; then
+    return 0
+  fi
+
+  grep -qE "^#${step_id} (sha256:|extracting )" "$build_log" &&
+    ! grep -qE "^#${step_id} [0-9]+(\\.[0-9]+)?[[:space:]]" "$build_log"
 }
 
 ensure_proxy_available() {
@@ -330,6 +429,9 @@ write_build_metrics() {
     write_prewarm_duration buildkit_cache_prewarm_body_wait_max_seconds body_wait_max
     write_prewarm_pair buildkit_cache_prewarm_workers_current buildkit_cache_prewarm_workers_max workers
   fi
+  if [[ -n "$docker_tool_cache" ]]; then
+    echo "docker_tool_cache=${docker_tool_cache}" >> "$output_path"
+  fi
   if [[ -n "$buildkit_mountcache_offloader" ]]; then
     echo "buildkit_mountcache_offloader=${buildkit_mountcache_offloader}" >> "$output_path"
   fi
@@ -501,6 +603,7 @@ write_build_diagnostics() {
     echo "effective_cache_to=${effective_cache_to}"
     echo "cache_export_type=${cache_export_type}"
     echo "registry_proxy_tags=${BORINGCACHE_REGISTRY_PROXY_TAGS:-}"
+    echo "docker_tool_cache=${docker_tool_cache}"
     printf 'cache_args='
     if [[ "${cache_args[*]-}" != "" ]]; then
       printf '%q ' "${cache_args[@]}"
@@ -569,6 +672,20 @@ run_wrapped_boringcache_build() {
     --fail-on-cache-error
   )
 
+  if [[ -n "$docker_tool_cache" && "${BORINGCACHE_DOCKER_TOOL_CACHE_ON_DEMAND:-false}" == "true" ]]; then
+    boringcache_args+=(--on-demand)
+  fi
+
+  if [[ -n "$docker_tool_cache" ]]; then
+    local tool_cache_value
+    local resolved_tool_cache_value
+    for tool_cache_value in ${docker_tool_cache//,/ }; do
+      [[ -n "$tool_cache_value" ]] || continue
+      resolved_tool_cache_value="$(resolve_docker_tool_cache_value "$tool_cache_value")"
+      boringcache_args+=(--tool-cache "$resolved_tool_cache_value")
+    done
+  fi
+
   if [[ "$mode" == "partial-warm" ]]; then
     boringcache_args+=(--read-only)
   fi
@@ -610,6 +727,7 @@ run_wrapped_boringcache_build() {
 
 
 attempt=1
+verify_posthog_turbo_tool_cache_contract
 while true; do
   cache_args=()
   extra_args=()
@@ -700,6 +818,7 @@ while true; do
   fi
 
   if [[ "$status" -eq 0 ]]; then
+    assert_turbo_remote_cache_used
     import_status="$(build_import_status)"
     if [[ "$mode" == "partial-warm" && "$import_status" != "ok" ]]; then
       capture_proxy_status

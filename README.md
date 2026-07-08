@@ -48,10 +48,11 @@ offload.
 Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not
 blocked by Docker Hub anonymous pull limits.
-The GitHub Actions workflow runs a Depot-shaped dual-platform Docker build on an
-amd64 host: `linux/arm64,linux/amd64`. Benchmark IDs and cache scopes use a
-generic `dual-` prefix so Docker layer and tool-cache tags stay shared across
-the multi-platform build instead of splitting into architecture-specific tags.
+The GitHub Actions workflow keeps the historical amd64 product lane matrix and
+adds a Depot-shaped dual-platform Docker path on an amd64 host:
+`linux/arm64,linux/amd64`. The additive dual path uses a generic `dual-` prefix
+so Docker layer and tool-cache tags stay shared across the multi-platform build
+instead of splitting into architecture-specific tags.
 
 Rolling runs record the upstream commit build as-is after upstream sync against the stable rolling cache tags. They do not run a separate `warm1` follow-up.
 

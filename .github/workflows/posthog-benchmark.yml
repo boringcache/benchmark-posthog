@@ -93,6 +93,11 @@ jobs:
       fail-fast: false
       matrix:
         platform:
+          - label: amd64
+            runner_label: ubuntu-latest
+            cli_platform: linux-amd64
+            docker_platform: linux/amd64
+            benchmark_id_prefix: ""
           - label: dual
             runner_label: ubuntu-latest
             cli_platform: linux-amd64

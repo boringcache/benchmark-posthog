@@ -56,6 +56,11 @@ on:
       image_tag:
         required: true
         type: string
+      docker_platform:
+        description: 'Optional Docker Buildx platform, for example linux/amd64 or linux/arm64.'
+        required: false
+        type: string
+        default: ''
       cli_platform:
         required: false
         type: string
@@ -102,6 +107,7 @@ env:
   BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
   BORINGCACHE_OCI_HYDRATION: ${{ inputs.oci_hydration }}
   BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+  DOCKER_PLATFORM: ${{ inputs.docker_platform }}
 
 jobs:
   benchmark:
@@ -312,6 +318,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          docker_platform_args=()
+          if [[ -n "${DOCKER_PLATFORM:-}" ]]; then
+            docker_platform_args=(--platform "$DOCKER_PLATFORM")
+          fi
+          docker_build_extra_args=""
+          if ((${#docker_platform_args[@]})); then
+            docker_build_extra_args="$(printf '%s\n' "${docker_platform_args[@]}")"
+          fi
 
           if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
             metrics_file="${RUNNER_TEMP}/cold-build-metrics.env"
@@ -335,7 +349,7 @@ jobs:
             start="$(date +%s)"
             set +e
             benchmark_script="./scripts/run-boringcache-buildkit-benchmark.sh"
-            BENCHMARK_METRICS_OUTPUT="$metrics_file" BENCHMARK_DIAGNOSTICS_OUTPUT="$diagnostics_file" "$benchmark_script" ${{ inputs.cache_lane == 'rolling' && 'full' || 'seed-cache' }}
+            BENCHMARK_METRICS_OUTPUT="$metrics_file" BENCHMARK_DIAGNOSTICS_OUTPUT="$diagnostics_file" DOCKER_BUILD_EXTRA_ARGS="$docker_build_extra_args" "$benchmark_script" ${{ inputs.cache_lane == 'rolling' && 'full' || 'seed-cache' }}
             status="$?"
             set -e
             end="$(date +%s)"
@@ -399,6 +413,7 @@ jobs:
                 --file ${{ inputs.dockerfile_path }} \
                 --tag ${{ inputs.image_tag }} \
                 --progress=plain \
+                "${docker_platform_args[@]}" \
                 "${build_cache_args[@]}" \
                 ${{ inputs.docker_context }} 2>&1 | tee "$build_log"
               status=${PIPESTATUS[0]}
@@ -561,6 +576,14 @@ jobs:
           BENCHMARK_DOCKER_CONTEXT: ${{ inputs.docker_context }}
         run: |
           set -euo pipefail
+          docker_platform_args=()
+          if [[ -n "${DOCKER_PLATFORM:-}" ]]; then
+            docker_platform_args=(--platform "$DOCKER_PLATFORM")
+          fi
+          docker_build_extra_args=""
+          if ((${#docker_platform_args[@]})); then
+            docker_build_extra_args="$(printf '%s\n' "${docker_platform_args[@]}")"
+          fi
 
           if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
             metrics_file="${RUNNER_TEMP}/warm-build-metrics.env"
@@ -577,7 +600,7 @@ jobs:
             start="$(date +%s)"
             set +e
             benchmark_script="./scripts/run-boringcache-buildkit-benchmark.sh"
-            BENCHMARK_METRICS_OUTPUT="$metrics_file" "$benchmark_script" partial-warm
+            BENCHMARK_METRICS_OUTPUT="$metrics_file" DOCKER_BUILD_EXTRA_ARGS="$docker_build_extra_args" "$benchmark_script" partial-warm
             status="$?"
             set -e
             end="$(date +%s)"
@@ -615,6 +638,7 @@ jobs:
                 --file ${{ inputs.dockerfile_path }} \
                 --tag ${{ inputs.image_tag }} \
                 --progress=plain \
+                "${docker_platform_args[@]}" \
                 --cache-from "type=gha,scope=${CACHE_SCOPE}" \
                 ${{ inputs.docker_context }} 2>&1 | tee "$build_log"
               status=${PIPESTATUS[0]}

@@ -32,10 +32,10 @@ on:
           - all
           - buildkit
       runner_label:
-        description: "GitHub Actions runner label for benchmark jobs."
+        description: "Optional GitHub Actions runner label override. Empty uses the benchmark platform defaults."
         required: false
         type: string
-        default: ubuntu-latest
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -59,7 +59,7 @@ jobs:
           BENCHMARK_ID_SUFFIX: ${{ inputs.benchmark_id_suffix || vars.POSTHOG_CANARY_BENCHMARK_ID_SUFFIX || '-canary' }}
           UPSTREAM_REF: ${{ inputs.upstream_ref }}
           LANE_FILTER: ${{ inputs.lane_filter || 'all' }}
-          RUNNER_LABEL: ${{ inputs.runner_label || 'ubuntu-latest' }}
+          RUNNER_LABEL: ${{ inputs.runner_label }}
         run: |
           set -euo pipefail
 
@@ -69,18 +69,24 @@ jobs:
 
             local release_repo="${BORINGCACHE_CLI_RELEASE_REPOSITORY:-boringcache/cli}"
             local max_attempts="${BORINGCACHE_CLI_RELEASE_WAIT_ATTEMPTS:-60}"
-            local attempt assets
+            local attempt assets asset missing_assets
             for attempt in $(seq 1 "$max_attempts"); do
               assets="$(gh release view "$cli_version" --repo "$release_repo" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-              if grep -Fxq boringcache-linux-amd64 <<< "$assets" && grep -Fxq SHA256SUMS <<< "$assets"; then
+              missing_assets=()
+              for asset in boringcache-linux-amd64 boringcache-linux-arm64 SHA256SUMS; do
+                if ! grep -Fxq "$asset" <<< "$assets"; then
+                  missing_assets+=("$asset")
+                fi
+              done
+              if ((${#missing_assets[@]} == 0)); then
                 echo "Found ${release_repo}@${cli_version} canary assets."
                 return 0
               fi
-              echo "::notice::Waiting for ${release_repo}@${cli_version} boringcache-linux-amd64 and SHA256SUMS (${attempt}/${max_attempts})"
+              echo "::notice::Waiting for ${release_repo}@${cli_version} assets: ${missing_assets[*]} (${attempt}/${max_attempts})"
               sleep 10
             done
 
-            echo "::error::Timed out waiting for ${release_repo}@${cli_version} boringcache-linux-amd64 and SHA256SUMS." >&2
+            echo "::error::Timed out waiting for ${release_repo}@${cli_version} linux amd64/arm64 assets and SHA256SUMS." >&2
             exit 1
           }
 
@@ -91,8 +97,10 @@ jobs:
             -f "prewarm_buildkit_image=${PREWARM_BUILDKIT_IMAGE}"
             -f "benchmark_id_suffix=${BENCHMARK_ID_SUFFIX}"
             -f "lane_filter=${LANE_FILTER}"
-            -f "runner_label=${RUNNER_LABEL}"
           )
+          if [[ -n "$RUNNER_LABEL" ]]; then
+            args+=(-f "runner_label=${RUNNER_LABEL}")
+          fi
           if [[ -n "$UPSTREAM_REF" ]]; then
             args+=(-f "upstream_ref=${UPSTREAM_REF}")
           fi

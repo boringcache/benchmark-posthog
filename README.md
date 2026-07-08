@@ -14,15 +14,16 @@ This repo exists separately from [`boringcache/benchmarks`](https://github.com/b
 - Upstream app source lives in the pinned `upstream/` submodule.
 - Plain Docker cache lanes use the pinned upstream `upstream/Dockerfile`
   directly with `upstream/` as the build context.
-- The BuildKit backend lane uses `scenarios/posthog-toolcache/Dockerfile`,
-  which is the pinned upstream Dockerfile plus static
-  `boringcache-tool-cache-env` secret mounts around the two Turbo build steps.
-  That lets Turbo use the BoringCache remote-cache protocol inside the Docker
-  build without preserving `.turbo/cache` as a whole directory archive.
+- The BuildKit backend lane uses the pinned upstream `upstream/Dockerfile`
+  with native BoringCache BuildKit mountcache offload enabled for the upstream
+  cache mounts such as `pnpm` and `uv`.
 - The benchmark-only `scenarios/posthog-turbo-cache-mounts.patch` patch is kept
   for targeted mountcache experiments, but it is not part of the default rolling
   BuildKit lane. Turbo's local cache grows as a task-output store, so preserving
   it as a whole cache-mount archive can make every future restore slower.
+- `scenarios/posthog-toolcache/Dockerfile` remains available for explicit Turbo
+  toolcache experiments, but the default BuildKit lane does not use the local
+  Dockerfile fixture.
 - `scripts/prepare-source.sh` only resets the upstream checkout and applies named benchmark scenarios.
 
 Pinned upstream source:
@@ -39,9 +40,9 @@ Fresh runs use the scenario set:
 BoringCache lanes are split so product capabilities are visible instead of
 mixed into one number: `BC OCI` and `BC BuildKit Backend`. Treat `BC BuildKit
 Backend` as the current fast lane for the headline rolling signal: it uses the
-managed BuildKit backend for layer cache bodies plus the Turbo toolcache bridge
-inside the Dockerfile. Turbo's local task cache stays out of BuildKit
-cache-mount archive offload.
+managed BuildKit backend for layer cache bodies plus native cache-mount
+offload against the upstream Dockerfile. Turbo's local task cache stays out of
+BuildKit cache-mount archive offload.
 Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not
 blocked by Docker Hub anonymous pull limits.

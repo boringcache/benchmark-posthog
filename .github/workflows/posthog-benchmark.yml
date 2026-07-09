@@ -98,11 +98,6 @@ jobs:
             cli_platform: linux-amd64
             docker_platform: linux/amd64
             benchmark_id_prefix: ""
-          - label: dual
-            runner_label: ubuntu-latest
-            cli_platform: linux-amd64
-            docker_platform: linux/arm64,linux/amd64
-            benchmark_id_prefix: dual-
         lane:
           - label: GHA
             strategy: actions-cache
@@ -156,6 +151,27 @@ jobs:
             lane_filter: buildkit
             run_on_pull_request: false
             requires_buildkit_image: true
+        include:
+          - platform:
+              label: dual
+              runner_label: ubuntu-latest
+              cli_platform: linux-amd64
+              docker_platform: linux/arm64,linux/amd64
+              benchmark_id_prefix: dual-
+            lane:
+              label: BC BuildKit Backend
+              strategy: boringcache
+              artifact_strategy: ""
+              buildkit_backend: registry
+              buildkit_cache_backend: boringcache
+              benchmark_id: posthog-bc-buildkit-mountcache
+              dockerfile_path: upstream/Dockerfile
+              docker_tool_cache: turbo
+              buildkit_mountcache_offloader: true
+              turbo_cache_mounts: false
+              lane_filter: buildkit
+              run_on_pull_request: false
+              requires_buildkit_image: true
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}

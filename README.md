@@ -49,10 +49,12 @@ Benchmark-created BuildKit daemons default to the public mirror
 `mirror.gcr.io/moby/buildkit:buildx-stable-1` so release measurements are not
 blocked by Docker Hub anonymous pull limits.
 The GitHub Actions workflow keeps the historical amd64 product lane matrix and
-adds one Depot-shaped dual-platform BuildKit backend path on an amd64 host:
-`linux/arm64,linux/amd64`. The additive dual path uses a generic `dual-` prefix
-so Docker layer and tool-cache tags stay shared across the multi-platform build
-instead of splitting into architecture-specific tags.
+adds two BuildKit-backend-only platform probes: a Depot-shaped dual-platform
+path on an amd64 host (`linux/arm64,linux/amd64`) and a native arm64 path on
+`ubuntu-24.04-arm`. The dual path uses a generic `dual-` prefix so Docker layer
+and tool-cache tags stay shared across the multi-platform build instead of
+splitting into architecture-specific tags; the native arm path uses an `arm-`
+prefix so it does not disturb the historical amd64 rolling scope.
 
 Rolling runs record the upstream commit build as-is after upstream sync against the stable rolling cache tags. They do not run a separate `warm1` follow-up.
 

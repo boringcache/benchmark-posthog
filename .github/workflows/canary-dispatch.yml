@@ -63,34 +63,32 @@ jobs:
         run: |
           set -euo pipefail
 
-          wait_for_cli_release() {
+          check_cli_release_assets() {
             local cli_version="$1"
             [[ -n "$cli_version" ]] || return 0
 
             local release_repo="${BORINGCACHE_CLI_RELEASE_REPOSITORY:-boringcache/cli}"
-            local max_attempts="${BORINGCACHE_CLI_RELEASE_WAIT_ATTEMPTS:-60}"
-            local attempt assets asset missing_assets
-            for attempt in $(seq 1 "$max_attempts"); do
-              assets="$(gh release view "$cli_version" --repo "$release_repo" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-              missing_assets=()
-              for asset in boringcache-linux-amd64 SHA256SUMS; do
-                if ! grep -Fxq "$asset" <<< "$assets"; then
-                  missing_assets+=("$asset")
-                fi
-              done
-              if ((${#missing_assets[@]} == 0)); then
-                echo "Found ${release_repo}@${cli_version} canary assets."
-                return 0
+            local assets asset missing_assets=()
+            assets="$(gh release view "$cli_version" --repo "$release_repo" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+
+            for asset in boringcache-linux-amd64 boringcache-linux-arm64 SHA256SUMS; do
+              if ! grep -Fxq "$asset" <<< "$assets"; then
+                missing_assets+=("$asset")
               fi
-              echo "::notice::Waiting for ${release_repo}@${cli_version} assets: ${missing_assets[*]} (${attempt}/${max_attempts})"
-              sleep 10
             done
 
-            echo "::error::Timed out waiting for ${release_repo}@${cli_version} linux amd64 asset and SHA256SUMS." >&2
-            exit 1
+            if ((${#missing_assets[@]})); then
+              echo "::notice::Skipping PostHog canary dispatch; ${release_repo}@${cli_version} is missing required amd64/arm64 matrix assets: ${missing_assets[*]}"
+              return 1
+            fi
+
+            echo "Found ${release_repo}@${cli_version} amd64/arm64 canary assets."
+            return 0
           }
 
-          wait_for_cli_release "$CLI_VERSION"
+          if ! check_cli_release_assets "$CLI_VERSION"; then
+            exit 0
+          fi
 
           args=(
             -f "cli_version=${CLI_VERSION}"

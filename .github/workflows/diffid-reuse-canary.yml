@@ -1,0 +1,78 @@
+name: "DiffID Reuse Canary"
+run-name: >-
+  ${{ format('DiffID Reuse Canary | {0}', github.event.head_commit.message) }}
+
+on:
+  push:
+    branches:
+      - diffid-reuse-canary
+
+concurrency:
+  group: diffid-reuse-canary
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+  id-token: write
+  packages: read
+
+jobs:
+  docker-benchmark:
+    name: ${{ matrix.lane.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - label: BK baseline
+            buildkit_image: ghcr.io/boringcache/buildkit:latest
+            benchmark_id_suffix: -diffid-base
+          - label: BK diffid-reuse
+            buildkit_image: ghcr.io/boringcache/buildkit:canary-diffid-reuse
+            benchmark_id_suffix: -diffid-reuse
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+      BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
+      BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
+    steps:
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Free disk space
+        shell: bash
+        run: ./scripts/free-runner-disk.sh
+
+      - name: ${{ matrix.lane.label }}
+        uses: ./.github/actions/docker-rolling-benchmark
+        env:
+          BORINGCACHE_OCI_DEMAND_PREFETCH: "false"
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: "1"
+        with:
+          strategy: boringcache
+          artifact_strategy: ""
+          buildkit_backend: registry
+          buildkit_cache_backend: boringcache
+          buildkit_mountcache_offloader: true
+          build_mode: full
+          cache_scope_ref_slug: ""
+          turbo_cache_mounts: "false"
+          buildkit_image: ${{ matrix.lane.buildkit_image }}
+          benchmark_id: ${{ format('posthog-bc-buildkit-mountcache{0}', matrix.lane.benchmark_id_suffix) }}
+          docker_platform: linux/amd64
+          project_repo: PostHog/posthog
+          project_ref: ""
+          dockerfile_path: upstream/Dockerfile
+          docker_context: upstream
+          image_tag: posthog-benchmark:latest
+          cli_version: v1.13.92
+          cli_platform: linux-amd64
+          benchmark_workspace: ${{ github.repository }}
+          docker_tool_cache: turbo

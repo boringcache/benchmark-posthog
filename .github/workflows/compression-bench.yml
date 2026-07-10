@@ -1,0 +1,85 @@
+name: "Compression Bench (state sync codecs)"
+
+# Measures compress/decompress CPU and wall cost of candidate codecs for
+# raw-state generation sync, on REAL PostHog bytes (docker save of the
+# posthog image: python site-packages, node_modules, compiled binaries).
+# Throughput is per-byte, so results extrapolate linearly to a ~30GB state.
+
+on:
+  push:
+    branches:
+      - compression-bench
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /opt/hostedtoolcache /usr/local/lib/android /usr/share/dotnet || true
+          df -h / | tail -1
+
+      - name: Install codecs
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q zstd lz4 pigz
+          zstd --version; lz4 --version; pigz --version; nproc
+
+      - name: Build real-bytes corpus from posthog image
+        run: |
+          docker pull -q posthog/posthog:latest
+          docker save posthog/posthog:latest -o /tmp/state.tar
+          ls -l --block-size=M /tmp/state.tar
+          df -h / | tail -1
+
+      - name: Run codec bench
+        run: |
+          set -euo pipefail
+          SRC=/tmp/state.tar
+          BYTES=$(stat -c%s "$SRC")
+          GB=$(python3 -c "print(f'{$BYTES/1e9:.2f}')")
+          echo "COMPBENCH corpus_bytes=$BYTES (${GB}GB) cores=$(nproc)"
+
+          bench() {
+            local name="$1" ccmd="$2" dcmd="$3" out=/tmp/out.bin
+            sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null
+            local t0=$(date +%s.%N)
+            local cstats
+            cstats=$( { /usr/bin/time -f "%U %S" sh -c "$ccmd < $SRC > $out"; } 2>&1 | tail -1 )
+            local t1=$(date +%s.%N)
+            local csize=$(stat -c%s $out)
+            sync; echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null
+            local t2=$(date +%s.%N)
+            local dstats
+            dstats=$( { /usr/bin/time -f "%U %S" sh -c "$dcmd < $out > /dev/null"; } 2>&1 | tail -1 )
+            local t3=$(date +%s.%N)
+            rm -f $out
+            python3 - "$name" "$BYTES" "$csize" "$t0" "$t1" "$t2" "$t3" "$cstats" "$dstats" <<'PY'
+          import sys
+          name, b, cs, t0, t1, t2, t3 = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), *map(float, sys.argv[4:8])
+          cu, csys = map(float, sys.argv[8].split())
+          du, dsys = map(float, sys.argv[9].split())
+          cwall, dwall = t1 - t0, t3 - t2
+          ccpu, dcpu = cu + csys, du + dsys
+          print(f"COMPBENCH codec={name} ratio={b/cs:.2f} size_mb={cs/1e6:.0f} "
+                f"c_wall_s={cwall:.1f} c_cpu_s={ccpu:.1f} c_mbps={b/1e6/cwall:.0f} c_cpu_mbps={b/1e6/max(ccpu,0.01):.0f} "
+                f"d_wall_s={dwall:.1f} d_cpu_s={dcpu:.1f} d_mbps={b/1e6/dwall:.0f} "
+                f"per30gb_c_cpu_s={ccpu*30e9/b:.0f} per30gb_d_wall_s={dwall*30e9/b:.0f} per30gb_size_gb={cs*30/b:.1f}")
+          PY
+          }
+
+          bench "lz4-1"        "lz4 -1 -c"          "lz4 -d -c"
+          if lz4 --help 2>&1 | grep -q -- "-T#"; then
+            bench "lz4-1-mt"   "lz4 -1 -c -T0"      "lz4 -d -c"
+          else
+            echo "COMPBENCH codec=lz4-1-mt skipped (lz4 CLI lacks -T; single-thread only)"
+          fi
+          bench "zstd-1"       "zstd -1 -c -T1"     "zstd -d -c -T1"
+          bench "zstd-1-mt"    "zstd -1 -c -T0"     "zstd -d -c"
+          bench "zstd-3-mt"    "zstd -3 -c -T0"     "zstd -d -c"
+          bench "zstd--fast=4" "zstd --fast=4 -c -T0" "zstd -d -c"
+          bench "pigz-6"       "pigz -6 -c"         "pigz -d -c"
+
+      - name: Summary
+        run: echo "grep COMPBENCH in the bench step for the table" >> "$GITHUB_STEP_SUMMARY"

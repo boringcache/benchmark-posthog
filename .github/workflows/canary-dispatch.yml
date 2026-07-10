@@ -31,6 +31,15 @@ on:
         options:
           - all
           - buildkit
+      platform_filter:
+        description: "Platform filter for the canary comparison."
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - amd64
+          - arm64
       runner_label:
         description: "Optional GitHub Actions runner label override. Empty uses the benchmark platform defaults."
         required: false
@@ -59,6 +68,7 @@ jobs:
           BENCHMARK_ID_SUFFIX: ${{ inputs.benchmark_id_suffix || vars.POSTHOG_CANARY_BENCHMARK_ID_SUFFIX || '-canary' }}
           UPSTREAM_REF: ${{ inputs.upstream_ref }}
           LANE_FILTER: ${{ inputs.lane_filter || 'all' }}
+          PLATFORM_FILTER: ${{ inputs.platform_filter || 'all' }}
           RUNNER_LABEL: ${{ inputs.runner_label }}
         run: |
           set -euo pipefail
@@ -68,21 +78,33 @@ jobs:
             [[ -n "$cli_version" ]] || return 0
 
             local release_repo="${BORINGCACHE_CLI_RELEASE_REPOSITORY:-boringcache/cli}"
-            local assets asset missing_assets=()
+            local assets asset missing_assets=() required_assets=(SHA256SUMS)
             assets="$(gh release view "$cli_version" --repo "$release_repo" --json assets --jq '.assets[].name' 2>/dev/null || true)"
 
-            for asset in boringcache-linux-amd64 boringcache-linux-arm64 SHA256SUMS; do
+            case "${PLATFORM_FILTER}" in
+              amd64)
+                required_assets+=(boringcache-linux-amd64)
+                ;;
+              arm64)
+                required_assets+=(boringcache-linux-arm64)
+                ;;
+              *)
+                required_assets+=(boringcache-linux-amd64 boringcache-linux-arm64)
+                ;;
+            esac
+
+            for asset in "${required_assets[@]}"; do
               if ! grep -Fxq "$asset" <<< "$assets"; then
                 missing_assets+=("$asset")
               fi
             done
 
             if ((${#missing_assets[@]})); then
-              echo "::notice::Skipping PostHog canary dispatch; ${release_repo}@${cli_version} is missing required amd64/arm64 matrix assets: ${missing_assets[*]}"
+              echo "::notice::Skipping PostHog canary dispatch; ${release_repo}@${cli_version} is missing required assets for platform_filter=${PLATFORM_FILTER}: ${missing_assets[*]}"
               return 1
             fi
 
-            echo "Found ${release_repo}@${cli_version} amd64/arm64 canary assets."
+            echo "Found ${release_repo}@${cli_version} canary assets for platform_filter=${PLATFORM_FILTER}."
             return 0
           }
 
@@ -95,6 +117,7 @@ jobs:
             -f "prewarm_buildkit_image=${PREWARM_BUILDKIT_IMAGE}"
             -f "benchmark_id_suffix=${BENCHMARK_ID_SUFFIX}"
             -f "lane_filter=${LANE_FILTER}"
+            -f "platform_filter=${PLATFORM_FILTER}"
           )
           if [[ -n "$RUNNER_LABEL" ]]; then
             args+=(-f "runner_label=${RUNNER_LABEL}")

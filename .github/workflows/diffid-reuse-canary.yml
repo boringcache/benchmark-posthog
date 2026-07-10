@@ -1,6 +1,6 @@
 name: "DiffID Reuse Canary"
 run-name: >-
-  ${{ format('DiffID Reuse Canary | {0}', github.event.head_commit.message) }}
+  ${{ format('DiffID Reuse Canary | {0}', github.sha) }}
 
 on:
   push:

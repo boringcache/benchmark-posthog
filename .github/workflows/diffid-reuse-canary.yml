@@ -50,6 +50,17 @@ jobs:
         shell: bash
         run: ./scripts/free-runner-disk.sh
 
+      - name: Resolve upstream ref
+        id: upstream
+        shell: bash
+        run: |
+          ref=""
+          if [[ -f .diffid-upstream-ref ]]; then
+            ref="$(tr -d '[:space:]' < .diffid-upstream-ref)"
+          fi
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "Upstream ref override: '${ref:-<pinned submodule>}'"
+
       - name: ${{ matrix.lane.label }}
         uses: ./.github/actions/docker-rolling-benchmark
         env:
@@ -68,7 +79,7 @@ jobs:
           benchmark_id: ${{ format('posthog-bc-buildkit-mountcache{0}', matrix.lane.benchmark_id_suffix) }}
           docker_platform: linux/amd64
           project_repo: PostHog/posthog
-          project_ref: ""
+          project_ref: ${{ steps.upstream.outputs.ref }}
           dockerfile_path: upstream/Dockerfile
           docker_context: upstream
           image_tag: posthog-benchmark:latest

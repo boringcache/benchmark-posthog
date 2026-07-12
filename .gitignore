@@ -6,3 +6,6 @@ benchmark-storage/
 boringbuild/
 boringcache-linux-musl-amd64.local
 config/*.local.yml
+
+# Claude Code agent worktree/tooling state
+.claude/

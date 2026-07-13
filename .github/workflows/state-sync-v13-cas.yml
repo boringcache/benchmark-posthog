@@ -32,7 +32,7 @@ on:
           - linux-amd64
           - linux-arm64
       buildkit_image:
-        description: "Exact managed image: ghcr.io/boringcache/buildkit@sha256:<64 lowercase hex>."
+        description: "Exact managed image index: ghcr.io/boringcache/buildkit@sha256:<64 lowercase hex>."
         required: true
         type: string
       api_origin:
@@ -291,6 +291,7 @@ jobs:
         env:
           BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           EXPECTED_DIGEST: ${{ steps.inputs.outputs.image_digest }}
+          EXPECTED_PLATFORM: ${{ steps.inputs.outputs.docker_platform }}
         run: |
           set -euo pipefail
           docker buildx version
@@ -301,7 +302,11 @@ jobs:
             echo "BuildKit manifest digest mismatch: expected ${EXPECTED_DIGEST}, got ${resolved_digest:-missing}" >&2
             exit 1
           }
+          selected_digest="$(./scripts/verify-buildkit-image-index.sh \
+            "$CANARY_ARTIFACT_DIR/buildkit-image-manifest.json" \
+            "$EXPECTED_PLATFORM")"
           printf '%s\n' "$resolved_digest" > "$CANARY_ARTIFACT_DIR/buildkit-image-manifest.sha256"
+          printf '%s\n' "$selected_digest" > "$CANARY_ARTIFACT_DIR/buildkit-image-platform-manifest.sha256"
 
       - name: Checkout exact PostHog source
         id: source
@@ -532,8 +537,8 @@ jobs:
             fi
             echo
             if [[ -s "$result" ]]; then
-              echo "| Phase | Result | Restore | Head fetches | Wall | State overhead | Cached | Logical set | Transport delta | Pruned | OCI semantics | Builder destroyed |"
-              echo "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|---:|"
+              echo "| Phase | Result | Restore | Head fetches | Wall | State overhead | Cached | Logical set | Transport delta | Pruned | Builder destroyed |"
+              echo "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|"
               jq -r '.phases[] | [
                 .phase,
                 (if .success then "pass" else "fail" end),
@@ -545,7 +550,6 @@ jobs:
                 ((.state.logical_generation_blobs | tostring) + " / " + (.state.logical_generation_bytes / 1048576 | floor | tostring) + " MiB"),
                 ((.state.transport_delta_blobs | tostring) + " / " + (.state.transport_delta_bytes / 1048576 | floor | tostring) + " MiB"),
                 ((.state.pruned_records | tostring) + " / " + (.state.pruned_bytes / 1048576 | floor | tostring) + " MiB"),
-                (if .oci.semantic_sha256 == null then "missing" else .oci.semantic_sha256[0:16] end),
                 (if .checks.managed_builder_destroyed then "yes" else "no" end)
               ] | "| " + join(" | ") + " |"' "$result"
               echo
@@ -554,7 +558,7 @@ jobs:
               elif .current_set.growth == null then
                 "Current-set replacement: \(.current_set.current_set_replacement); current head only: \(.current_set.only_current_head_fetched)."
               else
-                "Current-set replacement: \(.current_set.current_set_replacement); same-ref plateau: \(.current_set.same_ref_plateau) (\(.current_set.growth.tolerance_percent)% tolerance, \(.current_set.growth.logical_blob_delta) blobs, \(.current_set.growth.logical_byte_delta) bytes); solver reuse: \(.current_set.same_ref_solver_reuse); OCI semantics equal: \(.current_set.same_ref_oci_semantics_equal)."
+                "Current-set replacement: \(.current_set.current_set_replacement); same-ref plateau: \(.current_set.same_ref_plateau) (\(.current_set.growth.tolerance_percent)% tolerance, \(.current_set.growth.logical_blob_delta) blobs, \(.current_set.growth.logical_byte_delta) bytes); solver reuse: \(.current_set.same_ref_solver_reuse)."
               end' "$result"
             else
               echo "The runner stopped before it could write a phase result. Inspect the uploaded diagnostics."

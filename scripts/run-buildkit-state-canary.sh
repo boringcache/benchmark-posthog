@@ -213,9 +213,19 @@ snapshot_managed_resources > "$baseline_resources"
 write_combined_result() {
   local result="$artifact_dir/canary-result.json"
   local phase_files=()
-  while IFS= read -r path; do
-    phase_files+=("$path")
-  done < <(find "$artifact_dir" -maxdepth 1 -name '*.phase.json' -type f | LC_ALL=C sort)
+  local path
+  if [[ "$lane" == "fresh" ]]; then
+    for path in \
+      "$artifact_dir/cold.phase.json" \
+      "$artifact_dir/same-ref-warm.phase.json" \
+      "$artifact_dir/same-ref-repeat.phase.json"; do
+      [[ -f "$path" ]] && phase_files+=("$path")
+    done
+  else
+    while IFS= read -r path; do
+      phase_files+=("$path")
+    done < <(find "$artifact_dir" -maxdepth 1 -name '*.phase.json' -type f | LC_ALL=C sort)
+  fi
 
   if ((${#phase_files[@]} == 0)); then
     jq -n \
@@ -237,32 +247,51 @@ write_combined_result() {
     | (if $lane == "fresh" then
         ($base.phases | map(select(.phase == "cold"))[0]) as $cold
         | ($base.phases | map(select(.phase == "same-ref-warm"))[0]) as $warm
-        | (($warm.state.logical_generation_blobs // 0) - ($cold.state.logical_generation_blobs // 0)) as $blob_delta
-        | (($warm.state.logical_generation_bytes // 0) - ($cold.state.logical_generation_bytes // 0)) as $byte_delta
-        | (($blob_delta | if . < 0 then -. else . end) <= (((($cold.state.logical_generation_blobs // 0) * $tolerance / 100)) | ceil)) as $blob_plateau
-        | (($byte_delta | if . < 0 then -. else . end) <= (((($cold.state.logical_generation_bytes // 0) * $tolerance / 100)) | ceil)) as $byte_plateau
+        | ($base.phases | map(select(.phase == "same-ref-repeat"))[0]) as $repeat
+        | (($warm.state.logical_generation_blobs // 0) - ($cold.state.logical_generation_blobs // 0)) as $bootstrap_blob_delta
+        | (($warm.state.logical_generation_bytes // 0) - ($cold.state.logical_generation_bytes // 0)) as $bootstrap_byte_delta
+        | (($repeat.state.logical_generation_blobs // 0) - ($warm.state.logical_generation_blobs // 0)) as $plateau_blob_delta
+        | (($repeat.state.logical_generation_bytes // 0) - ($warm.state.logical_generation_bytes // 0)) as $plateau_byte_delta
+        | ($bootstrap_blob_delta <= (((($cold.state.logical_generation_blobs // 0) * $tolerance / 100)) | ceil)) as $bootstrap_blob_growth_bounded
+        | ($bootstrap_byte_delta <= (((($cold.state.logical_generation_bytes // 0) * $tolerance / 100)) | ceil)) as $bootstrap_byte_growth_bounded
+        | (($plateau_blob_delta | if . < 0 then -. else . end) <= (((($warm.state.logical_generation_blobs // 0) * $tolerance / 100)) | ceil)) as $blob_plateau
+        | (($plateau_byte_delta | if . < 0 then -. else . end) <= (((($warm.state.logical_generation_bytes // 0) * $tolerance / 100)) | ceil)) as $byte_plateau
+        | ($warm.cached_steps > $cold.cached_steps and $warm.executed_steps < $cold.executed_steps) as $first_warm_solver_reuse
+        | ($repeat.cached_steps > $cold.cached_steps and $repeat.executed_steps < $cold.executed_steps) as $repeat_solver_reuse
         | {
             current_set_replacement: (
               $cold != null
               and $warm != null
+              and $repeat != null
               and $cold.state.logical_generation_blobs > 0
               and $cold.state.logical_generation_bytes > 0
               and $warm.state.parent_generation == $cold.state.generation
               and $warm.state.restored_generation == $cold.state.generation
               and $warm.state.head_generations_fetched == 1
+              and $repeat.state.parent_generation == $warm.state.generation
+              and $repeat.state.restored_generation == $warm.state.generation
+              and $repeat.state.head_generations_fetched == 1
+              and $bootstrap_blob_growth_bounded
+              and $bootstrap_byte_growth_bounded
               and $blob_plateau
               and $byte_plateau
             ),
-            only_current_head_fetched: ($warm.state.head_generations_fetched == 1),
-            same_ref_plateau: ($blob_plateau and $byte_plateau),
-            same_ref_solver_reuse: (
-              $warm.cached_steps > $cold.cached_steps
-              and $warm.executed_steps < $cold.executed_steps
+            only_current_head_fetched: (
+              $warm.state.head_generations_fetched == 1
+              and $repeat.state.head_generations_fetched == 1
             ),
+            same_ref_plateau: ($blob_plateau and $byte_plateau),
+            same_ref_solver_reuse: ($first_warm_solver_reuse and $repeat_solver_reuse),
+            same_ref_first_warm_solver_reuse: $first_warm_solver_reuse,
+            same_ref_repeat_solver_reuse: $repeat_solver_reuse,
             growth: {
               tolerance_percent: $tolerance,
-              logical_blob_delta: $blob_delta,
-              logical_byte_delta: $byte_delta,
+              bootstrap_logical_blob_delta: $bootstrap_blob_delta,
+              bootstrap_logical_byte_delta: $bootstrap_byte_delta,
+              bootstrap_blob_growth_within_tolerance: $bootstrap_blob_growth_bounded,
+              bootstrap_bytes_growth_within_tolerance: $bootstrap_byte_growth_bounded,
+              logical_blob_delta: $plateau_blob_delta,
+              logical_byte_delta: $plateau_byte_delta,
               blob_count_within_tolerance: $blob_plateau,
               bytes_within_tolerance: $byte_plateau
             }
@@ -652,8 +681,11 @@ run_phase() {
 if [[ "$lane" == "fresh" ]]; then
   run_phase cold cold base "$source_sha" cold
   # Each state invocation owns and removes its builder, daemon, network, and
-  # volume. The second phase therefore proves remote restore into a new root.
+  # volume. The second phase proves remote restore into a new root. A cold
+  # bootstrap can legitimately contract after its transient refs are pruned,
+  # so the third phase proves the converged same-ref current set plateaus.
   run_phase same-ref-warm warm warm1 "$source_sha" same-ref
+  run_phase same-ref-repeat warm2 warm1 "$source_sha" same-ref
 elif [[ "$lane" == "rolling" ]]; then
   run_phase rolling commit base "$source_sha" rolling
 else

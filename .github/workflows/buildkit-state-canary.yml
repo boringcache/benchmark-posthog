@@ -1,0 +1,588 @@
+name: "Maintainer BuildKit State Canary"
+run-name: >-
+  ${{ format('BuildKit state canary | {0} | {1} | {2}', inputs.cache_lane, inputs.cli_release_tag, inputs.runner_label) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      cache_lane:
+        description: "Fresh, rolling, or immutable 11-generation replay (all commits or endpoints only)."
+        required: true
+        type: choice
+        default: fresh
+        options:
+          - fresh
+          - rolling
+          - replay-full
+          - replay-endpoints
+      cli_release_tag:
+        description: "Exact unique release tag in boringcache/cli."
+        required: true
+        type: string
+      cli_asset_sha256:
+        description: "Expected SHA256 of the selected CLI release asset (independent of SHA256SUMS)."
+        required: true
+        type: string
+      cli_platform:
+        description: "CLI asset and native runner architecture."
+        required: true
+        type: choice
+        default: linux-amd64
+        options:
+          - linux-amd64
+          - linux-arm64
+      buildkit_image:
+        description: "Exact managed image: ghcr.io/boringcache/buildkit@sha256:<64 lowercase hex>."
+        required: true
+        type: string
+      api_origin:
+        description: "Exact BoringCache API origin (HTTPS, no path or trailing slash)."
+        required: true
+        type: string
+        default: https://api.boringcache.com
+      posthog_source:
+        description: "Fresh/rolling: optional exact SHA. Replay: exactly 11 comma-separated first-parent SHAs from base through target."
+        required: false
+        type: string
+        default: ""
+      rolling_scope:
+        description: "Stable source stream name used only by the rolling tag."
+        required: false
+        type: string
+        default: main
+      plateau_tolerance_percent:
+        description: "Provisional same-ref logical generation growth tolerance."
+        required: true
+        type: choice
+        default: "2"
+        options:
+          - "1"
+          - "2"
+          - "5"
+      runner_label:
+        description: "Maintainer-selected native runner label."
+        required: true
+        type: string
+        default: ubuntu-latest
+
+concurrency:
+  group: ${{ format('buildkit-state-canary-{0}-{1}-{2}', inputs.cache_lane, inputs.rolling_scope, inputs.cli_platform) }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  canary:
+    name: ${{ format('{0} {1}', inputs.cache_lane, inputs.cli_platform) }}
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 240
+    env:
+      BORINGCACHE_API_URL: ${{ inputs.api_origin }}
+      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+      BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
+      BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
+    steps:
+      - name: Checkout benchmark harness
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Validate canary harness
+        shell: bash
+        run: ./scripts/check-buildkit-state-canary.sh
+
+      - name: Validate maintainer inputs and secrets
+        id: inputs
+        shell: bash
+        env:
+          CLI_RELEASE_TAG: ${{ inputs.cli_release_tag }}
+          CLI_ASSET_SHA256: ${{ inputs.cli_asset_sha256 }}
+          CLI_PLATFORM: ${{ inputs.cli_platform }}
+          BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+          API_ORIGIN: ${{ inputs.api_origin }}
+          POSTHOG_SOURCE: ${{ inputs.posthog_source }}
+          CACHE_LANE: ${{ inputs.cache_lane }}
+          ROLLING_SCOPE: ${{ inputs.rolling_scope }}
+        run: |
+          set -euo pipefail
+          canary_artifact_dir="$RUNNER_TEMP/buildkit-state-canary"
+          mkdir -p "$canary_artifact_dir"
+          echo "CANARY_ARTIFACT_DIR=${canary_artifact_dir}" >> "$GITHUB_ENV"
+
+          [[ -n "$CLI_RELEASE_TAG" && ! "$CLI_RELEASE_TAG" =~ [[:space:]] ]] || {
+            echo "cli_release_tag must be one exact tag without whitespace" >&2
+            exit 1
+          }
+          case "$CLI_RELEASE_TAG" in
+            latest|canary|vcli-canary)
+              echo "cli_release_tag must be unique; mutable aliases such as ${CLI_RELEASE_TAG} are refused" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$CLI_ASSET_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "cli_asset_sha256 must be 64 lowercase hexadecimal characters" >&2
+            exit 1
+          }
+          [[ "$BUILDKIT_IMAGE" =~ ^ghcr\.io/boringcache/buildkit@sha256:[0-9a-f]{64}$ ]] || {
+            echo "buildkit_image must be an exact ghcr.io/boringcache/buildkit@sha256 digest" >&2
+            exit 1
+          }
+          [[ "$API_ORIGIN" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || {
+            echo "api_origin must be an exact HTTPS origin without a path or trailing slash" >&2
+            exit 1
+          }
+          [[ -n "$BORINGCACHE_RESTORE_TOKEN" ]] || {
+            echo "Missing BORINGCACHE_RESTORE_TOKEN" >&2
+            exit 1
+          }
+          [[ -n "$BORINGCACHE_SAVE_TOKEN" ]] || {
+            echo "Missing BORINGCACHE_SAVE_TOKEN" >&2
+            exit 1
+          }
+          [[ -n "$BORINGCACHE_GHCR_READ_TOKEN" ]] || {
+            echo "Missing BORINGCACHE_GHCR_READ_TOKEN" >&2
+            exit 1
+          }
+
+          case "${CLI_PLATFORM}:${RUNNER_ARCH}" in
+            linux-amd64:X64)
+              cli_asset=boringcache-linux-amd64
+              docker_platform=linux/amd64
+              ;;
+            linux-arm64:ARM64)
+              cli_asset=boringcache-linux-arm64
+              docker_platform=linux/arm64
+              ;;
+            *)
+              echo "cli_platform ${CLI_PLATFORM} does not match native runner architecture ${RUNNER_ARCH}" >&2
+              exit 1
+              ;;
+          esac
+
+          rolling_slug="$(printf '%s' "$ROLLING_SCOPE" | tr -c 'A-Za-z0-9._-' '-')"
+          rolling_slug="${rolling_slug#-}"
+          rolling_slug="${rolling_slug%-}"
+          [[ -n "$rolling_slug" ]] || {
+            echo "rolling_scope must contain at least one tag-safe character" >&2
+            exit 1
+          }
+
+          image_digest="${BUILDKIT_IMAGE##*@}"
+          image_key="${image_digest#sha256:}"
+          platform_key="${CLI_PLATFORM#linux-}"
+          case "$CACHE_LANE" in
+            fresh)
+              cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-fresh-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+              ;;
+            rolling)
+              cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-rolling-${rolling_slug}"
+              ;;
+            replay-full|replay-endpoints)
+              cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-${CACHE_LANE}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+              ;;
+            *)
+              echo "Unsupported cache lane: ${CACHE_LANE}" >&2
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "cli_asset=${cli_asset}"
+            echo "docker_platform=${docker_platform}"
+            echo "cache_tag=${cache_tag}"
+            echo "image_digest=${image_digest}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install exact BoringCache CLI release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLI_RELEASE_TAG: ${{ inputs.cli_release_tag }}
+          CLI_ASSET: ${{ steps.inputs.outputs.cli_asset }}
+          EXPECTED_SHA256: ${{ inputs.cli_asset_sha256 }}
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/boringcache-state-cli"
+          mkdir -p "$install_dir" "$RUNNER_TEMP/bin"
+
+          gh release view "$CLI_RELEASE_TAG" \
+            --repo boringcache/cli \
+            --json tagName,targetCommitish,publishedAt,url,assets \
+            > "$CANARY_ARTIFACT_DIR/cli-release.json"
+
+          asset_count="$(jq --arg name "$CLI_ASSET" '[.assets[] | select(.name == $name)] | length' "$CANARY_ARTIFACT_DIR/cli-release.json")"
+          sums_count="$(jq '[.assets[] | select(.name == "SHA256SUMS")] | length' "$CANARY_ARTIFACT_DIR/cli-release.json")"
+          [[ "$asset_count" -eq 1 && "$sums_count" -eq 1 ]] || {
+            echo "Release must contain exactly one ${CLI_ASSET} and one SHA256SUMS asset" >&2
+            exit 1
+          }
+
+          gh release download "$CLI_RELEASE_TAG" \
+            --repo boringcache/cli \
+            --pattern "$CLI_ASSET" \
+            --pattern SHA256SUMS \
+            --dir "$install_dir"
+
+          release_sha256="$(awk -v asset="$CLI_ASSET" '$2 == asset || $2 == "*" asset { print $1 }' "$install_dir/SHA256SUMS")"
+          [[ "$release_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "SHA256SUMS has no unique lowercase digest for ${CLI_ASSET}" >&2
+            exit 1
+          }
+          actual_sha256="$(sha256sum "$install_dir/$CLI_ASSET" | awk '{print $1}')"
+          [[ "$actual_sha256" == "$release_sha256" ]] || {
+            echo "CLI asset does not match release SHA256SUMS" >&2
+            exit 1
+          }
+          [[ "$actual_sha256" == "$EXPECTED_SHA256" ]] || {
+            echo "CLI asset digest mismatch: expected ${EXPECTED_SHA256}, got ${actual_sha256}" >&2
+            exit 1
+          }
+
+          install -m 0755 "$install_dir/$CLI_ASSET" "$RUNNER_TEMP/bin/boringcache"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          printf '%s  %s\n' "$actual_sha256" "$CLI_ASSET" > "$CANARY_ARTIFACT_DIR/cli-asset.sha256"
+
+      - name: Resolve verified CLI version
+        id: cli
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v boringcache
+          cli_version_output="$(boringcache --version)"
+          printf '%s\n' "$cli_version_output" | tee "$CANARY_ARTIFACT_DIR/cli-version.txt"
+          [[ "$cli_version_output" =~ ^boringcache[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?)$ ]] || {
+            echo "Installed CLI returned an unexpected --version value: ${cli_version_output}" >&2
+            exit 1
+          }
+          cli_version="${BASH_REMATCH[1]}"
+          echo "version=${cli_version}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$cli_version" > "$CANARY_ARTIFACT_DIR/cli-version.normalized.txt"
+
+      - name: Probe exact backend state capabilities
+        shell: bash
+        env:
+          BORINGCACHE_STATE_CANARY_API_ORIGIN: ${{ inputs.api_origin }}
+          BORINGCACHE_STATE_CANARY_LANE: ${{ inputs.cache_lane }}
+          BORINGCACHE_STATE_CANARY_CLI_RELEASE_TAG: ${{ inputs.cli_release_tag }}
+          BORINGCACHE_STATE_CANARY_CLI_VERSION: ${{ steps.cli.outputs.version }}
+          BORINGCACHE_STATE_CANARY_CLI_ASSET_SHA256: ${{ inputs.cli_asset_sha256 }}
+          BORINGCACHE_STATE_CANARY_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+          BORINGCACHE_STATE_CANARY_POSTHOG_SOURCE: ${{ inputs.posthog_source }}
+          BORINGCACHE_STATE_CANARY_ARTIFACT_DIR: ${{ runner.temp }}/buildkit-state-canary
+        run: ./scripts/preflight-buildkit-state-canary.sh
+
+      - name: Free runner disk
+        shell: bash
+        run: ./scripts/free-runner-disk.sh
+
+      - name: Log in to the managed image registry
+        uses: docker/login-action@v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ env.BORINGCACHE_GHCR_READ_USER }}
+          password: ${{ env.BORINGCACHE_GHCR_READ_TOKEN }}
+
+      - name: Verify exact BuildKit image manifest
+        shell: bash
+        env:
+          BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+          EXPECTED_DIGEST: ${{ steps.inputs.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          docker buildx version
+          docker buildx imagetools inspect "$BUILDKIT_IMAGE" > "$CANARY_ARTIFACT_DIR/buildkit-image-inspect.txt"
+          docker buildx imagetools inspect --raw "$BUILDKIT_IMAGE" > "$CANARY_ARTIFACT_DIR/buildkit-image-manifest.json"
+          resolved_digest="$(sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64})$/\1/p' "$CANARY_ARTIFACT_DIR/buildkit-image-inspect.txt" | head -n1)"
+          [[ "$resolved_digest" == "$EXPECTED_DIGEST" ]] || {
+            echo "BuildKit manifest digest mismatch: expected ${EXPECTED_DIGEST}, got ${resolved_digest:-missing}" >&2
+            exit 1
+          }
+          printf '%s\n' "$resolved_digest" > "$CANARY_ARTIFACT_DIR/buildkit-image-manifest.sha256"
+
+      - name: Checkout exact PostHog source
+        id: source
+        shell: bash
+        env:
+          CACHE_LANE: ${{ inputs.cache_lane }}
+          POSTHOG_SOURCE: ${{ inputs.posthog_source }}
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+
+          source_base=""
+          selected_generation_count=1
+          if [[ "$CACHE_LANE" == replay-full || "$CACHE_LANE" == replay-endpoints ]]; then
+            IFS=',' read -r -a replay_commits <<< "$POSTHOG_SOURCE"
+            ((${#replay_commits[@]} == 11)) || {
+              echo "Replay requires exactly 11 ordered commit SHAs (base HEAD~10 through target)" >&2
+              exit 1
+            }
+
+            declare -A seen_commits=()
+            previous=""
+            for commit in "${replay_commits[@]}"; do
+              [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || {
+                echo "Replay commit is not an exact lowercase SHA: ${commit}" >&2
+                exit 1
+              }
+              [[ -z "${seen_commits[$commit]:-}" ]] || {
+                echo "Replay commit is duplicated: ${commit}" >&2
+                exit 1
+              }
+              seen_commits[$commit]=1
+
+              git -C upstream -c protocol.version=2 fetch --no-tags --depth 1 origin "$commit"
+              [[ "$(git -C upstream rev-parse FETCH_HEAD)" == "$commit" ]] || {
+                echo "PostHog fetch did not resolve exact replay commit ${commit}" >&2
+                exit 1
+              }
+              git -C upstream cat-file -e "${commit}^{commit}"
+
+              if [[ -n "$previous" ]]; then
+                commit_object="$(git -C upstream cat-file -p "$commit")"
+                first_parent=""
+                while read -r object_field object_value _; do
+                  if [[ "$object_field" == parent ]]; then
+                    first_parent="$object_value"
+                    break
+                  fi
+                done <<< "$commit_object"
+                [[ "$first_parent" == "$previous" ]] || {
+                  echo "Replay sequence is not first-parent ordered: ${previous} is not the first parent of ${commit}" >&2
+                  exit 1
+                }
+              fi
+              previous="$commit"
+            done
+
+            source_base="${replay_commits[0]}"
+            source_sha="${replay_commits[10]}"
+            if [[ "$CACHE_LANE" == replay-full ]]; then
+              selected_commits=("${replay_commits[@]}")
+            else
+              selected_commits=("$source_base" "$source_sha")
+            fi
+            selected_generation_count="${#selected_commits[@]}"
+
+            all_commits_json="$(printf '%s\n' "${replay_commits[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+            selected_commits_json="$(printf '%s\n' "${selected_commits[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+            jq -n \
+              --arg schema_version "buildkit-state-canary-replay-plan.v1" \
+              --arg mode "$CACHE_LANE" \
+              --arg base_sha "$source_base" \
+              --arg target_sha "$source_sha" \
+              --argjson all_commits "$all_commits_json" \
+              --argjson selected_commits "$selected_commits_json" \
+              '{
+                schema_version: $schema_version,
+                mode: $mode,
+                base_sha: $base_sha,
+                target_sha: $target_sha,
+                all_commits: $all_commits,
+                selected_commits: $selected_commits
+              }' > "$CANARY_ARTIFACT_DIR/replay-plan.json"
+            git -C upstream checkout --detach "${selected_commits[0]}"
+          else
+            if [[ -n "$POSTHOG_SOURCE" ]]; then
+              [[ "$POSTHOG_SOURCE" =~ ^[0-9a-f]{40}$ ]] || {
+                echo "posthog_source must be an exact 40-character lowercase commit" >&2
+                exit 1
+              }
+              git -C upstream -c protocol.version=2 fetch --no-tags --depth 1 origin "$POSTHOG_SOURCE"
+              [[ "$(git -C upstream rev-parse FETCH_HEAD)" == "$POSTHOG_SOURCE" ]] || {
+                echo "PostHog fetch did not resolve exact commit ${POSTHOG_SOURCE}" >&2
+                exit 1
+              }
+              git -C upstream checkout --detach "$POSTHOG_SOURCE"
+            fi
+            source_sha="$(git -C upstream rev-parse HEAD)"
+            if [[ -n "$POSTHOG_SOURCE" && "$source_sha" != "$POSTHOG_SOURCE" ]]; then
+              echo "PostHog checkout mismatch: expected ${POSTHOG_SOURCE}, got ${source_sha}" >&2
+              exit 1
+            fi
+            source_base="$source_sha"
+          fi
+
+          {
+            echo "source_sha=${source_sha}"
+            echo "source_base=${source_base}"
+            echo "selected_generation_count=${selected_generation_count}"
+          } >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$source_sha" > "$CANARY_ARTIFACT_DIR/posthog-source.sha"
+          ./scripts/prepare-source.sh base
+
+      - name: Enforce complete pre-build checklist
+        shell: bash
+        env:
+          EXPECTED_CLI_SHA256: ${{ inputs.cli_asset_sha256 }}
+          EXPECTED_CLI_VERSION: ${{ steps.cli.outputs.version }}
+          EXPECTED_IMAGE_DIGEST: ${{ steps.inputs.outputs.image_digest }}
+          EXPECTED_SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          CACHE_LANE: ${{ inputs.cache_lane }}
+        run: |
+          set -euo pipefail
+          cli_sha256="$(awk 'NR == 1 { print $1 }' "$CANARY_ARTIFACT_DIR/cli-asset.sha256")"
+          image_digest="$(head -n1 "$CANARY_ARTIFACT_DIR/buildkit-image-manifest.sha256")"
+          source_sha="$(head -n1 "$CANARY_ARTIFACT_DIR/posthog-source.sha")"
+          available_kib="$(df -Pk "$RUNNER_TEMP" | awk 'NR == 2 { print $4 }')"
+          available_bytes="$((available_kib * 1024))"
+          required_free_bytes="$((55 * 1024 * 1024 * 1024))"
+          if [[ "$CACHE_LANE" == replay-full ]]; then
+            required_free_bytes="$((80 * 1024 * 1024 * 1024))"
+          fi
+          runner_disk_capacity=false
+          if ((available_bytes >= required_free_bytes)); then
+            runner_disk_capacity=true
+          fi
+          replay_plan_valid=true
+          if [[ "$CACHE_LANE" == replay-full || "$CACHE_LANE" == replay-endpoints ]]; then
+            jq -e \
+              --arg mode "$CACHE_LANE" \
+              --arg target "$EXPECTED_SOURCE_SHA" \
+              '.schema_version == "buildkit-state-canary-replay-plan.v1"
+                and .mode == $mode
+                and .target_sha == $target
+                and (.all_commits | length) == 11
+                and (if $mode == "replay-full" then (.selected_commits | length) == 11 else (.selected_commits | length) == 2 end)' \
+              "$CANARY_ARTIFACT_DIR/replay-plan.json" >/dev/null || replay_plan_valid=false
+          fi
+
+          jq -n \
+            --slurpfile backend "$CANARY_ARTIFACT_DIR/preflight-backend.json" \
+            --arg cli_sha256 "$cli_sha256" \
+            --arg expected_cli_sha256 "$EXPECTED_CLI_SHA256" \
+            --arg cli_version "$EXPECTED_CLI_VERSION" \
+            --arg image_digest "$image_digest" \
+            --arg expected_image_digest "$EXPECTED_IMAGE_DIGEST" \
+            --arg source_sha "$source_sha" \
+            --arg expected_source_sha "$EXPECTED_SOURCE_SHA" \
+            --argjson available_bytes "$available_bytes" \
+            --argjson required_free_bytes "$required_free_bytes" \
+            --argjson runner_disk_capacity "$runner_disk_capacity" \
+            --argjson replay_plan_valid "$replay_plan_valid" '
+              {
+                schema_version: "buildkit-state-canary-preflight-complete.v1",
+                api_origin: $backend[0].api_origin,
+                state_contract: $backend[0].state_contract,
+                pins: {
+                  cli_asset_sha256: $cli_sha256,
+                  cli_version: $cli_version,
+                  buildkit_image_digest: $image_digest,
+                  posthog_target_sha: $source_sha,
+                  runner_available_bytes: $available_bytes,
+                  runner_required_free_bytes: $required_free_bytes
+                },
+                checks: {
+                  backend_capabilities: ($backend[0].all_passed == true),
+                  backend_user_agent_exact: ($backend[0].backend_probe.user_agent == ("BoringCache-CLI/" + $cli_version)),
+                  cli_asset_exact: ($cli_sha256 == $expected_cli_sha256),
+                  buildkit_image_exact: ($image_digest == $expected_image_digest),
+                  source_target_exact: ($source_sha == $expected_source_sha),
+                  replay_plan_exact: $replay_plan_valid,
+                  runner_disk_capacity: $runner_disk_capacity,
+                  required_state_layout_exact: ($backend[0].state_contract.required_layout == "buildkit-state-v1")
+                }
+              }
+              | .all_passed = all(.checks[]; . == true)
+            ' > "$CANARY_ARTIFACT_DIR/preflight-checklist.json"
+          jq -e '.all_passed == true' "$CANARY_ARTIFACT_DIR/preflight-checklist.json" >/dev/null
+
+      - name: Run CLI-first BuildKit state canary
+        shell: bash
+        env:
+          BORINGCACHE_STATE_CANARY_LANE: ${{ inputs.cache_lane }}
+          BORINGCACHE_STATE_CANARY_WORKSPACE: boringcache/benchmark-posthog
+          BORINGCACHE_STATE_CANARY_TAG: ${{ steps.inputs.outputs.cache_tag }}
+          BORINGCACHE_STATE_CANARY_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+          BORINGCACHE_STATE_CANARY_ARTIFACT_DIR: ${{ runner.temp }}/buildkit-state-canary
+          BORINGCACHE_STATE_CANARY_PLATFORM: ${{ steps.inputs.outputs.docker_platform }}
+          BORINGCACHE_STATE_CANARY_DOCKERFILE: upstream/Dockerfile
+          BORINGCACHE_STATE_CANARY_CONTEXT: upstream
+          BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT: ${{ inputs.plateau_tolerance_percent }}
+          BORINGCACHE_STATE_CANARY_REPLAY_PLAN: ${{ runner.temp }}/buildkit-state-canary/replay-plan.json
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: "0"
+        run: ./scripts/run-buildkit-state-canary.sh
+
+      - name: Render canary summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${CANARY_ARTIFACT_DIR:-$RUNNER_TEMP/buildkit-state-canary}"
+          mkdir -p "$artifact_dir"
+          result="$artifact_dir/canary-result.json"
+          {
+            echo "## BuildKit state canary"
+            echo
+            echo "- Lane: \`${{ inputs.cache_lane }}\`"
+            echo "- API origin: \`${{ inputs.api_origin }}\`"
+            echo "- CLI: \`${{ inputs.cli_release_tag }}\` / \`${{ steps.cli.outputs.version }}\` / \`${{ steps.inputs.outputs.cli_asset }}\`"
+            echo "- BuildKit: \`${{ inputs.buildkit_image }}\`"
+            echo "- PostHog base: \`${{ steps.source.outputs.source_base }}\`"
+            echo "- PostHog target: \`${{ steps.source.outputs.source_sha }}\`"
+            echo "- Measured generations: \`${{ steps.source.outputs.selected_generation_count }}\`"
+            echo "- State tag: \`${{ steps.inputs.outputs.cache_tag }}\`"
+            if [[ -s "$artifact_dir/preflight-checklist.json" ]]; then
+              echo "- Complete preflight: \`$(jq -r '.all_passed' "$artifact_dir/preflight-checklist.json")\`"
+            fi
+            echo
+            if [[ -s "$result" ]]; then
+              echo "| Phase | Result | Restore | Head fetches | Wall | State overhead | Cached | Logical set | Transport delta | Pruned | OCI semantics | Builder destroyed |"
+              echo "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|---:|"
+              jq -r '.phases[] | [
+                .phase,
+                (if .success then "pass" else "fail" end),
+                .state.restore_status,
+                (.state.head_generations_fetched | tostring),
+                (.phase_seconds | tostring) + "s",
+                (if .state.overhead_seconds == null then "n/a" else ((.state.overhead_seconds | tostring) + "s") end),
+                (.cached_steps | tostring),
+                ((.state.logical_generation_blobs | tostring) + " / " + (.state.logical_generation_bytes / 1048576 | floor | tostring) + " MiB"),
+                ((.state.transport_delta_blobs | tostring) + " / " + (.state.transport_delta_bytes / 1048576 | floor | tostring) + " MiB"),
+                ((.state.pruned_records | tostring) + " / " + (.state.pruned_bytes / 1048576 | floor | tostring) + " MiB"),
+                (if .oci.semantic_sha256 == null then "missing" else .oci.semantic_sha256[0:16] end),
+                (if .checks.managed_builder_destroyed then "yes" else "no" end)
+              ] | "| " + join(" | ") + " |"' "$result"
+              echo
+              jq -r 'if .current_set.replay != null then
+                "Replay continuity: \(.current_set.current_set_replacement); exact source sequence: \(.current_set.exact_source_sequence); current head only: \(.current_set.only_current_head_fetched); logical successors within \(.current_set.replay.tolerance_percent)%: \(.current_set.replay.all_successors_within_tolerance) (telemetry, not a cross-commit correctness gate)."
+              elif .current_set.growth == null then
+                "Current-set replacement: \(.current_set.current_set_replacement); current head only: \(.current_set.only_current_head_fetched)."
+              else
+                "Current-set replacement: \(.current_set.current_set_replacement); same-ref plateau: \(.current_set.same_ref_plateau) (\(.current_set.growth.tolerance_percent)% tolerance, \(.current_set.growth.logical_blob_delta) blobs, \(.current_set.growth.logical_byte_delta) bytes); solver reuse: \(.current_set.same_ref_solver_reuse); OCI semantics equal: \(.current_set.same_ref_oci_semantics_equal)."
+              end' "$result"
+            else
+              echo "The runner stopped before it could write a phase result. Inspect the uploaded diagnostics."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture final Docker inventory
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          artifact_dir="${CANARY_ARTIFACT_DIR:-$RUNNER_TEMP/buildkit-state-canary}"
+          mkdir -p "$artifact_dir"
+          {
+            docker ps -a
+            docker network ls
+            docker volume ls
+            docker buildx ls
+            docker system df
+            df -h /
+          } > "$artifact_dir/docker-final-inventory.txt" 2>&1
+
+      - name: Upload exact canary evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ format('buildkit-state-canary-{0}-{1}-r{2}-a{3}', inputs.cache_lane, inputs.cli_platform, github.run_id, github.run_attempt) }}
+          path: ${{ runner.temp }}/buildkit-state-canary
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

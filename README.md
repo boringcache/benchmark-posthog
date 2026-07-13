@@ -96,8 +96,8 @@ normalized `--version` value supplies the one exact
 client rather than inferring a version from the release tag.
 After benchmark-owned disk cleanup, the complete checklist also requires at
 least 80 GiB free for `replay-full` and 55 GiB for the shorter lanes. This
-accounts for the live state root, retained OCI evidence, and temporary OCI
-semantic extraction rather than discovering runner exhaustion mid-sequence.
+accounts for the live BuildKit root, direct state transfer, and normal Docker
+working space rather than discovering runner exhaustion mid-sequence.
 
 - `fresh` uses one run-unique state tag for a cold build followed by a
   same-ref restore into a newly created managed builder.
@@ -113,12 +113,24 @@ semantic extraction rather than discovering runner exhaustion mid-sequence.
   presented as evidence for every intermediate generation.
 
 The artifact contains `buildkit-state-summary.v1`, wrapper/build and daemon
-logs, observability JSONL, exact release/image/source provenance, a real OCI
-archive and canonical OCI semantic JSON per phase, transport counters,
-timings, and a managed-resource cleanup check for every phase. OCI semantics
-contain the image manifest/config digests, ordered layer descriptors, ordered
-diffIDs, platform, and runtime config. Fresh fails unless cold and same-ref
-semantics are byte-identical after canonicalization.
+logs, observability JSONL, exact release/image/source provenance, transport
+counters, timings, and a managed-resource cleanup check for every phase. The
+hosted product lane uses BuildKit's cache-only output so it measures the real
+state lifecycle without forcing a standalone OCI archive or timestamp rewrite.
+Cold-versus-restored image semantics remain covered by the small local product
+proof, where exporting both outputs is a cheap correctness regression rather
+than PostHog-scale benchmark work.
+
+Run [`29259506166`](https://github.com/boringcache/benchmark-posthog/actions/runs/29259506166)
+proved why this boundary matters. The old harness spent `133.1s` exporting
+layers, `144.9s` rewriting their timestamps, and `9.7s` writing the OCI tar.
+Its generated image-config body then remained in the raw content CAS even
+though it was absent from the retained main-namespace inventory, so the strict
+state inventory refused publication. Source tracing points to exporter/build
+history retention as the likely owner; the focused compatibility fix is to
+drain and discard excluded history before terminal GC and checkpointing. That
+run is exporter-compatibility evidence, not a state speed sample, and does not
+justify weakening retained-content checks.
 
 The canary requires explicit `save.logical_generation_blobs` and
 `save.logical_generation_bytes` summary fields and fails closed when they are
@@ -137,12 +149,11 @@ growth cannot be mistaken for state-generation growth.
 Replay artifacts add the exact source plan and, for every measured generation,
 the committed/restored/parent lineage, logical current-set bytes and blobs,
 delta and percent change from the previous measured generation, transport
-bytes and blobs, OCI semantic digest, and cleanup result. Cross-commit plateau
+bytes and blobs, and cleanup result. Cross-commit plateau
 is reported against the selected provisional tolerance for diagnosis; it is
 not a correctness failure because a real source change may legitimately alter
 the logical state size. Exact ordered source replay, one-head restore, CAS
-lineage continuity, state-summary validity, OCI validity, and cleanup remain
-hard gates.
+lineage continuity, state-summary validity, and cleanup remain hard gates.
 
 ## BoringBuild EC2 Shape Sweep
 

@@ -30,7 +30,6 @@ api_origin="$BORINGCACHE_API_URL"
 dockerfile_path="${BORINGCACHE_STATE_CANARY_DOCKERFILE:-upstream/Dockerfile}"
 docker_context="${BORINGCACHE_STATE_CANARY_CONTEXT:-upstream}"
 docker_platform="${BORINGCACHE_STATE_CANARY_PLATFORM:-linux/amd64}"
-image_tag_prefix="${BORINGCACHE_STATE_CANARY_IMAGE_TAG:-posthog-state-canary}"
 plateau_tolerance_percent="${BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT:-2}"
 replay_plan_path="${BORINGCACHE_STATE_CANARY_REPLAY_PLAN:-}"
 
@@ -60,146 +59,12 @@ if [[ "${BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER:-0}" =~ ^(1|true|yes|on)$ ]];
 fi
 export BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER=0
 
-for tool in boringcache docker git jq tar tee; do
+for tool in boringcache docker git jq tee; do
   command -v "$tool" >/dev/null || {
     echo "Required command is unavailable: ${tool}" >&2
     exit 2
   }
 done
-
-sha256_file() {
-  local path="$1"
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$path" | awk '{print $1}'
-  else
-    shasum -a 256 "$path" | awk '{print $1}'
-  fi
-}
-
-file_size() {
-  local path="$1"
-  if stat -c %s "$path" >/dev/null 2>&1; then
-    stat -c %s "$path"
-  else
-    stat -f %z "$path"
-  fi
-}
-
-extract_oci_semantics() (
-  set -euo pipefail
-  local archive="$1"
-  local output="$2"
-  local layout index_path manifest_digest manifest_hex manifest_path manifest_size
-  local config_digest config_hex config_path config_size digest size blob_path
-
-  [[ -s "$archive" ]] || {
-    echo "OCI output archive is missing: ${archive}" >&2
-    exit 1
-  }
-  layout="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/buildkit-state-oci.XXXXXX")"
-  trap 'rm -rf "$layout"' EXIT
-  tar -xf "$archive" -C "$layout"
-  index_path="$layout/index.json"
-  [[ -s "$index_path" ]] || {
-    echo "OCI output has no index.json: ${archive}" >&2
-    exit 1
-  }
-
-  manifest_digest="$(jq -r '
-    ([.manifests[] | select((.platform.os // "") != "unknown")][0].digest) //
-    .manifests[0].digest // empty
-  ' "$index_path")"
-  [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-    echo "OCI output has no canonical image manifest digest" >&2
-    exit 1
-  }
-  manifest_hex="${manifest_digest#sha256:}"
-  manifest_path="$layout/blobs/sha256/$manifest_hex"
-  [[ -s "$manifest_path" && "$(sha256_file "$manifest_path")" == "$manifest_hex" ]] || {
-    echo "OCI image manifest is missing or has the wrong digest" >&2
-    exit 1
-  }
-  manifest_size="$(jq -r --arg digest "$manifest_digest" '.manifests[] | select(.digest == $digest) | .size' "$index_path")"
-  [[ "$manifest_size" =~ ^[0-9]+$ && "$(file_size "$manifest_path")" == "$manifest_size" ]] || {
-    echo "OCI image manifest descriptor size is invalid" >&2
-    exit 1
-  }
-
-  config_digest="$(jq -r '.config.digest // empty' "$manifest_path")"
-  [[ "$config_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-    echo "OCI image manifest has no canonical config digest" >&2
-    exit 1
-  }
-  config_hex="${config_digest#sha256:}"
-  config_path="$layout/blobs/sha256/$config_hex"
-  [[ -s "$config_path" && "$(sha256_file "$config_path")" == "$config_hex" ]] || {
-    echo "OCI image config is missing or has the wrong digest" >&2
-    exit 1
-  }
-  config_size="$(jq -r '.config.size // empty' "$manifest_path")"
-  [[ "$config_size" =~ ^[0-9]+$ && "$(file_size "$config_path")" == "$config_size" ]] || {
-    echo "OCI image config descriptor size is invalid" >&2
-    exit 1
-  }
-
-  while IFS=$'\t' read -r digest size; do
-    [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ && "$size" =~ ^[0-9]+$ ]] || {
-      echo "OCI image has an invalid layer descriptor" >&2
-      exit 1
-    }
-    blob_path="$layout/blobs/sha256/${digest#sha256:}"
-    [[ -s "$blob_path" ]] || {
-      echo "OCI image is missing layer ${digest}" >&2
-      exit 1
-    }
-    [[ "$(sha256_file "$blob_path")" == "${digest#sha256:}" ]] || {
-      echo "OCI layer digest mismatch for ${digest}" >&2
-      exit 1
-    }
-    [[ "$(file_size "$blob_path")" == "$size" ]] || {
-      echo "OCI layer size mismatch for ${digest}" >&2
-      exit 1
-    }
-  done < <(jq -r '.layers[] | [.digest, .size] | @tsv' "$manifest_path")
-
-  jq -S -n \
-    --slurpfile manifest "$manifest_path" \
-    --slurpfile config "$config_path" \
-    --arg manifest_digest "$manifest_digest" \
-    --arg config_digest "$config_digest" '
-      {
-        image_manifest_digest: $manifest_digest,
-        config_digest: $config_digest,
-        platform: {
-          os: $config[0].os,
-          architecture: $config[0].architecture,
-          variant: ($config[0].variant // null)
-        },
-        layers: ($manifest[0].layers | map({
-          media_type: .mediaType,
-          digest: .digest,
-          size: .size
-        })),
-        diff_ids: $config[0].rootfs.diff_ids,
-        runtime: {
-          entrypoint: ($config[0].config.Entrypoint // null),
-          cmd: ($config[0].config.Cmd // null),
-          working_dir: ($config[0].config.WorkingDir // null),
-          env: ($config[0].config.Env // [])
-        }
-      }
-    ' > "$output"
-  jq -e '
-    (.image_manifest_digest | test("^sha256:[0-9a-f]{64}$"))
-    and (.config_digest | test("^sha256:[0-9a-f]{64}$"))
-    and (.layers | type == "array")
-    and (.diff_ids | type == "array")
-    and ((.layers | length) > 0)
-    and ((.layers | length) == (.diff_ids | length))
-    and all(.layers[]; (.digest | test("^sha256:[0-9a-f]{64}$")) and (.size > 0))
-    and all(.diff_ids[]; test("^sha256:[0-9a-f]{64}$"))
-  ' "$output" >/dev/null
-)
 
 mkdir -p "$artifact_dir"
 preflight_checklist="$artifact_dir/preflight-checklist.json"
@@ -355,7 +220,7 @@ write_combined_result() {
   if ((${#phase_files[@]} == 0)); then
     jq -n \
       --slurpfile inputs "$artifact_dir/inputs.json" \
-      '{schema_version: "buildkit-state-canary-result.v1", inputs: $inputs[0], success: false, phases: []}' \
+      '{schema_version: "buildkit-state-canary-result.v2", inputs: $inputs[0], success: false, phases: []}' \
       > "$result"
     return
   fi
@@ -394,10 +259,6 @@ write_combined_result() {
               $warm.cached_steps > $cold.cached_steps
               and $warm.executed_steps < $cold.executed_steps
             ),
-            same_ref_oci_semantics_equal: (
-              $cold.oci.semantic_sha256 != null
-              and $cold.oci.semantic_sha256 == $warm.oci.semantic_sha256
-            ),
             growth: {
               tolerance_percent: $tolerance,
               logical_blob_delta: $blob_delta,
@@ -425,7 +286,6 @@ write_combined_result() {
             only_current_head_fetched: ($rolling.checks.current_head_only),
             same_ref_plateau: null,
             same_ref_solver_reuse: null,
-            same_ref_oci_semantics_equal: null,
             growth: null
           }
       else
@@ -488,14 +348,6 @@ write_combined_result() {
               transport_delta: {
                 blobs: $phase.state.transport_delta_blobs,
                 bytes: $phase.state.transport_delta_bytes
-              },
-              oci: {
-                semantic_sha256: $phase.oci.semantic_sha256,
-                changed_from_previous: (
-                  if $previous == null then null
-                  else $phase.oci.semantic_sha256 != $previous.oci.semantic_sha256
-                  end
-                )
               }
             }
         ] as $generations
@@ -514,7 +366,6 @@ write_combined_result() {
             ),
             same_ref_plateau: null,
             same_ref_solver_reuse: null,
-            same_ref_oci_semantics_equal: null,
             growth: null,
             replay: {
               mode: $lane,
@@ -530,7 +381,7 @@ write_combined_result() {
           }
       end) as $current_set
     | {
-        schema_version: "buildkit-state-canary-result.v1",
+        schema_version: "buildkit-state-canary-result.v2",
         inputs: $inputs[0],
         success: (
           $base.all_phases_valid
@@ -538,7 +389,6 @@ write_combined_result() {
           and $current_set.only_current_head_fetched
           and ($current_set.exact_source_sequence != false)
           and ($current_set.same_ref_solver_reuse != false)
-          and ($current_set.same_ref_oci_semantics_equal != false)
         ),
         current_set: $current_set,
         phases: $base.phases
@@ -557,14 +407,9 @@ run_phase() {
   local daemon_log_path="$artifact_dir/${phase}.buildkitd.log"
   local observability_path="$artifact_dir/${phase}.observability.jsonl"
   local state_summary_path="$artifact_dir/${phase}.state-summary.json"
-  local oci_archive_path="$artifact_dir/${phase}.oci.tar"
-  local oci_semantics_path="$artifact_dir/${phase}.oci-semantics.json"
-  local oci_semantic_sha_path="$artifact_dir/${phase}.oci-semantic.sha256"
-  local oci_archive_sha_path="$artifact_dir/${phase}.oci-archive.sha256"
   local phase_result_path="$artifact_dir/${phase}.phase.json"
   local resources_after="$artifact_dir/${phase}.managed-resources.after.txt"
   local resources_leaked="$artifact_dir/${phase}.managed-resources.leaked.txt"
-  local phase_image_tag="${image_tag_prefix}:${phase}-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 
   git -C "$repo_root/upstream" checkout --detach "$expected_source_sha"
   "$repo_root/scripts/prepare-source.sh" "$source_scenario"
@@ -580,10 +425,6 @@ run_phase() {
     "$daemon_log_path" \
     "$observability_path" \
     "$state_summary_path" \
-    "$oci_archive_path" \
-    "$oci_semantics_path" \
-    "$oci_semantic_sha_path" \
-    "$oci_archive_sha_path" \
     "$phase_result_path" \
     "$resources_after" \
     "$resources_leaked"
@@ -611,34 +452,15 @@ run_phase() {
       -- \
       docker buildx build \
         --file "$dockerfile_path" \
-        --tag "$phase_image_tag" \
         --platform "$docker_platform" \
-        --build-arg SOURCE_DATE_EPOCH=0 \
         --progress plain \
-        --output "type=oci,dest=${oci_archive_path},rewrite-timestamp=true" \
+        --output type=cacheonly \
         "$docker_context" 2>&1 | tee "$log_path"
   command_statuses=("${PIPESTATUS[@]}")
   set -e
   command_status="${command_statuses[0]}"
   tee_status="${command_statuses[1]}"
   phase_finished="$(date +%s)"
-
-  local oci_valid oci_semantic_sha oci_archive_sha oci_archive_bytes oci_validation_started oci_validation_seconds
-  oci_valid=false
-  oci_semantic_sha=""
-  oci_archive_sha=""
-  oci_archive_bytes="0"
-  oci_validation_started="$(date +%s)"
-  if [[ "$command_status" -eq 0 && "$tee_status" -eq 0 ]] && \
-     extract_oci_semantics "$oci_archive_path" "$oci_semantics_path"; then
-    oci_semantic_sha="$(sha256_file "$oci_semantics_path")"
-    oci_archive_sha="$(sha256_file "$oci_archive_path")"
-    oci_archive_bytes="$(file_size "$oci_archive_path")"
-    printf '%s\n' "$oci_semantic_sha" > "$oci_semantic_sha_path"
-    printf '%s\n' "$oci_archive_sha" > "$oci_archive_sha_path"
-    oci_valid=true
-  fi
-  oci_validation_seconds="$(( $(date +%s) - oci_validation_started ))"
 
   snapshot_managed_resources > "$resources_after"
   comm -13 "$baseline_resources" "$resources_after" > "$resources_leaked"
@@ -745,12 +567,12 @@ run_phase() {
   esac
 
   success=false
-  if [[ "$command_status" -eq 0 && "$tee_status" -eq 0 && "$summary_valid" == true && "$cleanup_valid" == true && "$expectation_valid" == true && "$current_head_only" == true && "$oci_valid" == true ]]; then
+  if [[ "$command_status" -eq 0 && "$tee_status" -eq 0 && "$summary_valid" == true && "$cleanup_valid" == true && "$expectation_valid" == true && "$current_head_only" == true ]]; then
     success=true
   fi
 
   jq -n \
-    --arg schema_version "buildkit-state-canary-phase.v1" \
+    --arg schema_version "buildkit-state-canary-phase.v2" \
     --arg phase "$phase" \
     --arg metadata_phase "$metadata_phase" \
     --arg source_sha "$expected_source_sha" \
@@ -779,11 +601,6 @@ run_phase() {
     --argjson cleanup_valid "$cleanup_valid" \
     --argjson expectation_valid "$expectation_valid" \
     --argjson current_head_only "$current_head_only" \
-    --arg oci_semantic_sha "$oci_semantic_sha" \
-    --arg oci_archive_sha "$oci_archive_sha" \
-    --argjson oci_archive_bytes "$oci_archive_bytes" \
-    --argjson oci_validation_seconds "$oci_validation_seconds" \
-    --argjson oci_valid "$oci_valid" \
     --argjson success "$success" \
     '{
       schema_version: $schema_version,
@@ -818,13 +635,6 @@ run_phase() {
         managed_builder_destroyed: $cleanup_valid,
         phase_expectation_valid: $expectation_valid,
         current_head_only: $current_head_only
-      },
-      oci: {
-        valid: $oci_valid,
-        archive_sha256: (if $oci_archive_sha == "" then null else $oci_archive_sha end),
-        archive_bytes: $oci_archive_bytes,
-        validation_seconds: $oci_validation_seconds,
-        semantic_sha256: (if $oci_semantic_sha == "" then null else $oci_semantic_sha end)
       },
       success: $success
     }' > "$phase_result_path"

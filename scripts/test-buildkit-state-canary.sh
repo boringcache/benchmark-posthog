@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 runner="$repo_root/scripts/run-buildkit-state-canary.sh"
 preflight_runner="$repo_root/scripts/preflight-buildkit-state-canary.sh"
+image_index_verifier="$repo_root/scripts/verify-buildkit-image-index.sh"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/buildkit-state-canary-test.XXXXXX")"
 trap 'rm -rf "$test_root"' EXIT
 
@@ -15,6 +16,30 @@ rolling_parent="sha256:$(printf 'd%.0s' {1..64})"
 rolling_generation="sha256:$(printf 'e%.0s' {1..64})"
 mock_api_origin="https://api.example.test"
 MOCK_CURRENT_SHA="$source_sha"
+
+amd64_manifest="sha256:$(printf '8%.0s' {1..64})"
+arm64_manifest="sha256:$(printf '9%.0s' {1..64})"
+cat > "$test_root/image-index.json" <<JSON
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    {"digest": "$amd64_manifest", "platform": {"os": "linux", "architecture": "amd64"}},
+    {"digest": "$arm64_manifest", "platform": {"os": "linux", "architecture": "arm64"}}
+  ]
+}
+JSON
+[[ "$("$image_index_verifier" "$test_root/image-index.json" linux/amd64)" == "$amd64_manifest" ]]
+[[ "$("$image_index_verifier" "$test_root/image-index.json" linux/arm64)" == "$arm64_manifest" ]]
+if "$image_index_verifier" "$test_root/image-index.json" linux/s390x >/dev/null 2>&1; then
+  echo "Expected a missing platform to fail the image-index gate" >&2
+  exit 1
+fi
+printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}\n' > "$test_root/single-manifest.json"
+if "$image_index_verifier" "$test_root/single-manifest.json" linux/amd64 >/dev/null 2>&1; then
+  echo "Expected a single-manifest document to fail the image-index gate" >&2
+  exit 1
+fi
 
 git() {
   if [[ "$*" == *"cat-file -p "* ]]; then
@@ -44,88 +69,6 @@ docker() {
   return 0
 }
 
-portable_sha256() {
-  local path="$1"
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$path" | awk '{print $1}'
-  else
-    shasum -a 256 "$path" | awk '{print $1}'
-  fi
-}
-
-portable_size() {
-  local path="$1"
-  if stat -c %s "$path" >/dev/null 2>&1; then
-    stat -c %s "$path"
-  else
-    stat -f %z "$path"
-  fi
-}
-
-mock_oci_archive() {
-  local archive="$1"
-  local phase="$2"
-  local layout layer_source layer_hex layer_size config_source config_hex manifest_source manifest_hex
-  layout="$(mktemp -d "${TMPDIR:-/tmp}/state-canary-oci-mock.XXXXXX")"
-  mkdir -p "$layout/blobs/sha256"
-  printf '{"imageLayoutVersion":"1.0.0"}\n' > "$layout/oci-layout"
-
-  layer_source="$layout/layer"
-  if [[ "$phase" == rolling ]]; then
-    printf 'rolling layer\n' > "$layer_source"
-  else
-    printf 'same-ref layer\n' > "$layer_source"
-  fi
-  layer_hex="$(portable_sha256 "$layer_source")"
-  layer_size="$(portable_size "$layer_source")"
-  mv "$layer_source" "$layout/blobs/sha256/$layer_hex"
-
-  config_source="$layout/config"
-  command jq -S -n \
-    --arg diff_id "sha256:${layer_hex}" \
-    '{
-      architecture: "amd64",
-      os: "linux",
-      config: {Entrypoint: ["/entrypoint"], Cmd: ["start"], WorkingDir: "/app", Env: ["A=B"]},
-      rootfs: {type: "layers", diff_ids: [$diff_id]}
-    }' > "$config_source"
-  config_hex="$(portable_sha256 "$config_source")"
-  mv "$config_source" "$layout/blobs/sha256/$config_hex"
-
-  manifest_source="$layout/manifest"
-  command jq -S -n \
-    --arg config_digest "sha256:${config_hex}" \
-    --argjson config_size "$(portable_size "$layout/blobs/sha256/$config_hex")" \
-    --arg layer_digest "sha256:${layer_hex}" \
-    --argjson layer_size "$layer_size" \
-    '{
-      schemaVersion: 2,
-      mediaType: "application/vnd.oci.image.manifest.v1+json",
-      config: {mediaType: "application/vnd.oci.image.config.v1+json", digest: $config_digest, size: $config_size},
-      layers: [{mediaType: "application/vnd.oci.image.layer.v1.tar+gzip", digest: $layer_digest, size: $layer_size}]
-    }' > "$manifest_source"
-  manifest_hex="$(portable_sha256 "$manifest_source")"
-  mv "$manifest_source" "$layout/blobs/sha256/$manifest_hex"
-
-  command jq -S -n \
-    --arg manifest_digest "sha256:${manifest_hex}" \
-    --argjson manifest_size "$(portable_size "$layout/blobs/sha256/$manifest_hex")" \
-    '{
-      schemaVersion: 2,
-      mediaType: "application/vnd.oci.image.index.v1+json",
-      manifests: [{
-        mediaType: "application/vnd.oci.image.manifest.v1+json",
-        digest: $manifest_digest,
-        size: $manifest_size,
-        platform: {os: "linux", architecture: "amd64"}
-      }]
-    }' > "$layout/index.json"
-
-  mkdir -p "$(dirname "$archive")"
-  tar -cf "$archive" -C "$layout" .
-  rm -rf "$layout"
-}
-
 boringcache() {
   if [[ "${1:-}" == "--version" ]]; then
     echo "boringcache mock-state-canary"
@@ -133,7 +76,7 @@ boringcache() {
   fi
 
   local phase restore_status restored_generation parent generation logical_blobs logical_bytes
-  local transport_blobs transport_bytes archive arg
+  local transport_blobs transport_bytes saw_cacheonly arg
   case "$BORINGCACHE_STATE_SUMMARY_PATH" in
     *cold.state-summary.json)
       phase=cold
@@ -242,24 +185,14 @@ boringcache() {
         | .save.logical_generation_bytes = $logical_bytes
       else . end' > "$BORINGCACHE_STATE_SUMMARY_PATH"
 
-  archive=""
+  saw_cacheonly=0
   for arg in "$@"; do
-    case "$arg" in
-      type=oci,dest=*,rewrite-timestamp=true)
-        archive="${arg#*dest=}"
-        archive="${archive%%,*}"
-        ;;
-    esac
+    [[ "$arg" == type=cacheonly ]] && saw_cacheonly=1
   done
-  [[ -n "$archive" ]] || {
-    echo "Mock canary command omitted its OCI output" >&2
+  [[ "$saw_cacheonly" -eq 1 ]] || {
+    echo "Mock canary command omitted its cache-only product output" >&2
     return 1
   }
-  if [[ "$phase" == same-ref-warm && "${MOCK_WARM_OCI_DIFFERENT:-0}" == 1 ]]; then
-    mock_oci_archive "$archive" rolling
-  else
-    mock_oci_archive "$archive" "$phase"
-  fi
 
   printf 'mock daemon %s\n' "$phase" > "$BORINGCACHE_MANAGED_BUILDKIT_LOG_PATH"
   printf '{"phase":"%s"}\n' "$phase" > "$BORINGCACHE_OBSERVABILITY_JSONL_PATH"
@@ -272,7 +205,7 @@ boringcache() {
   fi
 }
 
-export -f git docker portable_sha256 portable_size mock_oci_archive boringcache
+export -f git docker boringcache
 export source_sha image_digest cold_generation warm_generation rolling_parent rolling_generation
 
 write_mock_preflight() {
@@ -370,17 +303,16 @@ run_mock() {
 fresh_dir="$test_root/fresh"
 run_mock fresh "$fresh_dir" >/dev/null
 command jq -e '
-  .success == true
+  .schema_version == "buildkit-state-canary-result.v2"
+  and .success == true
+  and all(.phases[]; .schema_version == "buildkit-state-canary-phase.v2")
   and .current_set.current_set_replacement == true
   and .current_set.same_ref_plateau == true
   and .current_set.same_ref_solver_reuse == true
-  and .current_set.same_ref_oci_semantics_equal == true
   and (.phases | length) == 2
   and (.phases[0].state.logical_generation_blobs > 0)
   and (.phases[1].state.parent_generation == .phases[0].state.generation)
   and (.phases[1].state.head_generations_fetched == 1)
-  and (.phases[0].oci.valid == true)
-  and (.phases[0].oci.semantic_sha256 == .phases[1].oci.semantic_sha256)
 ' "$fresh_dir/canary-result.json" >/dev/null
 
 rolling_dir="$test_root/rolling"
@@ -428,13 +360,6 @@ if MOCK_STATE_GROWTH_PERCENT=20 run_mock fresh "$growth_dir" >/dev/null 2>&1; th
   exit 1
 fi
 command jq -e '.success == false and .current_set.same_ref_plateau == false' "$growth_dir/canary-result.json" >/dev/null
-
-oci_mismatch_dir="$test_root/oci-mismatch-failure"
-if MOCK_WARM_OCI_DIFFERENT=1 run_mock fresh "$oci_mismatch_dir" >/dev/null 2>&1; then
-  echo "Expected changed same-ref OCI semantics to fail the canary" >&2
-  exit 1
-fi
-command jq -e '.success == false and .current_set.same_ref_oci_semantics_equal == false' "$oci_mismatch_dir/canary-result.json" >/dev/null
 
 schema_dir="$test_root/schema-failure"
 if MOCK_OMIT_LOGICAL_GENERATION=1 run_mock fresh "$schema_dir" >/dev/null 2>&1; then

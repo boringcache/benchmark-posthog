@@ -705,7 +705,7 @@ run_phase() {
   local finalize_seconds retention_policy content_gc_applied content_gc_duration_ms
   local records_before_gc records_after_gc content_gc_seconds
   local mount_cache_json tool_cache_json
-  local summary_valid tool_cache_valid cleanup_valid expectation_valid current_head_only success
+  local summary_valid mount_cache_valid tool_cache_valid cleanup_valid expectation_valid current_head_only success
   cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$log_path" || true)"
   executed_steps="$(grep -Ec '^#[0-9]+ DONE ([0-9]+([.][0-9]+)?)s$' "$log_path" || true)"
   state_overhead=""
@@ -736,6 +736,7 @@ run_phase() {
   tool_cache_json=null
   head_generations_fetched="0"
   summary_valid=false
+  mount_cache_valid=false
   tool_cache_valid=false
   cleanup_valid=false
   expectation_valid=false
@@ -744,7 +745,6 @@ run_phase() {
   if [[ -s "$state_summary_path" ]] && jq -e \
     --arg digest "$buildkit_digest" \
     --arg platform "$docker_platform" \
-    --arg composition_mode "$composition_mode" \
     '.schema_version == "buildkit-state-summary.v2"
       and .compatibility.image_digest == $digest
       and .compatibility.platform == $platform
@@ -785,18 +785,7 @@ run_phase() {
       and (.save.uploaded_bytes | type == "number")
       and .save.uploaded_bytes >= 0
       and (.total_state_overhead_seconds | type == "number")
-      and .total_state_overhead_seconds >= 0
-      and (if $composition_mode == "fixture" then
-             .mount_cache.enabled == true
-             and .mount_cache.runtime_status == "recorded"
-             and .mount_cache.hydrate_errors == 0
-             and .mount_cache.publish_errors == 0
-             and .mount_cache.generation_archives == .mount_cache.selected_archives
-           else
-             .mount_cache.enabled == false
-             and .mount_cache.runtime_status == "disabled"
-             and .mount_cache.generation_archives == 0
-           end)' \
+      and .total_state_overhead_seconds >= 0' \
     "$state_summary_path" >/dev/null; then
     summary_valid=true
     state_overhead="$(jq -r '.total_state_overhead_seconds' "$state_summary_path")"
@@ -824,6 +813,22 @@ run_phase() {
     records_after_gc="$(jq -r '.finalize.records_after_gc' "$state_summary_path")"
     content_gc_seconds="$(jq -r '.content_gc_seconds' "$state_summary_path")"
     mount_cache_json="$(jq -c '.mount_cache' "$state_summary_path")"
+    if jq -e \
+      --arg composition_mode "$composition_mode" \
+      'if $composition_mode == "fixture" then
+         .mount_cache.enabled == true
+         and .mount_cache.runtime_status == "recorded"
+         and .mount_cache.hydrate_errors == 0
+         and .mount_cache.publish_errors == 0
+         and .mount_cache.generation_archives == .mount_cache.selected_archives
+       else
+         .mount_cache.enabled == false
+         and .mount_cache.runtime_status == "disabled"
+         and .mount_cache.generation_archives == 0
+       end' \
+      "$state_summary_path" >/dev/null; then
+      mount_cache_valid=true
+    fi
     if [[ "$restore_status" == "restored" ]]; then
       head_generations_fetched=1
     fi
@@ -885,7 +890,7 @@ run_phase() {
   esac
 
   success=false
-  if [[ "$command_status" -eq 0 && "$tee_status" -eq 0 && "$summary_valid" == true && "$tool_cache_valid" == true && "$cleanup_valid" == true && "$expectation_valid" == true && "$current_head_only" == true ]]; then
+  if [[ "$command_status" -eq 0 && "$tee_status" -eq 0 && "$summary_valid" == true && "$mount_cache_valid" == true && "$tool_cache_valid" == true && "$cleanup_valid" == true && "$expectation_valid" == true && "$current_head_only" == true ]]; then
     success=true
   fi
 
@@ -928,6 +933,7 @@ run_phase() {
     --argjson tool_cache "$tool_cache_json" \
     --argjson head_generations_fetched "$head_generations_fetched" \
     --argjson summary_valid "$summary_valid" \
+    --argjson mount_cache_valid "$mount_cache_valid" \
     --argjson tool_cache_valid "$tool_cache_valid" \
     --argjson cleanup_valid "$cleanup_valid" \
     --argjson expectation_valid "$expectation_valid" \
@@ -977,6 +983,7 @@ run_phase() {
       tool_cache: $tool_cache,
       checks: {
         summary_valid: $summary_valid,
+        mount_cache_valid: $mount_cache_valid,
         tool_cache_valid: $tool_cache_valid,
         managed_builder_destroyed: $cleanup_valid,
         phase_expectation_valid: $expectation_valid,

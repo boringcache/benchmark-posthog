@@ -99,8 +99,10 @@ least 80 GiB free for `replay-full` and 55 GiB for the shorter lanes. This
 accounts for the live BuildKit root, direct state transfer, and normal Docker
 working space rather than discovering runner exhaustion mid-sequence.
 
-- `fresh` uses one run-unique state tag for a cold build followed by a
-  same-ref restore into a newly created managed builder.
+- `fresh` uses one run-unique state tag for a cold build followed by two
+  same-ref restores into newly created managed builders. Cold-to-first-warm
+  contraction is recorded as bootstrap convergence, while positive growth is
+  bounded. The first-to-second warm generation must plateau within tolerance.
 - `rolling` uses one stable tag scoped by BuildKit image digest, native
   platform, and source stream, then records a single commit build. The first
   run may bootstrap; later runs must report `restore.status=restored` to count

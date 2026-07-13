@@ -14,6 +14,7 @@ cold_generation="sha256:$(printf 'b%.0s' {1..64})"
 warm_generation="sha256:$(printf 'c%.0s' {1..64})"
 rolling_parent="sha256:$(printf 'd%.0s' {1..64})"
 rolling_generation="sha256:$(printf 'e%.0s' {1..64})"
+repeat_generation="sha256:$(printf 'f%.0s' {1..64})"
 mock_api_origin="https://api.example.test"
 MOCK_CURRENT_SHA="$source_sha"
 
@@ -76,6 +77,7 @@ boringcache() {
   fi
 
   local phase restore_status restored_generation parent generation logical_blobs logical_bytes
+  local bootstrap_delta
   local transport_blobs transport_bytes saw_cacheonly arg
   case "$BORINGCACHE_STATE_SUMMARY_PATH" in
     *cold.state-summary.json)
@@ -95,8 +97,21 @@ boringcache() {
       restored_generation="$cold_generation"
       parent="$cold_generation"
       generation="$warm_generation"
-      logical_blobs=$((100 + ${MOCK_STATE_GROWTH_PERCENT:-1}))
-      logical_bytes=$((100000 + (${MOCK_STATE_GROWTH_PERCENT:-1} * 1000)))
+      bootstrap_delta="${MOCK_BOOTSTRAP_DELTA_PERCENT:--5}"
+      logical_blobs=$((100 + bootstrap_delta))
+      logical_bytes=$((100000 + (bootstrap_delta * 1000)))
+      transport_blobs=1
+      transport_bytes=1000
+      ;;
+    *same-ref-repeat.state-summary.json)
+      phase=same-ref-repeat
+      restore_status=restored
+      restored_generation="$warm_generation"
+      parent="$warm_generation"
+      generation="$repeat_generation"
+      bootstrap_delta="${MOCK_BOOTSTRAP_DELTA_PERCENT:--5}"
+      logical_blobs=$((100 + bootstrap_delta + ${MOCK_STATE_GROWTH_PERCENT:-1}))
+      logical_bytes=$((100000 + (bootstrap_delta * 1000) + (${MOCK_STATE_GROWTH_PERCENT:-1} * 1000)))
       transport_blobs=1
       transport_bytes=1000
       ;;
@@ -206,7 +221,7 @@ boringcache() {
 }
 
 export -f git docker boringcache
-export source_sha image_digest cold_generation warm_generation rolling_parent rolling_generation
+export source_sha image_digest cold_generation warm_generation rolling_parent rolling_generation repeat_generation
 
 write_mock_preflight() {
   local artifact_dir="$1"
@@ -302,18 +317,29 @@ run_mock() {
 
 fresh_dir="$test_root/fresh"
 run_mock fresh "$fresh_dir" >/dev/null
-command jq -e '
+if ! command jq -e '
   .schema_version == "buildkit-state-canary-result.v2"
   and .success == true
   and all(.phases[]; .schema_version == "buildkit-state-canary-phase.v2")
   and .current_set.current_set_replacement == true
   and .current_set.same_ref_plateau == true
   and .current_set.same_ref_solver_reuse == true
-  and (.phases | length) == 2
+  and .current_set.same_ref_first_warm_solver_reuse == true
+  and .current_set.same_ref_repeat_solver_reuse == true
+  and .current_set.growth.bootstrap_logical_blob_delta == -5
+  and .current_set.growth.bootstrap_blob_growth_within_tolerance == true
+  and .current_set.growth.logical_blob_delta == 1
+  and (.phases | length) == 3
   and (.phases[0].state.logical_generation_blobs > 0)
   and (.phases[1].state.parent_generation == .phases[0].state.generation)
   and (.phases[1].state.head_generations_fetched == 1)
-' "$fresh_dir/canary-result.json" >/dev/null
+  and (.phases[2].state.parent_generation == .phases[1].state.generation)
+  and (.phases[2].state.head_generations_fetched == 1)
+' "$fresh_dir/canary-result.json" >/dev/null; then
+  echo "Fresh convergence contract failed:" >&2
+  command jq . "$fresh_dir/canary-result.json" >&2
+  exit 1
+fi
 
 rolling_dir="$test_root/rolling"
 run_mock rolling "$rolling_dir" >/dev/null
@@ -360,6 +386,17 @@ if MOCK_STATE_GROWTH_PERCENT=20 run_mock fresh "$growth_dir" >/dev/null 2>&1; th
   exit 1
 fi
 command jq -e '.success == false and .current_set.same_ref_plateau == false' "$growth_dir/canary-result.json" >/dev/null
+
+bootstrap_growth_dir="$test_root/bootstrap-growth-failure"
+if MOCK_BOOTSTRAP_DELTA_PERCENT=20 run_mock fresh "$bootstrap_growth_dir" >/dev/null 2>&1; then
+  echo "Expected excessive cold-to-first-warm growth to fail the canary" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.growth.bootstrap_blob_growth_within_tolerance == false
+  and .current_set.growth.bootstrap_bytes_growth_within_tolerance == false
+' "$bootstrap_growth_dir/canary-result.json" >/dev/null
 
 schema_dir="$test_root/schema-failure"
 if MOCK_OMIT_LOGICAL_GENERATION=1 run_mock fresh "$schema_dir" >/dev/null 2>&1; then

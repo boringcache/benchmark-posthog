@@ -112,6 +112,10 @@ working space rather than discovering runner exhaustion mid-sequence.
   measures only its base and target. This is the shorter smoke path; it is not
   presented as evidence for every intermediate generation.
 
+Replay source checkout batches the exact commit set into one depth-one fetch
+with Git auto-maintenance disabled. This avoids `.git/shallow` rewrite races
+without relaxing per-commit identity or first-parent validation.
+
 The artifact contains `buildkit-state-summary.v1`, wrapper/build and daemon
 logs, observability JSONL, exact release/image/source provenance, transport
 counters, timings, and a managed-resource cleanup check for every phase. The

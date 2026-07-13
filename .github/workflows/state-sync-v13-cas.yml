@@ -329,6 +329,11 @@ jobs:
             }
 
             declare -A seen_commits=()
+            git -C upstream \
+              -c protocol.version=2 \
+              -c maintenance.auto=false \
+              -c gc.auto=0 \
+              fetch --no-tags --depth 1 origin "${replay_commits[@]}"
             previous=""
             for commit in "${replay_commits[@]}"; do
               [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || {
@@ -341,12 +346,10 @@ jobs:
               }
               seen_commits[$commit]=1
 
-              git -C upstream -c protocol.version=2 fetch --no-tags --depth 1 origin "$commit"
-              [[ "$(git -C upstream rev-parse FETCH_HEAD)" == "$commit" ]] || {
+              [[ "$(git -C upstream rev-parse "${commit}^{commit}")" == "$commit" ]] || {
                 echo "PostHog fetch did not resolve exact replay commit ${commit}" >&2
                 exit 1
               }
-              git -C upstream cat-file -e "${commit}^{commit}"
 
               if [[ -n "$previous" ]]; then
                 commit_object="$(git -C upstream cat-file -p "$commit")"

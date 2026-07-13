@@ -71,6 +71,79 @@ This repo uses split BoringCache tokens as the standard CI shape:
 - `BORINGCACHE_SAVE_TOKEN` for trusted write paths
 - `BORINGCACHE_API_TOKEN` only where a single bearer variable is still required for compatibility
 
+## Maintainer BuildKit State Canary
+
+[`buildkit-state-canary.yml`](.github/workflows/buildkit-state-canary.yml) is
+the isolated pre-graduation path for the CLI `--backend state` product. It is
+manual-only and does not alter the public GHA, ECR, BC OCI, or managed
+`type=boringcache` lanes. It deliberately does not use `boringcache/one` or a
+Docker cache importer/exporter.
+
+Every dispatch requires an exact CLI release tag, an independently supplied
+SHA256 for its native release asset, and an exact
+`ghcr.io/boringcache/buildkit@sha256:...` image. The workflow verifies the CLI
+against both the supplied digest and the release's `SHA256SUMS`, resolves the
+exact BuildKit digest while retaining its raw manifest, and records the exact
+PostHog commit before running. It also probes the exact configured API origin
+before pulling or building with the managed image. The probe fails closed
+unless the complete CAS publish protocol, `expected_tag_head_v1`, and
+`buildkit_state_current_set_v1` are advertised. Both the early backend probe
+and the complete pin/source checklist are uploaded as machine-readable JSON;
+the state runner refuses to start unless both passed.
+The CLI asset is downloaded and checksum-verified before that probe; its
+normalized `--version` value supplies the one exact
+`User-Agent: BoringCache-CLI/<version>` header, matching the real Rust API
+client rather than inferring a version from the release tag.
+After benchmark-owned disk cleanup, the complete checklist also requires at
+least 80 GiB free for `replay-full` and 55 GiB for the shorter lanes. This
+accounts for the live state root, retained OCI evidence, and temporary OCI
+semantic extraction rather than discovering runner exhaustion mid-sequence.
+
+- `fresh` uses one run-unique state tag for a cold build followed by a
+  same-ref restore into a newly created managed builder.
+- `rolling` uses one stable tag scoped by BuildKit image digest, native
+  platform, and source stream, then records a single commit build. The first
+  run may bootstrap; later runs must report `restore.status=restored` to count
+  as warm evidence.
+- `replay-full` requires exactly 11 comma-separated immutable PostHog SHAs,
+  verifies every SHA and first-parent edge, then advances one brand-new
+  run/attempt-scoped state tag through all 11 generations in order.
+- `replay-endpoints` validates and records the same exact 11-commit plan but
+  measures only its base and target. This is the shorter smoke path; it is not
+  presented as evidence for every intermediate generation.
+
+The artifact contains `buildkit-state-summary.v1`, wrapper/build and daemon
+logs, observability JSONL, exact release/image/source provenance, a real OCI
+archive and canonical OCI semantic JSON per phase, transport counters,
+timings, and a managed-resource cleanup check for every phase. OCI semantics
+contain the image manifest/config digests, ordered layer descriptors, ordered
+diffIDs, platform, and runtime config. Fresh fails unless cold and same-ref
+semantics are byte-identical after canonicalization.
+
+The canary requires explicit `save.logical_generation_blobs` and
+`save.logical_generation_bytes` summary fields and fails closed when they are
+absent. CAS upload bytes/counts remain explicitly labeled as transport delta;
+they are not presented as an exact parent-set difference. The artifact also
+records parent/restored/current generation lineage plus prune bytes/counts.
+The reported 0/1 head-fetch count is derived from the state summary's single
+exact restored-generation field; it is not a packet counter. Fresh canaries
+only pass when the same-ref logical current set
+plateaus within the selected provisional tolerance (2% by default), which
+guards against accidentally publishing parent-plus-current unions, and when
+the destroyed-builder rerun has more cached steps and fewer executed steps than
+the cold build. The core canary forces BuildKit mountcache off so archive
+growth cannot be mistaken for state-generation growth.
+
+Replay artifacts add the exact source plan and, for every measured generation,
+the committed/restored/parent lineage, logical current-set bytes and blobs,
+delta and percent change from the previous measured generation, transport
+bytes and blobs, OCI semantic digest, and cleanup result. Cross-commit plateau
+is reported against the selected provisional tolerance for diagnosis; it is
+not a correctness failure because a real source change may legitimately alter
+the logical state size. Exact ordered source replay, one-head restore, CAS
+lineage continuity, state-summary validity, OCI validity, and cleanup remain
+hard gates.
+
 ## BoringBuild EC2 Shape Sweep
 
 Use [`scripts/run-boringbuild-ec2-shape-sweep.sh`](scripts/run-boringbuild-ec2-shape-sweep.sh) for private EC2 cold-plus-rolling checks across runner sizes. It generates ignored BoringBuild configs under `boringbuild/ec2-shape-sweep/`, stages a tiny source snapshot plus the local Linux `boringcache` binary, and runs the pinned PostHog `upstream/` commit window on AWS M-family general-purpose instances.

@@ -337,6 +337,23 @@ write_combined_result() {
                 $current.cached_steps > $cold.cached_steps
                 and $current.executed_steps < $cold.executed_steps
               ),
+              record_set: {
+                previous_eligible: $previous.state.finalize.eligible,
+                current_eligible: $current.state.finalize.eligible,
+                eligible_delta: ($current.state.finalize.eligible - $previous.state.finalize.eligible),
+                previous_records_after_gc: $previous.state.finalize.records_after_gc,
+                current_records_after_gc: $current.state.finalize.records_after_gc,
+                records_after_gc_delta: (
+                  $current.state.finalize.records_after_gc
+                  - $previous.state.finalize.records_after_gc
+                )
+              },
+              replacement_transport: {
+                uploaded_blobs: $current.state.transport_delta_blobs,
+                uploaded_bytes: $current.state.transport_delta_bytes,
+                materialized_records: $current.state.finalize.materialized,
+                observed: ($current.state.transport_delta_blobs > 0)
+              },
               logical_set: {
                 previous_blobs: $previous.state.logical_generation_blobs,
                 previous_bytes: $previous.state.logical_generation_bytes,
@@ -385,6 +402,16 @@ write_combined_result() {
             .logical_set.blob_delta == 0
             and .logical_set.required_blob_delta == 0
           )) as $all_warm_content_counts_stable
+        | (all($transitions[];
+            .record_set.eligible_delta == 0
+            and .record_set.records_after_gc_delta == 0
+          )) as $all_warm_record_counts_stable
+        | ([
+            $transitions[].replacement_transport.uploaded_blobs
+          ] | add // 0) as $warm_uploaded_blobs
+        | ([
+            $transitions[].replacement_transport.uploaded_bytes
+          ] | add // 0) as $warm_uploaded_bytes
         | {
             current_set_replacement: (
               $cold != null
@@ -414,6 +441,15 @@ write_combined_result() {
             warm_generations_planned: $warm_generations,
             warm_generations_measured: ($warm_phases | length),
             all_warm_content_counts_stable: $all_warm_content_counts_stable,
+            all_warm_record_counts_stable: $all_warm_record_counts_stable,
+            same_ref_record_growth_observed: ($all_warm_record_counts_stable | not),
+            same_ref_replacement_uploads_observed: ($warm_uploaded_blobs > 0),
+            same_ref_replacement_uploaded_blobs: $warm_uploaded_blobs,
+            same_ref_replacement_uploaded_bytes: $warm_uploaded_bytes,
+            same_ref_count_plateau: (
+              $all_warm_content_counts_stable
+              and ($final_transition.logical_set.within_tolerance // false)
+            ),
             same_ref_plateau: (
               $all_warm_content_counts_stable
               and ($final_transition.logical_set.within_tolerance // false)
@@ -586,13 +622,31 @@ write_combined_result() {
           toolcache_hits: any(
             $base.phases[];
             ((.tool_cache.hits // 0) > 0)
+          ),
+          fully_state_cached_short_circuit: any(
+            $base.phases[];
+            .state.restore_status == "restored"
+            and .cached_steps > ($base.phases[0].cached_steps // 0)
+            and (
+              ((.tool_cache.hits // 0)
+               + (.tool_cache.misses // 0)
+               + (.tool_cache.writes // 0)) == 0
+            )
+            and (
+              ((.state.mount_cache.hydrate_hits // 0)
+               + (.state.mount_cache.hydrate_misses // 0)
+               + (.state.mount_cache.hydrate_errors // 0)) == 0
+            )
           )
         }
         | .valid = (
             .mountcache_published
             and .mountcache_restored
             and .toolcache_exercised
-            and .toolcache_hits
+            and (
+              .fully_state_cached_short_circuit
+              or (.toolcache_hits and .mountcache_hydrated)
+            )
           )
       else
         {
@@ -603,6 +657,7 @@ write_combined_result() {
           mountcache_hydrated: false,
           toolcache_exercised: false,
           toolcache_hits: false,
+          fully_state_cached_short_circuit: false,
           valid: true
         }
       end) as $composition

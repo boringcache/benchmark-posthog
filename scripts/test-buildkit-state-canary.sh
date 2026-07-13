@@ -203,6 +203,7 @@ boringcache() {
     --argjson include_content_gc_seconds "$(if [[ "${MOCK_OMIT_CONTENT_GC_SECONDS:-0}" == 1 ]]; then echo false; else echo true; fi)" \
     --argjson mountcache_enabled "$(if [[ "${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}" == fixture ]]; then echo true; else echo false; fi)" \
     --argjson mountcache_hydrate_errors "${MOCK_MOUNTCACHE_HYDRATE_ERRORS:-0}" \
+    --argjson composition_short_circuit "$(if [[ "${MOCK_COMPOSITION_SHORT_CIRCUIT:-0}" == 1 ]]; then echo true; else echo false; fi)" \
     '{
       schema_version: "buildkit-state-summary.v2",
       restore: {
@@ -253,13 +254,25 @@ boringcache() {
         generation_archives: (if $mountcache_enabled then 1 else 0 end),
         generation_bytes: (if $mountcache_enabled then 100 else 0 end),
         selected_archives: (if $mountcache_enabled then 1 else 0 end),
-        hydrate_hits: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
+        hydrate_hits: (
+          if $mountcache_enabled and $restore_status == "restored" and ($composition_short_circuit | not)
+          then 1 else 0 end
+        ),
         hydrate_misses: 0,
         hydrate_errors: $mountcache_hydrate_errors,
         hydrate_skips: 0,
-        hydrated_files: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
-        hydrated_compressed_bytes: (if $mountcache_enabled and $restore_status == "restored" then 100 else 0 end),
-        hydrated_uncompressed_bytes: (if $mountcache_enabled and $restore_status == "restored" then 200 else 0 end),
+        hydrated_files: (
+          if $mountcache_enabled and $restore_status == "restored" and ($composition_short_circuit | not)
+          then 1 else 0 end
+        ),
+        hydrated_compressed_bytes: (
+          if $mountcache_enabled and $restore_status == "restored" and ($composition_short_circuit | not)
+          then 100 else 0 end
+        ),
+        hydrated_uncompressed_bytes: (
+          if $mountcache_enabled and $restore_status == "restored" and ($composition_short_circuit | not)
+          then 200 else 0 end
+        ),
         hydrate_milliseconds: 1,
         published_archives: (if $mountcache_enabled then 1 else 0 end),
         publish_errors: 0,
@@ -295,13 +308,33 @@ boringcache() {
 
   printf 'mock daemon %s\n' "$phase" > "$BORINGCACHE_MANAGED_BUILDKIT_LOG_PATH"
   if [[ "${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}" == fixture ]]; then
-    command jq -cn --arg phase "$phase" '{
+    local tool_hits tool_misses tool_writes
+    tool_hits=1
+    tool_misses=0
+    tool_writes=1
+    if [[ "${MOCK_COMPOSITION_SHORT_CIRCUIT:-0}" == 1 ]]; then
+      if [[ "$restore_status" == miss ]]; then
+        tool_hits=0
+        tool_misses=1
+        tool_writes=1
+      else
+        tool_hits=0
+        tool_misses=0
+        tool_writes=0
+      fi
+    fi
+    command jq -cn \
+      --arg phase "$phase" \
+      --argjson hits "$tool_hits" \
+      --argjson misses "$tool_misses" \
+      --argjson writes "$tool_writes" \
+      '{
       phase: $phase,
       operation: "cache_session_summary",
       adapter: "turborepo",
       duration_ms: 10,
       classification: {
-        cache_temperature: {hits: 1, misses: 0, writes: 1, errors: 0}
+        cache_temperature: {hits: $hits, misses: $misses, writes: $writes, errors: 0}
       },
       backend_api: {total_error_count: 0, total_retry_count: 0}
     }' > "$BORINGCACHE_OBSERVABILITY_JSONL_PATH"
@@ -434,6 +467,12 @@ if ! command jq -e '
   and .current_set.same_ref_solver_reuse == true
   and .current_set.same_ref_first_warm_solver_reuse == true
   and .current_set.same_ref_repeat_solver_reuse == true
+  and .current_set.all_warm_record_counts_stable == true
+  and .current_set.same_ref_record_growth_observed == false
+  and .current_set.same_ref_replacement_uploads_observed == true
+  and .current_set.same_ref_replacement_uploaded_blobs == 2
+  and .current_set.same_ref_replacement_uploaded_bytes == 2000
+  and .current_set.same_ref_count_plateau == true
   and .inputs.warm_generations == 2
   and .current_set.warm_generations_planned == 2
   and .current_set.warm_generations_measured == 2
@@ -444,6 +483,10 @@ if ! command jq -e '
   and .current_set.transitions[1].lineage.valid == true
   and .current_set.transitions[1].current_head_only == true
   and .current_set.transitions[1].solver_reuse == true
+  and .current_set.transitions[1].record_set.eligible_delta == 0
+  and .current_set.transitions[1].record_set.records_after_gc_delta == 0
+  and .current_set.transitions[1].replacement_transport.uploaded_blobs == 1
+  and .current_set.transitions[1].replacement_transport.uploaded_bytes == 1000
   and .current_set.growth.bootstrap_logical_blob_delta == 0
   and .current_set.growth.bootstrap_required_blob_delta == 0
   and .current_set.growth.bootstrap_blob_growth_within_tolerance == true
@@ -707,6 +750,27 @@ command jq -e '
   and .composition.toolcache_hits == true
   and all(.phases[]; .checks.tool_cache_valid == true)
 ' "$composition_dir/canary-result.json" >/dev/null
+
+composition_short_circuit_dir="$test_root/composition-short-circuit"
+MOCK_COMPOSITION_SHORT_CIRCUIT=1 run_mock fresh "$composition_short_circuit_dir" 2 fixture >/dev/null
+command jq -e '
+  . as $result
+  | .success == true
+  and .composition.valid == true
+  and .composition.mountcache_published == true
+  and .composition.mountcache_restored == true
+  and .composition.mountcache_hydrated == false
+  and .composition.toolcache_exercised == true
+  and .composition.toolcache_hits == false
+  and .composition.fully_state_cached_short_circuit == true
+  and all(.phases[1:][];
+    .cached_steps > $result.phases[0].cached_steps
+    and .state.mount_cache.hydrate_hits == 0
+    and .tool_cache.hits == 0
+    and .tool_cache.misses == 0
+    and .tool_cache.writes == 0
+  )
+' "$composition_short_circuit_dir/canary-result.json" >/dev/null
 
 composition_mount_error_dir="$test_root/composition-mount-error"
 if MOCK_MOUNTCACHE_HYDRATE_ERRORS=1 run_mock fresh "$composition_mount_error_dir" 2 fixture >/dev/null 2>&1; then

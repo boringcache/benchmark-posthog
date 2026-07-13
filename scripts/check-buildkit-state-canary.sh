@@ -40,6 +40,8 @@ require_text "$workflow" "replay-full"
 require_text "$workflow" "replay-endpoints"
 require_text "$workflow" "posthog_source:"
 require_text "$workflow" "warm_generations:"
+require_text "$workflow" "composition_mode:"
+require_text "$workflow" "BORINGCACHE_STATE_CANARY_COMPOSITION_MODE: \${{ inputs.composition_mode }}"
 require_text "$workflow" "BORINGCACHE_STATE_CANARY_WARM_GENERATIONS: \${{ inputs.warm_generations }}"
 require_text "$workflow" "replay-plan.json"
 require_text "$workflow" "first parent of"
@@ -70,6 +72,10 @@ require_text "$runner" "current_set_replacement"
 require_text "$runner" "only_current_head_fetched"
 require_text "$runner" "same_ref_solver_reuse"
 require_text "$runner" "BuildKit state warm generations must be 2, 4, or 8"
+require_text "$runner" "BORINGCACHE_STATE_CANARY_COMPOSITION_MODE must be off or fixture"
+require_text "$runner" '--tool-cache "turbo:${tool_cache_tag}"'
+require_text "$runner" '.mount_cache.generation_archives == .mount_cache.selected_archives'
+require_text "$runner" 'toolcache_exercised'
 require_text "$runner" "warm_generations_planned"
 require_text "$runner" "transitions: \$transitions"
 require_text "$runner" "final_convergence_pair"
@@ -90,16 +96,17 @@ require_text "$runner" "--output type=cacheonly"
 require_text "$runner" "buildkit-state-canary-result.v2"
 require_text "$runner" "buildkit-state-canary-phase.v2"
 require_text "$test_runner" "Expected a single-manifest document to fail the image-index gate"
-require_text "$workflow" 'BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: "0"'
+require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode == 'fixture' && '1' || '0' }}"
 
 for file in "$workflow" "$runner" "$preflight_runner"; do
   reject_text "$file" "boringcache/one"
   reject_text "$file" "docker/setup-buildx"
   reject_text "$file" "--cache-from"
   reject_text "$file" "--cache-to"
-  reject_text "$file" "--tool-cache"
   reject_text "$file" "rewrite-timestamp"
 done
+reject_text "$workflow" "--tool-cache"
+reject_text "$preflight_runner" "--tool-cache"
 reject_text "$runner" ".save.reused_blobs"
 reject_text "$runner" ".save.reused_bytes"
 reject_text "$runner" 'buildkit-state-summary.v1'

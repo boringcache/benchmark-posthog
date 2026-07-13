@@ -86,7 +86,7 @@ boringcache() {
   fi
 
   local phase restore_status restored_generation parent generation logical_blobs logical_bytes
-  local bootstrap_delta steady_delta warm_index warm_count summary_name
+  local bootstrap_delta steady_delta blob_delta required_blob_delta required_blobs warm_index warm_count summary_name
   local transport_blobs transport_bytes saw_cacheonly arg
   case "$BORINGCACHE_STATE_SUMMARY_PATH" in
     *cold.state-summary.json)
@@ -97,6 +97,7 @@ boringcache() {
       generation="$cold_generation"
       logical_blobs=100
       logical_bytes=100000
+      required_blobs=2
       transport_blobs=100
       transport_bytes=100000
       ;;
@@ -119,16 +120,27 @@ boringcache() {
       generation="$(mock_warm_generation "$warm_index")"
       bootstrap_delta="${MOCK_BOOTSTRAP_DELTA_PERCENT:--5}"
       steady_delta=0
+      blob_delta="${MOCK_BOOTSTRAP_BLOB_DELTA:-0}"
+      required_blob_delta="${MOCK_BOOTSTRAP_REQUIRED_BLOB_DELTA:-0}"
       if ((warm_index > 1)); then
         steady_delta="${MOCK_STATE_GROWTH_PERCENT:-1}"
+        blob_delta="${MOCK_STATE_BLOB_DELTA:-0}"
+        required_blob_delta="${MOCK_STATE_REQUIRED_BLOB_DELTA:-0}"
       fi
       if ((warm_index == warm_count)) && [[ -n "${MOCK_FINAL_STATE_GROWTH_PERCENT:-}" ]]; then
         steady_delta="$MOCK_FINAL_STATE_GROWTH_PERCENT"
       elif ((warm_index == ${MOCK_INTERMEDIATE_SPIKE_WARM_INDEX:-0})); then
         steady_delta="${MOCK_INTERMEDIATE_STATE_GROWTH_PERCENT:-20}"
       fi
-      logical_blobs=$((100 + bootstrap_delta + steady_delta))
+      if ((warm_index == warm_count)) && [[ -n "${MOCK_FINAL_STATE_BLOB_DELTA:-}" ]]; then
+        blob_delta="$MOCK_FINAL_STATE_BLOB_DELTA"
+      fi
+      logical_blobs=$((100 + blob_delta))
       logical_bytes=$((100000 + (bootstrap_delta * 1000) + (steady_delta * 1000)))
+      required_blobs=$((2 + required_blob_delta))
+      if ((warm_index == warm_count)); then
+        required_blobs=$((2 + ${MOCK_FINAL_REQUIRED_BLOB_DELTA:-$required_blob_delta}))
+      fi
       transport_blobs=1
       transport_bytes=1000
       ;;
@@ -140,6 +152,7 @@ boringcache() {
       generation="$rolling_generation"
       logical_blobs=120
       logical_bytes=120000
+      required_blobs=2
       transport_blobs=4
       transport_bytes=4000
       ;;
@@ -151,6 +164,7 @@ boringcache() {
       printf -v generation 'sha256:%064x' "$((200 + replay_index))"
       logical_blobs="$((100 + replay_index))"
       logical_bytes="$((100000 + (replay_index * 1000)))"
+      required_blobs="$((2 + replay_index))"
       transport_blobs=1
       transport_bytes=1000
       if ((replay_index == 1)); then
@@ -179,6 +193,7 @@ boringcache() {
     --arg image_digest "$image_digest" \
     --argjson logical_blobs "$logical_blobs" \
     --argjson logical_bytes "$logical_bytes" \
+    --argjson required_blobs "$required_blobs" \
     --argjson transport_blobs "$transport_blobs" \
     --argjson transport_bytes "$transport_bytes" \
     --argjson include_logical_generation "$(if [[ "${MOCK_OMIT_LOGICAL_GENERATION:-0}" == 1 ]]; then echo false; else echo true; fi)" \
@@ -201,7 +216,7 @@ boringcache() {
         already_ready: 1,
         materialized: 1,
         failed: 0,
-        required_blobs: 2,
+        required_blobs: $required_blobs,
         report_digest: $image_digest,
         retention_policy: $retention_policy,
         content_gc_applied: $content_gc_applied,
@@ -428,9 +443,14 @@ if ! command jq -e '
   and .current_set.transitions[1].lineage.valid == true
   and .current_set.transitions[1].current_head_only == true
   and .current_set.transitions[1].solver_reuse == true
-  and .current_set.growth.bootstrap_logical_blob_delta == -5
+  and .current_set.growth.bootstrap_logical_blob_delta == 0
+  and .current_set.growth.bootstrap_required_blob_delta == 0
   and .current_set.growth.bootstrap_blob_growth_within_tolerance == true
-  and .current_set.growth.logical_blob_delta == 1
+  and .current_set.growth.logical_blob_delta == 0
+  and .current_set.growth.required_blob_delta == 0
+  and .current_set.growth.required_blob_count_stable == true
+  and .current_set.all_warm_content_counts_stable == true
+  and .current_set.growth.all_warm_content_counts_stable == true
   and (.phases | length) == 3
   and (.phases[0].state.logical_generation_blobs > 0)
   and (.phases[1].state.parent_generation == .phases[0].state.generation)
@@ -488,6 +508,36 @@ command jq -e '
   and .current_set.same_ref_plateau == true
 ' "$intermediate_growth_dir/canary-result.json" >/dev/null
 
+intermediate_blob_growth_dir="$test_root/intermediate-blob-growth-failure"
+if MOCK_STATE_BLOB_DELTA=1 run_mock fresh "$intermediate_blob_growth_dir" 4 >/dev/null 2>&1; then
+  echo "Expected one new logical blob on an intermediate warm generation to fail the canary" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.current_set_replacement == false
+  and .current_set.all_warm_content_counts_stable == false
+  and .current_set.growth.all_warm_content_counts_stable == false
+  and .current_set.transitions[1].logical_set.blob_delta == 1
+  and .current_set.transitions[-1].logical_set.blob_delta == 0
+  and .current_set.same_ref_plateau == false
+' "$intermediate_blob_growth_dir/canary-result.json" >/dev/null
+
+intermediate_required_blob_growth_dir="$test_root/intermediate-required-blob-growth-failure"
+if MOCK_STATE_REQUIRED_BLOB_DELTA=1 run_mock fresh "$intermediate_required_blob_growth_dir" 4 >/dev/null 2>&1; then
+  echo "Expected one new required BuildKit body on an intermediate warm generation to fail the canary" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.current_set_replacement == false
+  and .current_set.all_warm_content_counts_stable == false
+  and .current_set.growth.all_warm_content_counts_stable == false
+  and .current_set.transitions[1].logical_set.required_blob_delta == 1
+  and .current_set.transitions[-1].logical_set.required_blob_delta == 0
+  and .current_set.same_ref_plateau == false
+' "$intermediate_required_blob_growth_dir/canary-result.json" >/dev/null
+
 final_growth_dir="$test_root/final-growth-failure"
 if MOCK_FINAL_STATE_GROWTH_PERCENT=20 run_mock fresh "$final_growth_dir" 4 >/dev/null 2>&1; then
   echo "Expected final warm-to-warm growth to fail the canary" >&2
@@ -499,6 +549,30 @@ command jq -e '
   and .current_set.transitions[-1].logical_set.within_tolerance == false
   and .current_set.same_ref_plateau == false
 ' "$final_growth_dir/canary-result.json" >/dev/null
+
+final_blob_growth_dir="$test_root/final-blob-growth-failure"
+if MOCK_FINAL_STATE_BLOB_DELTA=1 run_mock fresh "$final_blob_growth_dir" 4 >/dev/null 2>&1; then
+  echo "Expected one new logical blob on the final warm generation to fail the canary" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.growth.logical_blob_delta == 1
+  and .current_set.growth.blob_count_within_tolerance == false
+  and .current_set.same_ref_plateau == false
+' "$final_blob_growth_dir/canary-result.json" >/dev/null
+
+final_required_blob_growth_dir="$test_root/final-required-blob-growth-failure"
+if MOCK_FINAL_REQUIRED_BLOB_DELTA=1 run_mock fresh "$final_required_blob_growth_dir" 4 >/dev/null 2>&1; then
+  echo "Expected one new required BuildKit body on the final warm generation to fail the canary" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.growth.required_blob_delta == 1
+  and .current_set.growth.required_blob_count_stable == false
+  and .current_set.same_ref_plateau == false
+' "$final_required_blob_growth_dir/canary-result.json" >/dev/null
 
 invalid_warm_dir="$test_root/invalid-warm-generations"
 if run_mock fresh "$invalid_warm_dir" 3 >/dev/null 2>&1; then

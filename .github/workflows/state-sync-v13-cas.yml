@@ -611,7 +611,7 @@ jobs:
               ] | "| " + join(" | ") + " |"' "$result"
               echo
               if jq -e '.current_set.transitions | type == "array" and length > 0' "$result" >/dev/null; then
-                echo "| Transition | Kind | Lineage | Head only | Solver reuse | Logical delta | Within tolerance | Final pair |"
+                echo "| Transition | Kind | Lineage | Head only | Solver reuse | Logical/required delta | Content plateau | Final pair |"
                 echo "|---|---|---:|---:|---:|---:|---:|---:|"
                 jq -r '.current_set.transitions[] | [
                   ((.from_phase | tostring) + " → " + (.to_phase | tostring)),
@@ -619,7 +619,7 @@ jobs:
                   (if .lineage.valid then "yes" else "no" end),
                   (if .current_head_only then "yes" else "no" end),
                   (if .solver_reuse then "yes" else "no" end),
-                  ((.logical_set.blob_delta | tostring) + " blobs / " + (.logical_set.byte_delta | tostring) + " bytes"),
+                  ((.logical_set.blob_delta | tostring) + " logical blobs / " + (.logical_set.required_blob_delta | tostring) + " required bodies / " + (.logical_set.byte_delta | tostring) + " bytes"),
                   (if .logical_set.within_tolerance then "yes" else "no" end),
                   (if .final_convergence_pair then "yes" else "no" end)
                 ] | "| " + join(" | ") + " |"' "$result"
@@ -630,7 +630,7 @@ jobs:
               elif .current_set.growth == null then
                 "Current-set replacement: \(.current_set.current_set_replacement); current head only: \(.current_set.only_current_head_fetched)."
               else
-                "Current-set replacement: \(.current_set.current_set_replacement); warm generations: \(.current_set.warm_generations_measured)/\(.current_set.warm_generations_planned); bootstrap delta: \(.current_set.growth.bootstrap_logical_blob_delta) blobs / \(.current_set.growth.bootstrap_logical_byte_delta) bytes (positive growth bounded: \(.current_set.growth.bootstrap_blob_growth_within_tolerance) / \(.current_set.growth.bootstrap_bytes_growth_within_tolerance)); final warm-pair plateau: \(.current_set.same_ref_plateau) (\(.current_set.growth.tolerance_percent)% tolerance, \(.current_set.growth.logical_blob_delta) blobs, \(.current_set.growth.logical_byte_delta) bytes); all-warm solver reuse: \(.current_set.same_ref_solver_reuse)."
+                "Current-set replacement: \(.current_set.current_set_replacement); warm generations: \(.current_set.warm_generations_measured)/\(.current_set.warm_generations_planned); bootstrap delta: \(.current_set.growth.bootstrap_logical_blob_delta) logical blobs / \(.current_set.growth.bootstrap_required_blob_delta) required bodies / \(.current_set.growth.bootstrap_logical_byte_delta) bytes (exact content counts: \(.current_set.growth.bootstrap_blob_growth_within_tolerance); metadata bytes bounded: \(.current_set.growth.bootstrap_bytes_growth_within_tolerance)); all-warm exact content counts: \(.current_set.all_warm_content_counts_stable); final warm-pair plateau: \(.current_set.same_ref_plateau) (exact logical/required counts: \(.current_set.growth.blob_count_within_tolerance)/\(.current_set.growth.required_blob_count_stable); \(.current_set.growth.tolerance_percent)% metadata-byte tolerance, \(.current_set.growth.logical_byte_delta) bytes); all-warm solver reuse: \(.current_set.same_ref_solver_reuse)."
               end' "$result"
             else
               echo "The runner stopped before it could write a phase result. Inspect the uploaded diagnostics."

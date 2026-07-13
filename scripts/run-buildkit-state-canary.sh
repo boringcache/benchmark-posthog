@@ -309,6 +309,7 @@ write_combined_result() {
           | $base.phases[$index] as $current
           | ($current.state.logical_generation_blobs - $previous.state.logical_generation_blobs) as $blob_delta
           | ($current.state.logical_generation_bytes - $previous.state.logical_generation_bytes) as $byte_delta
+          | ($current.state.finalize.required_blobs - $previous.state.finalize.required_blobs) as $required_blob_delta
           | (($previous.state.logical_generation_blobs * $tolerance / 100) | ceil) as $blob_tolerance
           | (($previous.state.logical_generation_bytes * $tolerance / 100) | ceil) as $byte_tolerance
           | {
@@ -341,8 +342,11 @@ write_combined_result() {
                 previous_bytes: $previous.state.logical_generation_bytes,
                 current_blobs: $current.state.logical_generation_blobs,
                 current_bytes: $current.state.logical_generation_bytes,
+                previous_required_blobs: $previous.state.finalize.required_blobs,
+                current_required_blobs: $current.state.finalize.required_blobs,
                 blob_delta: $blob_delta,
                 byte_delta: $byte_delta,
+                required_blob_delta: $required_blob_delta,
                 blob_delta_percent: (
                   if $previous.state.logical_generation_blobs == 0 then null
                   else (($blob_delta * 10000 / $previous.state.logical_generation_blobs) | round) / 100
@@ -356,11 +360,13 @@ write_combined_result() {
                 blob_tolerance: $blob_tolerance,
                 byte_tolerance: $byte_tolerance,
                 within_tolerance: (
-                  absolute_delta_within_tolerance($blob_delta; $blob_tolerance)
+                  $blob_delta == 0
+                  and $required_blob_delta == 0
                   and absolute_delta_within_tolerance($byte_delta; $byte_tolerance)
                 ),
                 positive_growth_within_tolerance: (
-                  $blob_delta <= $blob_tolerance
+                  $blob_delta == 0
+                  and $required_blob_delta == 0
                   and $byte_delta <= $byte_tolerance
                 )
               }
@@ -375,6 +381,10 @@ write_combined_result() {
               .cached_steps > $cold.cached_steps
               and .executed_steps < $cold.executed_steps
             )) as $all_warm_solver_reuse
+        | (all($transitions[];
+            .logical_set.blob_delta == 0
+            and .logical_set.required_blob_delta == 0
+          )) as $all_warm_content_counts_stable
         | {
             current_set_replacement: (
               $cold != null
@@ -390,6 +400,7 @@ write_combined_result() {
                 and .logical_set.current_bytes > 0
               )
               and $bootstrap.logical_set.positive_growth_within_tolerance
+              and $all_warm_content_counts_stable
               and $final_transition.final_convergence_pair
               and $final_transition.logical_set.within_tolerance
             ),
@@ -402,7 +413,11 @@ write_combined_result() {
             ),
             warm_generations_planned: $warm_generations,
             warm_generations_measured: ($warm_phases | length),
-            same_ref_plateau: ($final_transition.logical_set.within_tolerance // false),
+            all_warm_content_counts_stable: $all_warm_content_counts_stable,
+            same_ref_plateau: (
+              $all_warm_content_counts_stable
+              and ($final_transition.logical_set.within_tolerance // false)
+            ),
             same_ref_solver_reuse: $all_warm_solver_reuse,
             same_ref_first_warm_solver_reuse: ($transitions[0].solver_reuse // false),
             same_ref_repeat_solver_reuse: ($transitions[1].solver_reuse // false),
@@ -411,10 +426,12 @@ write_combined_result() {
               tolerance_percent: $tolerance,
               bootstrap_logical_blob_delta: $bootstrap.logical_set.blob_delta,
               bootstrap_logical_byte_delta: $bootstrap.logical_set.byte_delta,
+              bootstrap_required_blob_delta: $bootstrap.logical_set.required_blob_delta,
               bootstrap_blob_growth_within_tolerance: (
                 (($bootstrap.logical_set.blob_delta | type) == "number")
-                and (($bootstrap.logical_set.blob_tolerance | type) == "number")
-                and ($bootstrap.logical_set.blob_delta <= $bootstrap.logical_set.blob_tolerance)
+                and ($bootstrap.logical_set.blob_delta == 0)
+                and (($bootstrap.logical_set.required_blob_delta | type) == "number")
+                and ($bootstrap.logical_set.required_blob_delta == 0)
               ),
               bootstrap_bytes_growth_within_tolerance: (
                 (($bootstrap.logical_set.byte_delta | type) == "number")
@@ -423,10 +440,10 @@ write_combined_result() {
               ),
               logical_blob_delta: $final_transition.logical_set.blob_delta,
               logical_byte_delta: $final_transition.logical_set.byte_delta,
-              blob_count_within_tolerance: absolute_delta_within_tolerance(
-                $final_transition.logical_set.blob_delta;
-                $final_transition.logical_set.blob_tolerance
-              ),
+              required_blob_delta: $final_transition.logical_set.required_blob_delta,
+              blob_count_within_tolerance: ($final_transition.logical_set.blob_delta == 0),
+              required_blob_count_stable: ($final_transition.logical_set.required_blob_delta == 0),
+              all_warm_content_counts_stable: $all_warm_content_counts_stable,
               bytes_within_tolerance: absolute_delta_within_tolerance(
                 $final_transition.logical_set.byte_delta;
                 $final_transition.logical_set.byte_tolerance

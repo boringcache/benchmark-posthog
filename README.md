@@ -73,7 +73,7 @@ This repo uses split BoringCache tokens as the standard CI shape:
 
 ## Maintainer BuildKit State Canary
 
-[`buildkit-state-canary.yml`](.github/workflows/buildkit-state-canary.yml) is
+[`state-sync-v13-cas.yml`](.github/workflows/state-sync-v13-cas.yml) is
 the isolated pre-graduation path for the CLI `--backend state` product. It is
 manual-only and does not alter the public GHA, ECR, BC OCI, or managed
 `type=boringcache` lanes. It deliberately does not use `boringcache/one` or a

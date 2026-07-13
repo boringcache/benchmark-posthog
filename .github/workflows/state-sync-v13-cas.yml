@@ -1,4 +1,4 @@
-name: "Maintainer BuildKit State Canary"
+name: "Maintainer BuildKit State Replay Canary"
 run-name: >-
   ${{ format('BuildKit state canary | {0} | {1} | {2}', inputs.cache_lane, inputs.cli_release_tag, inputs.runner_label) }}
 

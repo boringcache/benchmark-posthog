@@ -202,6 +202,7 @@ boringcache() {
     --argjson records_after_gc "${MOCK_RECORDS_AFTER_GC:-2}" \
     --argjson include_content_gc_seconds "$(if [[ "${MOCK_OMIT_CONTENT_GC_SECONDS:-0}" == 1 ]]; then echo false; else echo true; fi)" \
     --argjson mountcache_enabled "$(if [[ "${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}" == fixture ]]; then echo true; else echo false; fi)" \
+    --argjson mountcache_hydrate_errors "${MOCK_MOUNTCACHE_HYDRATE_ERRORS:-0}" \
     '{
       schema_version: "buildkit-state-summary.v2",
       restore: {
@@ -254,7 +255,7 @@ boringcache() {
         selected_archives: (if $mountcache_enabled then 1 else 0 end),
         hydrate_hits: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
         hydrate_misses: 0,
-        hydrate_errors: 0,
+        hydrate_errors: $mountcache_hydrate_errors,
         hydrate_skips: 0,
         hydrated_files: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
         hydrated_compressed_bytes: (if $mountcache_enabled and $restore_status == "restored" then 100 else 0 end),
@@ -706,6 +707,21 @@ command jq -e '
   and .composition.toolcache_hits == true
   and all(.phases[]; .checks.tool_cache_valid == true)
 ' "$composition_dir/canary-result.json" >/dev/null
+
+composition_mount_error_dir="$test_root/composition-mount-error"
+if MOCK_MOUNTCACHE_HYDRATE_ERRORS=1 run_mock fresh "$composition_mount_error_dir" 2 fixture >/dev/null 2>&1; then
+  echo "Expected mount-cache hydration errors to fail the composition canary" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and (.phases | length) == 1
+  and .phases[0].checks.summary_valid == true
+  and .phases[0].checks.mount_cache_valid == false
+  and .phases[0].state.logical_generation_blobs > 0
+  and .phases[0].state.logical_generation_bytes > 0
+  and .phases[0].state.mount_cache.hydrate_errors == 1
+' "$composition_mount_error_dir/canary-result.json" >/dev/null
 
 mountcache_dir="$test_root/mountcache-failure"
 write_mock_preflight "$mountcache_dir"

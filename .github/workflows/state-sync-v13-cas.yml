@@ -59,6 +59,15 @@ on:
           - "1"
           - "2"
           - "5"
+      warm_generations:
+        description: "Fresh lane same-SHA warm generations used to measure convergence."
+        required: true
+        type: choice
+        default: "2"
+        options:
+          - "2"
+          - "4"
+          - "8"
       runner_label:
         description: "Maintainer-selected native runner label."
         required: true
@@ -107,6 +116,7 @@ jobs:
           POSTHOG_SOURCE: ${{ inputs.posthog_source }}
           CACHE_LANE: ${{ inputs.cache_lane }}
           ROLLING_SCOPE: ${{ inputs.rolling_scope }}
+          WARM_GENERATIONS: ${{ inputs.warm_generations }}
         run: |
           set -euo pipefail
           canary_artifact_dir="$RUNNER_TEMP/buildkit-state-canary"
@@ -135,6 +145,13 @@ jobs:
             echo "api_origin must be an exact HTTPS origin without a path or trailing slash" >&2
             exit 1
           }
+          case "$WARM_GENERATIONS" in
+            2|4|8) ;;
+            *)
+              echo "warm_generations must be 2, 4, or 8" >&2
+              exit 1
+              ;;
+          esac
           [[ -n "$BORINGCACHE_RESTORE_TOKEN" ]] || {
             echo "Missing BORINGCACHE_RESTORE_TOKEN" >&2
             exit 1
@@ -432,6 +449,7 @@ jobs:
           EXPECTED_IMAGE_DIGEST: ${{ steps.inputs.outputs.image_digest }}
           EXPECTED_SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
           CACHE_LANE: ${{ inputs.cache_lane }}
+          WARM_GENERATIONS: ${{ inputs.warm_generations }}
         run: |
           set -euo pipefail
           cli_sha256="$(awk 'NR == 1 { print $1 }' "$CANARY_ARTIFACT_DIR/cli-asset.sha256")"
@@ -472,7 +490,8 @@ jobs:
             --argjson available_bytes "$available_bytes" \
             --argjson required_free_bytes "$required_free_bytes" \
             --argjson runner_disk_capacity "$runner_disk_capacity" \
-            --argjson replay_plan_valid "$replay_plan_valid" '
+            --argjson replay_plan_valid "$replay_plan_valid" \
+            --argjson warm_generations "$WARM_GENERATIONS" '
               {
                 schema_version: "buildkit-state-canary-preflight-complete.v1",
                 api_origin: $backend[0].api_origin,
@@ -482,6 +501,7 @@ jobs:
                   cli_version: $cli_version,
                   buildkit_image_digest: $image_digest,
                   posthog_target_sha: $source_sha,
+                  warm_generations: $warm_generations,
                   runner_available_bytes: $available_bytes,
                   runner_required_free_bytes: $required_free_bytes
                 },
@@ -491,6 +511,7 @@ jobs:
                   cli_asset_exact: ($cli_sha256 == $expected_cli_sha256),
                   buildkit_image_exact: ($image_digest == $expected_image_digest),
                   source_target_exact: ($source_sha == $expected_source_sha),
+                  warm_generations_allowed: ($warm_generations == 2 or $warm_generations == 4 or $warm_generations == 8),
                   replay_plan_exact: $replay_plan_valid,
                   runner_disk_capacity: $runner_disk_capacity,
                   required_state_layout_exact: ($backend[0].state_contract.required_layout == "buildkit-state-v1")
@@ -512,6 +533,7 @@ jobs:
           BORINGCACHE_STATE_CANARY_DOCKERFILE: upstream/Dockerfile
           BORINGCACHE_STATE_CANARY_CONTEXT: upstream
           BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT: ${{ inputs.plateau_tolerance_percent }}
+          BORINGCACHE_STATE_CANARY_WARM_GENERATIONS: ${{ inputs.warm_generations }}
           BORINGCACHE_STATE_CANARY_REPLAY_PLAN: ${{ runner.temp }}/buildkit-state-canary/replay-plan.json
           BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: "0"
         run: ./scripts/run-buildkit-state-canary.sh
@@ -534,14 +556,15 @@ jobs:
             echo "- PostHog base: \`${{ steps.source.outputs.source_base }}\`"
             echo "- PostHog target: \`${{ steps.source.outputs.source_sha }}\`"
             echo "- Measured generations: \`${{ steps.source.outputs.selected_generation_count }}\`"
+            echo "- Fresh warm generations: \`${{ inputs.warm_generations }}\`"
             echo "- State tag: \`${{ steps.inputs.outputs.cache_tag }}\`"
             if [[ -s "$artifact_dir/preflight-checklist.json" ]]; then
               echo "- Complete preflight: \`$(jq -r '.all_passed' "$artifact_dir/preflight-checklist.json")\`"
             fi
             echo
             if [[ -s "$result" ]]; then
-              echo "| Phase | Result | Restore | Head fetches | Wall | State overhead | Cached | Logical set | Transport delta | Pruned | Builder destroyed |"
-              echo "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|"
+              echo "| Phase | Result | Restore | Head fetches | Wall | State overhead | Cached | Logical set | Transport delta | Finalize e/a/m/f/req | Retention / content GC | Builder destroyed |"
+              echo "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|---:|"
               jq -r '.phases[] | [
                 .phase,
                 (if .success then "pass" else "fail" end),
@@ -552,16 +575,32 @@ jobs:
                 (.cached_steps | tostring),
                 ((.state.logical_generation_blobs | tostring) + " / " + (.state.logical_generation_bytes / 1048576 | floor | tostring) + " MiB"),
                 ((.state.transport_delta_blobs | tostring) + " / " + (.state.transport_delta_bytes / 1048576 | floor | tostring) + " MiB"),
-                ((.state.pruned_records | tostring) + " / " + (.state.pruned_bytes / 1048576 | floor | tostring) + " MiB"),
+                ((.state.finalize.eligible | tostring) + "/" + (.state.finalize.already_ready | tostring) + "/" + (.state.finalize.materialized | tostring) + "/" + (.state.finalize.failed | tostring) + "/" + (.state.finalize.required_blobs | tostring) + " @ " + (.state.finalize.seconds | tostring) + "s"),
+                ((.state.finalize.retention_policy | tostring) + " / gc=" + (.state.finalize.content_gc_applied | tostring) + " / " + (.state.finalize.records_before_gc | tostring) + "→" + (.state.finalize.records_after_gc | tostring) + " / " + (.state.content_gc_seconds | tostring) + "s"),
                 (if .checks.managed_builder_destroyed then "yes" else "no" end)
               ] | "| " + join(" | ") + " |"' "$result"
               echo
+              if jq -e '.current_set.transitions | type == "array" and length > 0' "$result" >/dev/null; then
+                echo "| Transition | Kind | Lineage | Head only | Solver reuse | Logical delta | Within tolerance | Final pair |"
+                echo "|---|---|---:|---:|---:|---:|---:|---:|"
+                jq -r '.current_set.transitions[] | [
+                  ((.from_phase | tostring) + " → " + (.to_phase | tostring)),
+                  .kind,
+                  (if .lineage.valid then "yes" else "no" end),
+                  (if .current_head_only then "yes" else "no" end),
+                  (if .solver_reuse then "yes" else "no" end),
+                  ((.logical_set.blob_delta | tostring) + " blobs / " + (.logical_set.byte_delta | tostring) + " bytes"),
+                  (if .logical_set.within_tolerance then "yes" else "no" end),
+                  (if .final_convergence_pair then "yes" else "no" end)
+                ] | "| " + join(" | ") + " |"' "$result"
+                echo
+              fi
               jq -r 'if .current_set.replay != null then
                 "Replay continuity: \(.current_set.current_set_replacement); exact source sequence: \(.current_set.exact_source_sequence); current head only: \(.current_set.only_current_head_fetched); logical successors within \(.current_set.replay.tolerance_percent)%: \(.current_set.replay.all_successors_within_tolerance) (telemetry, not a cross-commit correctness gate)."
               elif .current_set.growth == null then
                 "Current-set replacement: \(.current_set.current_set_replacement); current head only: \(.current_set.only_current_head_fetched)."
               else
-                "Current-set replacement: \(.current_set.current_set_replacement); bootstrap delta: \(.current_set.growth.bootstrap_logical_blob_delta) blobs / \(.current_set.growth.bootstrap_logical_byte_delta) bytes (positive growth bounded: \(.current_set.growth.bootstrap_blob_growth_within_tolerance) / \(.current_set.growth.bootstrap_bytes_growth_within_tolerance)); converged same-ref plateau: \(.current_set.same_ref_plateau) (\(.current_set.growth.tolerance_percent)% tolerance, \(.current_set.growth.logical_blob_delta) blobs, \(.current_set.growth.logical_byte_delta) bytes); solver reuse: \(.current_set.same_ref_solver_reuse)."
+                "Current-set replacement: \(.current_set.current_set_replacement); warm generations: \(.current_set.warm_generations_measured)/\(.current_set.warm_generations_planned); bootstrap delta: \(.current_set.growth.bootstrap_logical_blob_delta) blobs / \(.current_set.growth.bootstrap_logical_byte_delta) bytes (positive growth bounded: \(.current_set.growth.bootstrap_blob_growth_within_tolerance) / \(.current_set.growth.bootstrap_bytes_growth_within_tolerance)); final warm-pair plateau: \(.current_set.same_ref_plateau) (\(.current_set.growth.tolerance_percent)% tolerance, \(.current_set.growth.logical_blob_delta) blobs, \(.current_set.growth.logical_byte_delta) bytes); all-warm solver reuse: \(.current_set.same_ref_solver_reuse)."
               end' "$result"
             else
               echo "The runner stopped before it could write a phase result. Inspect the uploaded diagnostics."

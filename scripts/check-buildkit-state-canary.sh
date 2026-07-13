@@ -39,6 +39,8 @@ require_text "$workflow" "if: always()"
 require_text "$workflow" "replay-full"
 require_text "$workflow" "replay-endpoints"
 require_text "$workflow" "posthog_source:"
+require_text "$workflow" "warm_generations:"
+require_text "$workflow" "BORINGCACHE_STATE_CANARY_WARM_GENERATIONS: \${{ inputs.warm_generations }}"
 require_text "$workflow" "replay-plan.json"
 require_text "$workflow" "first parent of"
 require_text "$workflow" "fetch --no-tags --depth 1 origin \"\${replay_commits[@]}\""
@@ -67,6 +69,10 @@ require_text "$runner" "logical_generation_bytes"
 require_text "$runner" "current_set_replacement"
 require_text "$runner" "only_current_head_fetched"
 require_text "$runner" "same_ref_solver_reuse"
+require_text "$runner" "BuildKit state warm generations must be 2, 4, or 8"
+require_text "$runner" "warm_generations_planned"
+require_text "$runner" "transitions: \$transitions"
+require_text "$runner" "final_convergence_pair"
 require_text "$runner" "bootstrap_blob_growth_within_tolerance"
 require_text "$runner" "exact_source_sequence"
 require_text "$runner" "all_successors_within_tolerance"
@@ -74,6 +80,12 @@ require_text "$runner" "replay-successor"
 require_text "$runner" "preflight-checklist.json"
 require_text "$runner" ".save.logical_generation_blobs"
 require_text "$runner" ".save.logical_generation_bytes"
+require_text "$runner" 'buildkit-state-summary.v2'
+require_text "$runner" 'complete-main-cache-v1'
+require_text "$runner" '.finalize.content_gc_applied == true'
+require_text "$runner" '.finalize.records_before_gc == .finalize.records_after_gc'
+require_text "$runner" '.finalize.records_after_gc >= .finalize.eligible'
+require_text "$runner" '.content_gc_seconds'
 require_text "$runner" "--output type=cacheonly"
 require_text "$runner" "buildkit-state-canary-result.v2"
 require_text "$runner" "buildkit-state-canary-phase.v2"
@@ -90,6 +102,10 @@ for file in "$workflow" "$runner" "$preflight_runner"; do
 done
 reject_text "$runner" ".save.reused_blobs"
 reject_text "$runner" ".save.reused_bytes"
+reject_text "$runner" 'buildkit-state-summary.v1'
+reject_text "$runner" 'prune_seconds'
+reject_text "$runner" 'pruned_records'
+reject_text "$runner" 'pruned_bytes'
 
 cli_version_line="$(grep -n -m1 'name: Resolve verified CLI version' "$workflow" | cut -d: -f1)"
 capability_probe_line="$(grep -n -m1 'name: Probe exact backend state capabilities' "$workflow" | cut -d: -f1)"

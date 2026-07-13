@@ -31,6 +31,7 @@ dockerfile_path="${BORINGCACHE_STATE_CANARY_DOCKERFILE:-upstream/Dockerfile}"
 docker_context="${BORINGCACHE_STATE_CANARY_CONTEXT:-upstream}"
 docker_platform="${BORINGCACHE_STATE_CANARY_PLATFORM:-linux/amd64}"
 plateau_tolerance_percent="${BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT:-2}"
+warm_generations="${BORINGCACHE_STATE_CANARY_WARM_GENERATIONS:-2}"
 replay_plan_path="${BORINGCACHE_STATE_CANARY_REPLAY_PLAN:-}"
 
 case "$lane" in
@@ -53,6 +54,13 @@ if [[ ! "$plateau_tolerance_percent" =~ ^[0-9]+$ ]] || ((plateau_tolerance_perce
   echo "BuildKit state plateau tolerance must be an integer from 0 through 100" >&2
   exit 2
 fi
+case "$warm_generations" in
+  2|4|8) ;;
+  *)
+    echo "BuildKit state warm generations must be 2, 4, or 8" >&2
+    exit 2
+    ;;
+esac
 if [[ "${BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER:-0}" =~ ^(1|true|yes|on)$ ]]; then
   echo "BuildKit mountcache offload is not part of the core state canary" >&2
   exit 2
@@ -175,6 +183,7 @@ jq -n \
   --argjson replay_all_commits "$replay_all_commits" \
   --argjson replay_selected_commits "$replay_selected_commits" \
   --argjson plateau_tolerance_percent "$plateau_tolerance_percent" \
+  --argjson warm_generations "$warm_generations" \
   '{
     schema_version: $schema_version,
     lane: $lane,
@@ -193,6 +202,7 @@ jq -n \
       selected_commits: $replay_selected_commits
     } end),
     plateau_tolerance_percent: $plateau_tolerance_percent,
+    warm_generations: $warm_generations,
     mountcache_enabled: false
   }' > "$artifact_dir/inputs.json"
 
@@ -210,15 +220,25 @@ snapshot_managed_resources() {
 baseline_resources="$artifact_dir/managed-resources.before.txt"
 snapshot_managed_resources > "$baseline_resources"
 
+fresh_warm_phase_name() {
+  local index="$1"
+  case "$index" in
+    1) printf '%s\n' same-ref-warm ;;
+    2) printf '%s\n' same-ref-repeat ;;
+    *) printf 'same-ref-repeat-%03d\n' "$index" ;;
+  esac
+}
+
 write_combined_result() {
   local result="$artifact_dir/canary-result.json"
   local phase_files=()
-  local path
+  local path index phase
   if [[ "$lane" == "fresh" ]]; then
-    for path in \
-      "$artifact_dir/cold.phase.json" \
-      "$artifact_dir/same-ref-warm.phase.json" \
-      "$artifact_dir/same-ref-repeat.phase.json"; do
+    path="$artifact_dir/cold.phase.json"
+    [[ -f "$path" ]] && phase_files+=("$path")
+    for ((index = 1; index <= warm_generations; index++)); do
+      phase="$(fresh_warm_phase_name "$index")"
+      path="$artifact_dir/${phase}.phase.json"
       [[ -f "$path" ]] && phase_files+=("$path")
     done
   else
@@ -239,61 +259,148 @@ write_combined_result() {
     --slurpfile inputs "$artifact_dir/inputs.json" \
     --arg lane "$lane" \
     --argjson tolerance "$plateau_tolerance_percent" \
-    '{
+    --argjson warm_generations "$warm_generations" \
+    'def absolute_delta_within_tolerance($delta; $limit):
+       if (($delta | type) == "number" and ($limit | type) == "number") then
+         (($delta | if . < 0 then -. else . end) <= $limit)
+       else
+         false
+       end;
+    {
       phases: .,
       all_phases_valid: (length > 0 and all(.[]; .success == true))
     }
     | . as $base
     | (if $lane == "fresh" then
-        ($base.phases | map(select(.phase == "cold"))[0]) as $cold
-        | ($base.phases | map(select(.phase == "same-ref-warm"))[0]) as $warm
-        | ($base.phases | map(select(.phase == "same-ref-repeat"))[0]) as $repeat
-        | (($warm.state.logical_generation_blobs // 0) - ($cold.state.logical_generation_blobs // 0)) as $bootstrap_blob_delta
-        | (($warm.state.logical_generation_bytes // 0) - ($cold.state.logical_generation_bytes // 0)) as $bootstrap_byte_delta
-        | (($repeat.state.logical_generation_blobs // 0) - ($warm.state.logical_generation_blobs // 0)) as $plateau_blob_delta
-        | (($repeat.state.logical_generation_bytes // 0) - ($warm.state.logical_generation_bytes // 0)) as $plateau_byte_delta
-        | ($bootstrap_blob_delta <= (((($cold.state.logical_generation_blobs // 0) * $tolerance / 100)) | ceil)) as $bootstrap_blob_growth_bounded
-        | ($bootstrap_byte_delta <= (((($cold.state.logical_generation_bytes // 0) * $tolerance / 100)) | ceil)) as $bootstrap_byte_growth_bounded
-        | (($plateau_blob_delta | if . < 0 then -. else . end) <= (((($warm.state.logical_generation_blobs // 0) * $tolerance / 100)) | ceil)) as $blob_plateau
-        | (($plateau_byte_delta | if . < 0 then -. else . end) <= (((($warm.state.logical_generation_bytes // 0) * $tolerance / 100)) | ceil)) as $byte_plateau
-        | ($warm.cached_steps > $cold.cached_steps and $warm.executed_steps < $cold.executed_steps) as $first_warm_solver_reuse
-        | ($repeat.cached_steps > $cold.cached_steps and $repeat.executed_steps < $cold.executed_steps) as $repeat_solver_reuse
+        ($base.phases[0] // null) as $cold
+        | ($base.phases[1:] // []) as $warm_phases
+        | [range(1; ($base.phases | length)) as $index
+          | $base.phases[$index - 1] as $previous
+          | $base.phases[$index] as $current
+          | ($current.state.logical_generation_blobs - $previous.state.logical_generation_blobs) as $blob_delta
+          | ($current.state.logical_generation_bytes - $previous.state.logical_generation_bytes) as $byte_delta
+          | (($previous.state.logical_generation_blobs * $tolerance / 100) | ceil) as $blob_tolerance
+          | (($previous.state.logical_generation_bytes * $tolerance / 100) | ceil) as $byte_tolerance
+          | {
+              transition_index: $index,
+              from_phase: $previous.phase,
+              to_phase: $current.phase,
+              kind: (if $index == 1 then "bootstrap" else "same-ref" end),
+              final_convergence_pair: ($index == (($base.phases | length) - 1) and $index > 1),
+              lineage: {
+                previous_generation: $previous.state.generation,
+                restored_generation: $current.state.restored_generation,
+                parent_generation: $current.state.parent_generation,
+                current_generation: $current.state.generation,
+                valid: (
+                  $current.state.restore_status == "restored"
+                  and $current.state.restored_generation == $previous.state.generation
+                  and $current.state.parent_generation == $previous.state.generation
+                )
+              },
+              current_head_only: (
+                $current.state.head_generations_fetched == 1
+                and $current.checks.current_head_only
+              ),
+              solver_reuse: (
+                $current.cached_steps > $cold.cached_steps
+                and $current.executed_steps < $cold.executed_steps
+              ),
+              logical_set: {
+                previous_blobs: $previous.state.logical_generation_blobs,
+                previous_bytes: $previous.state.logical_generation_bytes,
+                current_blobs: $current.state.logical_generation_blobs,
+                current_bytes: $current.state.logical_generation_bytes,
+                blob_delta: $blob_delta,
+                byte_delta: $byte_delta,
+                blob_delta_percent: (
+                  if $previous.state.logical_generation_blobs == 0 then null
+                  else (($blob_delta * 10000 / $previous.state.logical_generation_blobs) | round) / 100
+                  end
+                ),
+                byte_delta_percent: (
+                  if $previous.state.logical_generation_bytes == 0 then null
+                  else (($byte_delta * 10000 / $previous.state.logical_generation_bytes) | round) / 100
+                  end
+                ),
+                blob_tolerance: $blob_tolerance,
+                byte_tolerance: $byte_tolerance,
+                within_tolerance: (
+                  absolute_delta_within_tolerance($blob_delta; $blob_tolerance)
+                  and absolute_delta_within_tolerance($byte_delta; $byte_tolerance)
+                ),
+                positive_growth_within_tolerance: (
+                  $blob_delta <= $blob_tolerance
+                  and $byte_delta <= $byte_tolerance
+                )
+              }
+            }
+        ] as $transitions
+        | ($transitions[0] // null) as $bootstrap
+        | ($transitions[-1] // null) as $final_transition
+        | ($warm_phases[0] // null) as $warm
+        | ($warm_phases[1] // null) as $repeat
+        | ((($warm_phases | length) == $warm_generations)
+            and all($warm_phases[];
+              .cached_steps > $cold.cached_steps
+              and .executed_steps < $cold.executed_steps
+            )) as $all_warm_solver_reuse
         | {
             current_set_replacement: (
               $cold != null
               and $warm != null
               and $repeat != null
+              and ($base.phases | length) == ($warm_generations + 1)
               and $cold.state.logical_generation_blobs > 0
               and $cold.state.logical_generation_bytes > 0
-              and $warm.state.parent_generation == $cold.state.generation
-              and $warm.state.restored_generation == $cold.state.generation
-              and $warm.state.head_generations_fetched == 1
-              and $repeat.state.parent_generation == $warm.state.generation
-              and $repeat.state.restored_generation == $warm.state.generation
-              and $repeat.state.head_generations_fetched == 1
-              and $bootstrap_blob_growth_bounded
-              and $bootstrap_byte_growth_bounded
-              and $blob_plateau
-              and $byte_plateau
+              and all($transitions[];
+                .lineage.valid
+                and .current_head_only
+                and .logical_set.current_blobs > 0
+                and .logical_set.current_bytes > 0
+              )
+              and $bootstrap.logical_set.positive_growth_within_tolerance
+              and $final_transition.final_convergence_pair
+              and $final_transition.logical_set.within_tolerance
             ),
             only_current_head_fetched: (
-              $warm.state.head_generations_fetched == 1
-              and $repeat.state.head_generations_fetched == 1
+              ($warm_phases | length) == $warm_generations
+              and all($warm_phases[];
+                .state.head_generations_fetched == 1
+                and .checks.current_head_only
+              )
             ),
-            same_ref_plateau: ($blob_plateau and $byte_plateau),
-            same_ref_solver_reuse: ($first_warm_solver_reuse and $repeat_solver_reuse),
-            same_ref_first_warm_solver_reuse: $first_warm_solver_reuse,
-            same_ref_repeat_solver_reuse: $repeat_solver_reuse,
+            warm_generations_planned: $warm_generations,
+            warm_generations_measured: ($warm_phases | length),
+            same_ref_plateau: ($final_transition.logical_set.within_tolerance // false),
+            same_ref_solver_reuse: $all_warm_solver_reuse,
+            same_ref_first_warm_solver_reuse: ($transitions[0].solver_reuse // false),
+            same_ref_repeat_solver_reuse: ($transitions[1].solver_reuse // false),
+            transitions: $transitions,
             growth: {
               tolerance_percent: $tolerance,
-              bootstrap_logical_blob_delta: $bootstrap_blob_delta,
-              bootstrap_logical_byte_delta: $bootstrap_byte_delta,
-              bootstrap_blob_growth_within_tolerance: $bootstrap_blob_growth_bounded,
-              bootstrap_bytes_growth_within_tolerance: $bootstrap_byte_growth_bounded,
-              logical_blob_delta: $plateau_blob_delta,
-              logical_byte_delta: $plateau_byte_delta,
-              blob_count_within_tolerance: $blob_plateau,
-              bytes_within_tolerance: $byte_plateau
+              bootstrap_logical_blob_delta: $bootstrap.logical_set.blob_delta,
+              bootstrap_logical_byte_delta: $bootstrap.logical_set.byte_delta,
+              bootstrap_blob_growth_within_tolerance: (
+                (($bootstrap.logical_set.blob_delta | type) == "number")
+                and (($bootstrap.logical_set.blob_tolerance | type) == "number")
+                and ($bootstrap.logical_set.blob_delta <= $bootstrap.logical_set.blob_tolerance)
+              ),
+              bootstrap_bytes_growth_within_tolerance: (
+                (($bootstrap.logical_set.byte_delta | type) == "number")
+                and (($bootstrap.logical_set.byte_tolerance | type) == "number")
+                and ($bootstrap.logical_set.byte_delta <= $bootstrap.logical_set.byte_tolerance)
+              ),
+              logical_blob_delta: $final_transition.logical_set.blob_delta,
+              logical_byte_delta: $final_transition.logical_set.byte_delta,
+              blob_count_within_tolerance: absolute_delta_within_tolerance(
+                $final_transition.logical_set.blob_delta;
+                $final_transition.logical_set.blob_tolerance
+              ),
+              bytes_within_tolerance: absolute_delta_within_tolerance(
+                $final_transition.logical_set.byte_delta;
+                $final_transition.logical_set.byte_tolerance
+              )
             }
           }
       elif $lane == "rolling" then
@@ -496,7 +603,10 @@ run_phase() {
 
   local cached_steps executed_steps state_overhead restore_status publish_status
   local restored_bytes restored_files logical_bytes logical_blobs transport_delta_bytes transport_delta_blobs
-  local restored_generation generation parent_generation pruned_records pruned_bytes head_generations_fetched
+  local restored_generation generation parent_generation head_generations_fetched
+  local finalize_eligible finalize_already_ready finalize_materialized finalize_failed finalize_required_blobs
+  local finalize_seconds retention_policy content_gc_applied content_gc_duration_ms
+  local records_before_gc records_after_gc content_gc_seconds
   local summary_valid cleanup_valid expectation_valid current_head_only success
   cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$log_path" || true)"
   executed_steps="$(grep -Ec '^#[0-9]+ DONE ([0-9]+([.][0-9]+)?)s$' "$log_path" || true)"
@@ -512,8 +622,18 @@ run_phase() {
   restored_generation=""
   generation=""
   parent_generation=""
-  pruned_records="0"
-  pruned_bytes="0"
+  finalize_eligible="0"
+  finalize_already_ready="0"
+  finalize_materialized="0"
+  finalize_failed="0"
+  finalize_required_blobs="0"
+  finalize_seconds=""
+  retention_policy=""
+  content_gc_applied=false
+  content_gc_duration_ms="0"
+  records_before_gc="0"
+  records_after_gc="0"
+  content_gc_seconds=""
   head_generations_fetched="0"
   summary_valid=false
   cleanup_valid=false
@@ -523,16 +643,35 @@ run_phase() {
   if [[ -s "$state_summary_path" ]] && jq -e \
     --arg digest "$buildkit_digest" \
     --arg platform "$docker_platform" \
-    '.schema_version == "buildkit-state-summary.v1"
+    '.schema_version == "buildkit-state-summary.v2"
       and .compatibility.image_digest == $digest
       and .compatibility.platform == $platform
       and .compatibility.state_format == "buildkit-state-v1"
       and .compatibility.rootless == false
+      and (.finalize.eligible | type == "number")
+      and .finalize.eligible >= 0
+      and (.finalize.already_ready | type == "number")
+      and .finalize.already_ready >= 0
+      and (.finalize.materialized | type == "number")
+      and .finalize.materialized >= 0
+      and (.finalize.failed | type == "number")
       and .finalize.failed == 0
-      and (.finalize.pruned_records | type == "number")
-      and .finalize.pruned_records >= 0
-      and (.finalize.pruned_bytes | type == "number")
-      and .finalize.pruned_bytes >= 0
+      and .finalize.eligible == (.finalize.already_ready + .finalize.materialized + .finalize.failed)
+      and (.finalize.required_blobs | type == "number")
+      and .finalize.required_blobs >= 0
+      and (.finalize.seconds | type == "number")
+      and .finalize.seconds >= 0
+      and .finalize.retention_policy == "complete-main-cache-v1"
+      and .finalize.content_gc_applied == true
+      and (.finalize.content_gc_duration_ms | type == "number")
+      and .finalize.content_gc_duration_ms >= 0
+      and (.finalize.records_before_gc | type == "number")
+      and (.finalize.records_after_gc | type == "number")
+      and .finalize.records_before_gc == .finalize.records_after_gc
+      and .finalize.records_after_gc >= .finalize.eligible
+      and (.content_gc_seconds | type == "number")
+      and .content_gc_seconds >= 0
+      and ((.content_gc_seconds * 1000 | round) == .finalize.content_gc_duration_ms)
       and .save.publish_status == "published"
       and (.save.generation | type == "string")
       and (.save.logical_generation_blobs | type == "number")
@@ -559,8 +698,18 @@ run_phase() {
     restored_generation="$(jq -r '.restore.generation // ""' "$state_summary_path")"
     generation="$(jq -r '.save.generation // ""' "$state_summary_path")"
     parent_generation="$(jq -r '.save.parent // ""' "$state_summary_path")"
-    pruned_records="$(jq -r '.finalize.pruned_records' "$state_summary_path")"
-    pruned_bytes="$(jq -r '.finalize.pruned_bytes' "$state_summary_path")"
+    finalize_eligible="$(jq -r '.finalize.eligible' "$state_summary_path")"
+    finalize_already_ready="$(jq -r '.finalize.already_ready' "$state_summary_path")"
+    finalize_materialized="$(jq -r '.finalize.materialized' "$state_summary_path")"
+    finalize_failed="$(jq -r '.finalize.failed' "$state_summary_path")"
+    finalize_required_blobs="$(jq -r '.finalize.required_blobs' "$state_summary_path")"
+    finalize_seconds="$(jq -r '.finalize.seconds' "$state_summary_path")"
+    retention_policy="$(jq -r '.finalize.retention_policy' "$state_summary_path")"
+    content_gc_applied="$(jq -r '.finalize.content_gc_applied' "$state_summary_path")"
+    content_gc_duration_ms="$(jq -r '.finalize.content_gc_duration_ms' "$state_summary_path")"
+    records_before_gc="$(jq -r '.finalize.records_before_gc' "$state_summary_path")"
+    records_after_gc="$(jq -r '.finalize.records_after_gc' "$state_summary_path")"
+    content_gc_seconds="$(jq -r '.content_gc_seconds' "$state_summary_path")"
     if [[ "$restore_status" == "restored" ]]; then
       head_generations_fetched=1
     fi
@@ -623,8 +772,18 @@ run_phase() {
     --argjson logical_blobs "$logical_blobs" \
     --argjson transport_delta_bytes "$transport_delta_bytes" \
     --argjson transport_delta_blobs "$transport_delta_blobs" \
-    --argjson pruned_records "$pruned_records" \
-    --argjson pruned_bytes "$pruned_bytes" \
+    --argjson finalize_eligible "$finalize_eligible" \
+    --argjson finalize_already_ready "$finalize_already_ready" \
+    --argjson finalize_materialized "$finalize_materialized" \
+    --argjson finalize_failed "$finalize_failed" \
+    --argjson finalize_required_blobs "$finalize_required_blobs" \
+    --arg finalize_seconds "$finalize_seconds" \
+    --arg retention_policy "$retention_policy" \
+    --argjson content_gc_applied "$content_gc_applied" \
+    --argjson content_gc_duration_ms "$content_gc_duration_ms" \
+    --argjson records_before_gc "$records_before_gc" \
+    --argjson records_after_gc "$records_after_gc" \
+    --arg content_gc_seconds "$content_gc_seconds" \
     --argjson head_generations_fetched "$head_generations_fetched" \
     --argjson summary_valid "$summary_valid" \
     --argjson cleanup_valid "$cleanup_valid" \
@@ -656,8 +815,20 @@ run_phase() {
         logical_generation_blobs: $logical_blobs,
         transport_delta_bytes: $transport_delta_bytes,
         transport_delta_blobs: $transport_delta_blobs,
-        pruned_records: $pruned_records,
-        pruned_bytes: $pruned_bytes
+        finalize: {
+          eligible: $finalize_eligible,
+          already_ready: $finalize_already_ready,
+          materialized: $finalize_materialized,
+          failed: $finalize_failed,
+          required_blobs: $finalize_required_blobs,
+          seconds: (if $finalize_seconds == "" then null else ($finalize_seconds | tonumber) end),
+          retention_policy: $retention_policy,
+          content_gc_applied: $content_gc_applied,
+          content_gc_duration_ms: $content_gc_duration_ms,
+          records_before_gc: $records_before_gc,
+          records_after_gc: $records_after_gc
+        },
+        content_gc_seconds: (if $content_gc_seconds == "" then null else ($content_gc_seconds | tonumber) end)
       },
       checks: {
         summary_valid: $summary_valid,
@@ -681,11 +852,14 @@ run_phase() {
 if [[ "$lane" == "fresh" ]]; then
   run_phase cold cold base "$source_sha" cold
   # Each state invocation owns and removes its builder, daemon, network, and
-  # volume. The second phase proves remote restore into a new root. A cold
-  # bootstrap can legitimately contract after its transient refs are pruned,
-  # so the third phase proves the converged same-ref current set plateaus.
-  run_phase same-ref-warm warm warm1 "$source_sha" same-ref
-  run_phase same-ref-repeat warm2 warm1 "$source_sha" same-ref
+  # volume. The second phase proves remote restore into a new root. Cold-to-warm
+  # movement is recorded separately as bootstrap convergence. Repeating the
+  # exact SHA shows how many generations convergence takes; the
+  # final warm-to-warm transition is the provisional plateau gate.
+  for ((index = 1; index <= warm_generations; index++)); do
+    phase="$(fresh_warm_phase_name "$index")"
+    run_phase "$phase" warm warm1 "$source_sha" same-ref
+  done
 elif [[ "$lane" == "rolling" ]]; then
   run_phase rolling commit base "$source_sha" rolling
 else

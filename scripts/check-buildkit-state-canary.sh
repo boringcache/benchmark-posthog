@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-workflow="$repo_root/.github/workflows/buildkit-state-canary.yml"
+workflow="$repo_root/.github/workflows/state-sync-v13-cas.yml"
 runner="$repo_root/scripts/run-buildkit-state-canary.sh"
 preflight_runner="$repo_root/scripts/preflight-buildkit-state-canary.sh"
 test_runner="$repo_root/scripts/test-buildkit-state-canary.sh"

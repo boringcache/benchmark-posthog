@@ -186,6 +186,7 @@ boringcache() {
     --argjson content_gc_applied "$(if [[ "${MOCK_CONTENT_GC_APPLIED:-1}" == 1 ]]; then echo true; else echo false; fi)" \
     --argjson records_after_gc "${MOCK_RECORDS_AFTER_GC:-2}" \
     --argjson include_content_gc_seconds "$(if [[ "${MOCK_OMIT_CONTENT_GC_SECONDS:-0}" == 1 ]]; then echo false; else echo true; fi)" \
+    --argjson mountcache_enabled "$(if [[ "${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}" == fixture ]]; then echo true; else echo false; fi)" \
     '{
       schema_version: "buildkit-state-summary.v2",
       restore: {
@@ -226,6 +227,32 @@ boringcache() {
         platform: "linux/amd64",
         rootless: false
       },
+      mount_cache: {
+        enabled: $mountcache_enabled,
+        available_archives: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
+        available_bytes: (if $mountcache_enabled and $restore_status == "restored" then 100 else 0 end),
+        restored_blobs: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
+        restored_archives: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
+        restored_bytes: (if $mountcache_enabled and $restore_status == "restored" then 100 else 0 end),
+        generation_archives: (if $mountcache_enabled then 1 else 0 end),
+        generation_bytes: (if $mountcache_enabled then 100 else 0 end),
+        selected_archives: (if $mountcache_enabled then 1 else 0 end),
+        hydrate_hits: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
+        hydrate_misses: 0,
+        hydrate_errors: 0,
+        hydrate_skips: 0,
+        hydrated_files: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
+        hydrated_compressed_bytes: (if $mountcache_enabled and $restore_status == "restored" then 100 else 0 end),
+        hydrated_uncompressed_bytes: (if $mountcache_enabled and $restore_status == "restored" then 200 else 0 end),
+        hydrate_milliseconds: 1,
+        published_archives: (if $mountcache_enabled then 1 else 0 end),
+        publish_errors: 0,
+        published_files: (if $mountcache_enabled then 1 else 0 end),
+        published_compressed_bytes: (if $mountcache_enabled then 100 else 0 end),
+        published_uncompressed_bytes: (if $mountcache_enabled then 200 else 0 end),
+        publish_milliseconds: 1,
+        runtime_status: (if $mountcache_enabled then "recorded" else "disabled" end)
+      },
       total_state_overhead_seconds: 0.4
     }
     | if $include_content_gc_seconds then .content_gc_seconds = 0.1 else . end
@@ -235,16 +262,36 @@ boringcache() {
       else . end' > "$BORINGCACHE_STATE_SUMMARY_PATH"
 
   saw_cacheonly=0
+  saw_tool_cache=0
   for arg in "$@"; do
     [[ "$arg" == type=cacheonly ]] && saw_cacheonly=1
+    [[ "$arg" == turbo:* ]] && saw_tool_cache=1
   done
   [[ "$saw_cacheonly" -eq 1 ]] || {
     echo "Mock canary command omitted its cache-only product output" >&2
     return 1
   }
 
+  if [[ "${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}" == fixture && "$saw_tool_cache" -ne 1 ]]; then
+    echo "Mock composition command omitted its Turbo tool cache" >&2
+    return 1
+  fi
+
   printf 'mock daemon %s\n' "$phase" > "$BORINGCACHE_MANAGED_BUILDKIT_LOG_PATH"
-  printf '{"phase":"%s"}\n' "$phase" > "$BORINGCACHE_OBSERVABILITY_JSONL_PATH"
+  if [[ "${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}" == fixture ]]; then
+    command jq -cn --arg phase "$phase" '{
+      phase: $phase,
+      operation: "cache_session_summary",
+      adapter: "turborepo",
+      duration_ms: 10,
+      classification: {
+        cache_temperature: {hits: 1, misses: 0, writes: 1, errors: 0}
+      },
+      backend_api: {total_error_count: 0, total_retry_count: 0}
+    }' > "$BORINGCACHE_OBSERVABILITY_JSONL_PATH"
+  else
+    printf '{"phase":"%s"}\n' "$phase" > "$BORINGCACHE_OBSERVABILITY_JSONL_PATH"
+  fi
   echo '#1 [mock] build'
   if [[ "$phase" == cold || "$phase" == replay-001-* ]]; then
     echo '#1 DONE 1.0s'
@@ -332,6 +379,13 @@ run_mock() {
   local lane="$1"
   local artifact_dir="$2"
   local requested_warm_generations="${3:-2}"
+  local composition_mode="${4:-off}"
+  local mountcache_offloader=0
+  local tool_cache_tag=""
+  if [[ "$composition_mode" == fixture ]]; then
+    mountcache_offloader=1
+    tool_cache_tag="mock-${lane}-turbo"
+  fi
   write_mock_preflight "$artifact_dir"
   if [[ "$lane" == replay-full || "$lane" == replay-endpoints ]]; then
     write_mock_replay_plan "$lane" "$artifact_dir"
@@ -340,6 +394,8 @@ run_mock() {
   BORINGCACHE_STATE_CANARY_LANE="$lane" \
     BORINGCACHE_STATE_CANARY_WORKSPACE=boringcache/benchmark-posthog \
     BORINGCACHE_STATE_CANARY_TAG="mock-${lane}" \
+    BORINGCACHE_STATE_CANARY_COMPOSITION_MODE="$composition_mode" \
+    BORINGCACHE_STATE_CANARY_TOOL_CACHE_TAG="$tool_cache_tag" \
     BORINGCACHE_STATE_CANARY_BUILDKIT_IMAGE="ghcr.io/boringcache/buildkit@${image_digest}" \
     BORINGCACHE_STATE_CANARY_ARTIFACT_DIR="$artifact_dir" \
     BORINGCACHE_STATE_CANARY_REPLAY_PLAN="$artifact_dir/replay-plan.json" \
@@ -347,7 +403,7 @@ run_mock() {
     BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT=2 \
     BORINGCACHE_STATE_CANARY_WARM_GENERATIONS="$requested_warm_generations" \
     BORINGCACHE_API_URL="$mock_api_origin" \
-    BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER=0 \
+    BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER="$mountcache_offloader" \
     "$runner"
 }
 
@@ -560,6 +616,22 @@ if MOCK_OMIT_CONTENT_GC_SECONDS=1 run_mock rolling "$content_gc_seconds_dir" >/d
   exit 1
 fi
 command jq -e '.success == false and .phases[0].checks.summary_valid == false' "$content_gc_seconds_dir/canary-result.json" >/dev/null
+
+composition_dir="$test_root/composition-fixture"
+run_mock replay-full "$composition_dir" 2 fixture >/dev/null
+command jq -e '
+  .success == true
+  and .inputs.composition_mode == "fixture"
+  and .inputs.mountcache_enabled == true
+  and .inputs.tool_env_delivery == "static-secret-fixture"
+  and .composition.valid == true
+  and .composition.mountcache_published == true
+  and .composition.mountcache_restored == true
+  and .composition.mountcache_hydrated == true
+  and .composition.toolcache_exercised == true
+  and .composition.toolcache_hits == true
+  and all(.phases[]; .checks.tool_cache_valid == true)
+' "$composition_dir/canary-result.json" >/dev/null
 
 mountcache_dir="$test_root/mountcache-failure"
 write_mock_preflight "$mountcache_dir"

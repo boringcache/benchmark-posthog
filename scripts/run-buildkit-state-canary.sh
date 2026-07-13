@@ -24,6 +24,8 @@ done
 lane="$BORINGCACHE_STATE_CANARY_LANE"
 workspace="$BORINGCACHE_STATE_CANARY_WORKSPACE"
 cache_tag="$BORINGCACHE_STATE_CANARY_TAG"
+composition_mode="${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}"
+tool_cache_tag="${BORINGCACHE_STATE_CANARY_TOOL_CACHE_TAG:-}"
 buildkit_image="$BORINGCACHE_STATE_CANARY_BUILDKIT_IMAGE"
 artifact_dir="$BORINGCACHE_STATE_CANARY_ARTIFACT_DIR"
 api_origin="$BORINGCACHE_API_URL"
@@ -33,6 +35,35 @@ docker_platform="${BORINGCACHE_STATE_CANARY_PLATFORM:-linux/amd64}"
 plateau_tolerance_percent="${BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT:-2}"
 warm_generations="${BORINGCACHE_STATE_CANARY_WARM_GENERATIONS:-2}"
 replay_plan_path="${BORINGCACHE_STATE_CANARY_REPLAY_PLAN:-}"
+
+case "$composition_mode" in
+  off)
+    if [[ "${BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER:-0}" =~ ^(1|true|yes|on)$ ]]; then
+      echo "BuildKit mountcache offload is not part of the core state canary" >&2
+      exit 2
+    fi
+    export BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER=0
+    ;;
+  fixture)
+    [[ -n "$tool_cache_tag" && ! "$tool_cache_tag" =~ [[:space:]] ]] || {
+      echo "Fixture composition requires one whitespace-free BORINGCACHE_STATE_CANARY_TOOL_CACHE_TAG" >&2
+      exit 2
+    }
+    [[ "$tool_cache_tag" != "$cache_tag" ]] || {
+      echo "State and Turbo composition tags must be distinct" >&2
+      exit 2
+    }
+    [[ "${BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER:-0}" =~ ^(1|true|yes|on)$ ]] || {
+      echo "Fixture composition requires BuildKit mountcache offload" >&2
+      exit 2
+    }
+    export BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER=1
+    ;;
+  *)
+    echo "BORINGCACHE_STATE_CANARY_COMPOSITION_MODE must be off or fixture" >&2
+    exit 2
+    ;;
+esac
 
 case "$lane" in
   fresh|rolling|replay-full|replay-endpoints) ;;
@@ -61,12 +92,6 @@ case "$warm_generations" in
     exit 2
     ;;
 esac
-if [[ "${BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER:-0}" =~ ^(1|true|yes|on)$ ]]; then
-  echo "BuildKit mountcache offload is not part of the core state canary" >&2
-  exit 2
-fi
-export BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER=0
-
 for tool in boringcache docker git jq tee; do
   command -v "$tool" >/dev/null || {
     echo "Required command is unavailable: ${tool}" >&2
@@ -172,6 +197,8 @@ jq -n \
   --arg lane "$lane" \
   --arg workspace "$workspace" \
   --arg cache_tag "$cache_tag" \
+  --arg composition_mode "$composition_mode" \
+  --arg tool_cache_tag "$tool_cache_tag" \
   --arg source_sha "$source_sha" \
   --arg source_base_sha "$source_base_sha" \
   --arg buildkit_image "$buildkit_image" \
@@ -189,6 +216,9 @@ jq -n \
     lane: $lane,
     workspace: $workspace,
     cache_tag: $cache_tag,
+    composition_mode: $composition_mode,
+    tool_cache_tag: (if $tool_cache_tag == "" then null else $tool_cache_tag end),
+    tool_env_delivery: (if $composition_mode == "fixture" then "static-secret-fixture" else "none" end),
     source_sha: $source_sha,
     source_base_sha: $source_base_sha,
     buildkit_image: $buildkit_image,
@@ -203,7 +233,7 @@ jq -n \
     } end),
     plateau_tolerance_percent: $plateau_tolerance_percent,
     warm_generations: $warm_generations,
-    mountcache_enabled: false
+    mountcache_enabled: ($composition_mode == "fixture")
   }' > "$artifact_dir/inputs.json"
 
 snapshot_managed_resources() {
@@ -516,6 +546,49 @@ write_combined_result() {
             }
           }
       end) as $current_set
+    | (if $inputs[0].composition_mode == "fixture" then
+        {
+          mode: "fixture",
+          tool_env_delivery: $inputs[0].tool_env_delivery,
+          mountcache_published: any(
+            $base.phases[];
+            ((.state.mount_cache.published_archives // 0) > 0)
+          ),
+          mountcache_restored: any(
+            $base.phases[];
+            ((.state.mount_cache.restored_archives // 0) > 0)
+          ),
+          mountcache_hydrated: any(
+            $base.phases[];
+            ((.state.mount_cache.hydrate_hits // 0) > 0)
+          ),
+          toolcache_exercised: any(
+            $base.phases[];
+            (((.tool_cache.hits // 0) + (.tool_cache.misses // 0) + (.tool_cache.writes // 0)) > 0)
+          ),
+          toolcache_hits: any(
+            $base.phases[];
+            ((.tool_cache.hits // 0) > 0)
+          )
+        }
+        | .valid = (
+            .mountcache_published
+            and .mountcache_restored
+            and .toolcache_exercised
+            and .toolcache_hits
+          )
+      else
+        {
+          mode: "off",
+          tool_env_delivery: "none",
+          mountcache_published: false,
+          mountcache_restored: false,
+          mountcache_hydrated: false,
+          toolcache_exercised: false,
+          toolcache_hits: false,
+          valid: true
+        }
+      end) as $composition
     | {
         schema_version: "buildkit-state-canary-result.v2",
         inputs: $inputs[0],
@@ -525,8 +598,10 @@ write_combined_result() {
           and $current_set.only_current_head_fetched
           and ($current_set.exact_source_sequence != false)
           and ($current_set.same_ref_solver_reuse != false)
+          and $composition.valid
         ),
         current_set: $current_set,
+        composition: $composition,
         phases: $base.phases
       }' "${phase_files[@]}" > "$result"
 }
@@ -566,6 +641,10 @@ run_phase() {
     "$resources_leaked"
 
   local phase_started phase_finished command_status tee_status
+  local composition_args=(--metadata-hint "composition=${composition_mode}")
+  if [[ "$composition_mode" == fixture ]]; then
+    composition_args=(--tool-cache "turbo:${tool_cache_tag}" "${composition_args[@]}")
+  fi
   phase_started="$(date +%s)"
   local command_statuses=()
   set +e
@@ -578,6 +657,7 @@ run_phase() {
       --backend state \
       --workspace "$workspace" \
       --tag "$cache_tag" \
+      "${composition_args[@]}" \
       --no-platform \
       --no-git \
       --fail-on-cache-error \
@@ -607,7 +687,8 @@ run_phase() {
   local finalize_eligible finalize_already_ready finalize_materialized finalize_failed finalize_required_blobs
   local finalize_seconds retention_policy content_gc_applied content_gc_duration_ms
   local records_before_gc records_after_gc content_gc_seconds
-  local summary_valid cleanup_valid expectation_valid current_head_only success
+  local mount_cache_json tool_cache_json
+  local summary_valid tool_cache_valid cleanup_valid expectation_valid current_head_only success
   cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$log_path" || true)"
   executed_steps="$(grep -Ec '^#[0-9]+ DONE ([0-9]+([.][0-9]+)?)s$' "$log_path" || true)"
   state_overhead=""
@@ -634,8 +715,11 @@ run_phase() {
   records_before_gc="0"
   records_after_gc="0"
   content_gc_seconds=""
+  mount_cache_json=null
+  tool_cache_json=null
   head_generations_fetched="0"
   summary_valid=false
+  tool_cache_valid=false
   cleanup_valid=false
   expectation_valid=false
   current_head_only=false
@@ -643,6 +727,7 @@ run_phase() {
   if [[ -s "$state_summary_path" ]] && jq -e \
     --arg digest "$buildkit_digest" \
     --arg platform "$docker_platform" \
+    --arg composition_mode "$composition_mode" \
     '.schema_version == "buildkit-state-summary.v2"
       and .compatibility.image_digest == $digest
       and .compatibility.platform == $platform
@@ -683,7 +768,18 @@ run_phase() {
       and (.save.uploaded_bytes | type == "number")
       and .save.uploaded_bytes >= 0
       and (.total_state_overhead_seconds | type == "number")
-      and .total_state_overhead_seconds >= 0' \
+      and .total_state_overhead_seconds >= 0
+      and (if $composition_mode == "fixture" then
+             .mount_cache.enabled == true
+             and .mount_cache.runtime_status == "recorded"
+             and .mount_cache.hydrate_errors == 0
+             and .mount_cache.publish_errors == 0
+             and .mount_cache.generation_archives == .mount_cache.selected_archives
+           else
+             .mount_cache.enabled == false
+             and .mount_cache.runtime_status == "disabled"
+             and .mount_cache.generation_archives == 0
+           end)' \
     "$state_summary_path" >/dev/null; then
     summary_valid=true
     state_overhead="$(jq -r '.total_state_overhead_seconds' "$state_summary_path")"
@@ -710,8 +806,35 @@ run_phase() {
     records_before_gc="$(jq -r '.finalize.records_before_gc' "$state_summary_path")"
     records_after_gc="$(jq -r '.finalize.records_after_gc' "$state_summary_path")"
     content_gc_seconds="$(jq -r '.content_gc_seconds' "$state_summary_path")"
+    mount_cache_json="$(jq -c '.mount_cache' "$state_summary_path")"
     if [[ "$restore_status" == "restored" ]]; then
       head_generations_fetched=1
+    fi
+  fi
+
+  if [[ "$composition_mode" == off ]]; then
+    tool_cache_valid=true
+  elif [[ -s "$observability_path" ]]; then
+    tool_cache_json="$(jq -sc '
+      map(select(.operation == "cache_session_summary" and .adapter == "turborepo"))
+      | if length != 1 then null else .[0] | {
+          adapter,
+          duration_ms,
+          hits: (.classification.cache_temperature.hits // 0),
+          misses: (.classification.cache_temperature.misses // 0),
+          writes: (.classification.cache_temperature.writes // 0),
+          errors: (.classification.cache_temperature.errors // 0),
+          backend_errors: (.backend_api.total_error_count // 0),
+          backend_retries: (.backend_api.total_retry_count // 0)
+        } end
+    ' "$observability_path")"
+    if jq -e '
+      . != null
+      and .adapter == "turborepo"
+      and .errors == 0
+      and .backend_errors == 0
+    ' <<< "$tool_cache_json" >/dev/null; then
+      tool_cache_valid=true
     fi
   fi
 
@@ -745,7 +868,7 @@ run_phase() {
   esac
 
   success=false
-  if [[ "$command_status" -eq 0 && "$tee_status" -eq 0 && "$summary_valid" == true && "$cleanup_valid" == true && "$expectation_valid" == true && "$current_head_only" == true ]]; then
+  if [[ "$command_status" -eq 0 && "$tee_status" -eq 0 && "$summary_valid" == true && "$tool_cache_valid" == true && "$cleanup_valid" == true && "$expectation_valid" == true && "$current_head_only" == true ]]; then
     success=true
   fi
 
@@ -784,8 +907,11 @@ run_phase() {
     --argjson records_before_gc "$records_before_gc" \
     --argjson records_after_gc "$records_after_gc" \
     --arg content_gc_seconds "$content_gc_seconds" \
+    --argjson mount_cache "$mount_cache_json" \
+    --argjson tool_cache "$tool_cache_json" \
     --argjson head_generations_fetched "$head_generations_fetched" \
     --argjson summary_valid "$summary_valid" \
+    --argjson tool_cache_valid "$tool_cache_valid" \
     --argjson cleanup_valid "$cleanup_valid" \
     --argjson expectation_valid "$expectation_valid" \
     --argjson current_head_only "$current_head_only" \
@@ -828,10 +954,13 @@ run_phase() {
           records_before_gc: $records_before_gc,
           records_after_gc: $records_after_gc
         },
-        content_gc_seconds: (if $content_gc_seconds == "" then null else ($content_gc_seconds | tonumber) end)
+        content_gc_seconds: (if $content_gc_seconds == "" then null else ($content_gc_seconds | tonumber) end),
+        mount_cache: $mount_cache
       },
+      tool_cache: $tool_cache,
       checks: {
         summary_valid: $summary_valid,
+        tool_cache_valid: $tool_cache_valid,
         managed_builder_destroyed: $cleanup_valid,
         phase_expectation_valid: $expectation_valid,
         current_head_only: $current_head_only

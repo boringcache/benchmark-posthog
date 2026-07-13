@@ -1,6 +1,6 @@
 name: "Maintainer BuildKit State Replay Canary"
 run-name: >-
-  ${{ format('BuildKit state canary | {0} | {1} | {2}', inputs.cache_lane, inputs.cli_release_tag, inputs.runner_label) }}
+  ${{ format('BuildKit state canary | {0} | {1} | {2} | {3}', inputs.cache_lane, inputs.composition_mode, inputs.cli_release_tag, inputs.runner_label) }}
 
 on:
   workflow_dispatch:
@@ -15,6 +15,14 @@ on:
           - rolling
           - replay-full
           - replay-endpoints
+      composition_mode:
+        description: "Core state only, or the explicit PostHog mountcache + Turbo fixture composition proof."
+        required: true
+        type: choice
+        default: "off"
+        options:
+          - "off"
+          - fixture
       cli_release_tag:
         description: "Exact unique release tag in boringcache/cli."
         required: true
@@ -75,7 +83,7 @@ on:
         default: ubuntu-latest
 
 concurrency:
-  group: ${{ format('buildkit-state-canary-{0}-{1}-{2}', inputs.cache_lane, inputs.rolling_scope, inputs.cli_platform) }}
+  group: ${{ format('buildkit-state-canary-{0}-{1}-{2}-{3}', inputs.cache_lane, inputs.composition_mode, inputs.rolling_scope, inputs.cli_platform) }}
   cancel-in-progress: false
 
 permissions:
@@ -115,6 +123,7 @@ jobs:
           API_ORIGIN: ${{ inputs.api_origin }}
           POSTHOG_SOURCE: ${{ inputs.posthog_source }}
           CACHE_LANE: ${{ inputs.cache_lane }}
+          COMPOSITION_MODE: ${{ inputs.composition_mode }}
           ROLLING_SCOPE: ${{ inputs.rolling_scope }}
           WARM_GENERATIONS: ${{ inputs.warm_generations }}
         run: |
@@ -191,26 +200,36 @@ jobs:
           image_digest="${BUILDKIT_IMAGE##*@}"
           image_key="${image_digest#sha256:}"
           platform_key="${CLI_PLATFORM#linux-}"
+          case "$COMPOSITION_MODE" in
+            off) composition_slug=core ;;
+            fixture) composition_slug=compose-fixture ;;
+            *)
+              echo "Unsupported composition mode: ${COMPOSITION_MODE}" >&2
+              exit 1
+              ;;
+          esac
           case "$CACHE_LANE" in
             fresh)
-              cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-fresh-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+              cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-${composition_slug}-fresh-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
               ;;
             rolling)
-              cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-rolling-${rolling_slug}"
+              cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-${composition_slug}-rolling-${rolling_slug}"
               ;;
             replay-full|replay-endpoints)
-              cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-${CACHE_LANE}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+              cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-${composition_slug}-${CACHE_LANE}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
               ;;
             *)
               echo "Unsupported cache lane: ${CACHE_LANE}" >&2
               exit 1
               ;;
           esac
+          tool_cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-${composition_slug}-turbo-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
 
           {
             echo "cli_asset=${cli_asset}"
             echo "docker_platform=${docker_platform}"
             echo "cache_tag=${cache_tag}"
+            echo "tool_cache_tag=${tool_cache_tag}"
             echo "image_digest=${image_digest}"
           } >> "$GITHUB_OUTPUT"
 
@@ -330,6 +349,7 @@ jobs:
         shell: bash
         env:
           CACHE_LANE: ${{ inputs.cache_lane }}
+          COMPOSITION_MODE: ${{ inputs.composition_mode }}
           POSTHOG_SOURCE: ${{ inputs.posthog_source }}
         run: |
           set -euo pipefail
@@ -440,6 +460,9 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           printf '%s\n' "$source_sha" > "$CANARY_ARTIFACT_DIR/posthog-source.sha"
           ./scripts/prepare-source.sh base
+          if [[ "$COMPOSITION_MODE" == fixture ]]; then
+            ./scripts/check-posthog-toolcache-dockerfile.sh
+          fi
 
       - name: Enforce complete pre-build checklist
         shell: bash
@@ -525,17 +548,19 @@ jobs:
         shell: bash
         env:
           BORINGCACHE_STATE_CANARY_LANE: ${{ inputs.cache_lane }}
+          BORINGCACHE_STATE_CANARY_COMPOSITION_MODE: ${{ inputs.composition_mode }}
           BORINGCACHE_STATE_CANARY_WORKSPACE: boringcache/benchmark-posthog
           BORINGCACHE_STATE_CANARY_TAG: ${{ steps.inputs.outputs.cache_tag }}
+          BORINGCACHE_STATE_CANARY_TOOL_CACHE_TAG: ${{ steps.inputs.outputs.tool_cache_tag }}
           BORINGCACHE_STATE_CANARY_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BORINGCACHE_STATE_CANARY_ARTIFACT_DIR: ${{ runner.temp }}/buildkit-state-canary
           BORINGCACHE_STATE_CANARY_PLATFORM: ${{ steps.inputs.outputs.docker_platform }}
-          BORINGCACHE_STATE_CANARY_DOCKERFILE: upstream/Dockerfile
+          BORINGCACHE_STATE_CANARY_DOCKERFILE: ${{ inputs.composition_mode == 'fixture' && 'scenarios/posthog-toolcache/Dockerfile' || 'upstream/Dockerfile' }}
           BORINGCACHE_STATE_CANARY_CONTEXT: upstream
           BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT: ${{ inputs.plateau_tolerance_percent }}
           BORINGCACHE_STATE_CANARY_WARM_GENERATIONS: ${{ inputs.warm_generations }}
           BORINGCACHE_STATE_CANARY_REPLAY_PLAN: ${{ runner.temp }}/buildkit-state-canary/replay-plan.json
-          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: "0"
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.composition_mode == 'fixture' && '1' || '0' }}
         run: ./scripts/run-buildkit-state-canary.sh
 
       - name: Render canary summary
@@ -550,6 +575,7 @@ jobs:
             echo "## BuildKit state canary"
             echo
             echo "- Lane: \`${{ inputs.cache_lane }}\`"
+            echo "- Composition: \`${{ inputs.composition_mode }}\`"
             echo "- API origin: \`${{ inputs.api_origin }}\`"
             echo "- CLI: \`${{ inputs.cli_release_tag }}\` / \`${{ steps.cli.outputs.version }}\` / \`${{ steps.inputs.outputs.cli_asset }}\`"
             echo "- BuildKit: \`${{ inputs.buildkit_image }}\`"
@@ -558,6 +584,10 @@ jobs:
             echo "- Measured generations: \`${{ steps.source.outputs.selected_generation_count }}\`"
             echo "- Fresh warm generations: \`${{ inputs.warm_generations }}\`"
             echo "- State tag: \`${{ steps.inputs.outputs.cache_tag }}\`"
+            if [[ "${{ inputs.composition_mode }}" == fixture ]]; then
+              echo "- Turbo tag: \`${{ steps.inputs.outputs.tool_cache_tag }}\`"
+              echo "- Tool env delivery: \`static-secret-fixture\`"
+            fi
             if [[ -s "$artifact_dir/preflight-checklist.json" ]]; then
               echo "- Complete preflight: \`$(jq -r '.all_passed' "$artifact_dir/preflight-checklist.json")\`"
             fi
@@ -627,7 +657,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ format('buildkit-state-canary-{0}-{1}-r{2}-a{3}', inputs.cache_lane, inputs.cli_platform, github.run_id, github.run_attempt) }}
+          name: ${{ format('buildkit-state-canary-{0}-{1}-{2}-r{3}-a{4}', inputs.cache_lane, inputs.composition_mode, inputs.cli_platform, github.run_id, github.run_attempt) }}
           path: ${{ runner.temp }}/buildkit-state-canary
           if-no-files-found: error
           retention-days: 14

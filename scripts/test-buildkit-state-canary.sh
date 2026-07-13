@@ -632,14 +632,14 @@ if MOCK_STATE_GROWTH_PERCENT=20 run_mock fresh "$growth_dir" >/dev/null 2>&1; th
 fi
 command jq -e '.success == false and .current_set.same_ref_plateau == false' "$growth_dir/canary-result.json" >/dev/null
 
-bootstrap_growth_dir="$test_root/bootstrap-growth-failure"
+bootstrap_growth_dir="$test_root/bootstrap-byte-growth-failure"
 if MOCK_BOOTSTRAP_DELTA_PERCENT=20 run_mock fresh "$bootstrap_growth_dir" >/dev/null 2>&1; then
-  echo "Expected excessive cold-to-first-warm growth to fail the canary" >&2
+  echo "Expected excessive cold-to-first-warm byte growth to fail the canary" >&2
   exit 1
 fi
 command jq -e '
   .success == false
-  and .current_set.growth.bootstrap_blob_growth_within_tolerance == false
+  and .current_set.growth.bootstrap_blob_growth_within_tolerance == true
   and .current_set.growth.bootstrap_bytes_growth_within_tolerance == false
 ' "$bootstrap_growth_dir/canary-result.json" >/dev/null
 

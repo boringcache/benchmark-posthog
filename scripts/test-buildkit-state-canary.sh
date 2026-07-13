@@ -70,6 +70,15 @@ docker() {
   return 0
 }
 
+mock_warm_generation() {
+  local index="$1"
+  case "$index" in
+    1) printf '%s\n' "$warm_generation" ;;
+    2) printf '%s\n' "$repeat_generation" ;;
+    *) printf 'sha256:%064x\n' "$((1000 + index))" ;;
+  esac
+}
+
 boringcache() {
   if [[ "${1:-}" == "--version" ]]; then
     echo "boringcache mock-state-canary"
@@ -77,7 +86,7 @@ boringcache() {
   fi
 
   local phase restore_status restored_generation parent generation logical_blobs logical_bytes
-  local bootstrap_delta
+  local bootstrap_delta steady_delta warm_index warm_count summary_name
   local transport_blobs transport_bytes saw_cacheonly arg
   case "$BORINGCACHE_STATE_SUMMARY_PATH" in
     *cold.state-summary.json)
@@ -91,27 +100,35 @@ boringcache() {
       transport_blobs=100
       transport_bytes=100000
       ;;
-    *same-ref-warm.state-summary.json)
-      phase=same-ref-warm
+    *same-ref-warm.state-summary.json|*same-ref-repeat.state-summary.json|*same-ref-repeat-[0-9][0-9][0-9].state-summary.json)
+      summary_name="$(basename "$BORINGCACHE_STATE_SUMMARY_PATH" .state-summary.json)"
+      phase="$summary_name"
+      case "$summary_name" in
+        same-ref-warm) warm_index=1 ;;
+        same-ref-repeat) warm_index=2 ;;
+        same-ref-repeat-*) warm_index="$((10#${summary_name##*-}))" ;;
+      esac
+      warm_count="${BORINGCACHE_STATE_CANARY_WARM_GENERATIONS:-2}"
       restore_status=restored
-      restored_generation="$cold_generation"
-      parent="$cold_generation"
-      generation="$warm_generation"
+      if ((warm_index == 1)); then
+        restored_generation="$cold_generation"
+      else
+        restored_generation="$(mock_warm_generation "$((warm_index - 1))")"
+      fi
+      parent="$restored_generation"
+      generation="$(mock_warm_generation "$warm_index")"
       bootstrap_delta="${MOCK_BOOTSTRAP_DELTA_PERCENT:--5}"
-      logical_blobs=$((100 + bootstrap_delta))
-      logical_bytes=$((100000 + (bootstrap_delta * 1000)))
-      transport_blobs=1
-      transport_bytes=1000
-      ;;
-    *same-ref-repeat.state-summary.json)
-      phase=same-ref-repeat
-      restore_status=restored
-      restored_generation="$warm_generation"
-      parent="$warm_generation"
-      generation="$repeat_generation"
-      bootstrap_delta="${MOCK_BOOTSTRAP_DELTA_PERCENT:--5}"
-      logical_blobs=$((100 + bootstrap_delta + ${MOCK_STATE_GROWTH_PERCENT:-1}))
-      logical_bytes=$((100000 + (bootstrap_delta * 1000) + (${MOCK_STATE_GROWTH_PERCENT:-1} * 1000)))
+      steady_delta=0
+      if ((warm_index > 1)); then
+        steady_delta="${MOCK_STATE_GROWTH_PERCENT:-1}"
+      fi
+      if ((warm_index == warm_count)) && [[ -n "${MOCK_FINAL_STATE_GROWTH_PERCENT:-}" ]]; then
+        steady_delta="$MOCK_FINAL_STATE_GROWTH_PERCENT"
+      elif ((warm_index == ${MOCK_INTERMEDIATE_SPIKE_WARM_INDEX:-0})); then
+        steady_delta="${MOCK_INTERMEDIATE_STATE_GROWTH_PERCENT:-20}"
+      fi
+      logical_blobs=$((100 + bootstrap_delta + steady_delta))
+      logical_bytes=$((100000 + (bootstrap_delta * 1000) + (steady_delta * 1000)))
       transport_blobs=1
       transport_bytes=1000
       ;;
@@ -165,8 +182,12 @@ boringcache() {
     --argjson transport_blobs "$transport_blobs" \
     --argjson transport_bytes "$transport_bytes" \
     --argjson include_logical_generation "$(if [[ "${MOCK_OMIT_LOGICAL_GENERATION:-0}" == 1 ]]; then echo false; else echo true; fi)" \
+    --arg retention_policy "${MOCK_RETENTION_POLICY:-complete-main-cache-v1}" \
+    --argjson content_gc_applied "$(if [[ "${MOCK_CONTENT_GC_APPLIED:-1}" == 1 ]]; then echo true; else echo false; fi)" \
+    --argjson records_after_gc "${MOCK_RECORDS_AFTER_GC:-2}" \
+    --argjson include_content_gc_seconds "$(if [[ "${MOCK_OMIT_CONTENT_GC_SECONDS:-0}" == 1 ]]; then echo false; else echo true; fi)" \
     '{
-      schema_version: "buildkit-state-summary.v1",
+      schema_version: "buildkit-state-summary.v2",
       restore: {
         status: $restore_status,
         generation: (if $restored_generation == "" then null else $restored_generation end),
@@ -174,8 +195,20 @@ boringcache() {
         files: (if $restore_status == "restored" then $logical_blobs else 0 end)
       },
       daemon_ready_seconds: 0.1,
-      finalize: {failed: 0, pruned_records: 2, pruned_bytes: 2000},
-      prune_seconds: 0.1,
+      finalize: {
+        eligible: 2,
+        already_ready: 1,
+        materialized: 1,
+        failed: 0,
+        required_blobs: 2,
+        report_digest: $image_digest,
+        retention_policy: $retention_policy,
+        content_gc_applied: $content_gc_applied,
+        content_gc_duration_ms: 100,
+        records_before_gc: 2,
+        records_after_gc: $records_after_gc,
+        seconds: 0.2
+      },
       quiesce_seconds: 0.1,
       save: {
         status: "uploaded",
@@ -195,6 +228,7 @@ boringcache() {
       },
       total_state_overhead_seconds: 0.4
     }
+    | if $include_content_gc_seconds then .content_gc_seconds = 0.1 else . end
     | if $include_logical_generation then
         .save.logical_generation_blobs = $logical_blobs
         | .save.logical_generation_bytes = $logical_bytes
@@ -220,7 +254,7 @@ boringcache() {
   fi
 }
 
-export -f git docker boringcache
+export -f git docker mock_warm_generation boringcache
 export source_sha image_digest cold_generation warm_generation rolling_parent rolling_generation repeat_generation
 
 write_mock_preflight() {
@@ -297,6 +331,7 @@ write_mock_replay_plan() {
 run_mock() {
   local lane="$1"
   local artifact_dir="$2"
+  local requested_warm_generations="${3:-2}"
   write_mock_preflight "$artifact_dir"
   if [[ "$lane" == replay-full || "$lane" == replay-endpoints ]]; then
     write_mock_replay_plan "$lane" "$artifact_dir"
@@ -310,6 +345,7 @@ run_mock() {
     BORINGCACHE_STATE_CANARY_REPLAY_PLAN="$artifact_dir/replay-plan.json" \
     BORINGCACHE_STATE_CANARY_PLATFORM=linux/amd64 \
     BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT=2 \
+    BORINGCACHE_STATE_CANARY_WARM_GENERATIONS="$requested_warm_generations" \
     BORINGCACHE_API_URL="$mock_api_origin" \
     BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER=0 \
     "$runner"
@@ -326,6 +362,16 @@ if ! command jq -e '
   and .current_set.same_ref_solver_reuse == true
   and .current_set.same_ref_first_warm_solver_reuse == true
   and .current_set.same_ref_repeat_solver_reuse == true
+  and .inputs.warm_generations == 2
+  and .current_set.warm_generations_planned == 2
+  and .current_set.warm_generations_measured == 2
+  and (.current_set.transitions | length) == 2
+  and .current_set.transitions[0].kind == "bootstrap"
+  and .current_set.transitions[1].kind == "same-ref"
+  and .current_set.transitions[1].final_convergence_pair == true
+  and .current_set.transitions[1].lineage.valid == true
+  and .current_set.transitions[1].current_head_only == true
+  and .current_set.transitions[1].solver_reuse == true
   and .current_set.growth.bootstrap_logical_blob_delta == -5
   and .current_set.growth.bootstrap_blob_growth_within_tolerance == true
   and .current_set.growth.logical_blob_delta == 1
@@ -341,6 +387,69 @@ if ! command jq -e '
   exit 1
 fi
 
+fresh_four_dir="$test_root/fresh-four"
+run_mock fresh "$fresh_four_dir" 4 >/dev/null
+command jq -e '
+  .success == true
+  and .inputs.warm_generations == 4
+  and .current_set.warm_generations_planned == 4
+  and .current_set.warm_generations_measured == 4
+  and (.phases | map(.phase)) == [
+    "cold",
+    "same-ref-warm",
+    "same-ref-repeat",
+    "same-ref-repeat-003",
+    "same-ref-repeat-004"
+  ]
+  and (.current_set.transitions | length) == 4
+  and all(.current_set.transitions[]; .lineage.valid and .current_head_only and .solver_reuse)
+  and .current_set.transitions[-1].final_convergence_pair == true
+  and .current_set.transitions[-1].logical_set.within_tolerance == true
+  and .current_set.growth.logical_blob_delta == 0
+' "$fresh_four_dir/canary-result.json" >/dev/null
+
+fresh_eight_dir="$test_root/fresh-eight"
+run_mock fresh "$fresh_eight_dir" 8 >/dev/null
+command jq -e '
+  .success == true
+  and .inputs.warm_generations == 8
+  and .current_set.warm_generations_measured == 8
+  and (.phases | length) == 9
+  and .phases[-1].phase == "same-ref-repeat-008"
+  and (.current_set.transitions | length) == 8
+  and .current_set.transitions[-1].final_convergence_pair == true
+' "$fresh_eight_dir/canary-result.json" >/dev/null
+
+intermediate_growth_dir="$test_root/intermediate-growth"
+MOCK_INTERMEDIATE_SPIKE_WARM_INDEX=2 \
+  MOCK_INTERMEDIATE_STATE_GROWTH_PERCENT=20 \
+  run_mock fresh "$intermediate_growth_dir" 4 >/dev/null
+command jq -e '
+  .success == true
+  and .current_set.transitions[1].logical_set.within_tolerance == false
+  and .current_set.transitions[2].logical_set.within_tolerance == false
+  and .current_set.transitions[-1].logical_set.within_tolerance == true
+  and .current_set.same_ref_plateau == true
+' "$intermediate_growth_dir/canary-result.json" >/dev/null
+
+final_growth_dir="$test_root/final-growth-failure"
+if MOCK_FINAL_STATE_GROWTH_PERCENT=20 run_mock fresh "$final_growth_dir" 4 >/dev/null 2>&1; then
+  echo "Expected final warm-to-warm growth to fail the canary" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.transitions[-1].final_convergence_pair == true
+  and .current_set.transitions[-1].logical_set.within_tolerance == false
+  and .current_set.same_ref_plateau == false
+' "$final_growth_dir/canary-result.json" >/dev/null
+
+invalid_warm_dir="$test_root/invalid-warm-generations"
+if run_mock fresh "$invalid_warm_dir" 3 >/dev/null 2>&1; then
+  echo "Expected unsupported warm generation count to fail the canary" >&2
+  exit 1
+fi
+
 rolling_dir="$test_root/rolling"
 run_mock rolling "$rolling_dir" >/dev/null
 command jq -e '
@@ -348,7 +457,13 @@ command jq -e '
   and .current_set.current_set_replacement == true
   and .current_set.only_current_head_fetched == true
   and (.phases[0].state.transport_delta_blobs == 4)
-  and (.phases[0].state.pruned_records == 2)
+  and .phases[0].state.finalize.retention_policy == "complete-main-cache-v1"
+  and .phases[0].state.finalize.content_gc_applied == true
+  and .phases[0].state.finalize.content_gc_duration_ms == 100
+  and .phases[0].state.finalize.records_before_gc == 2
+  and .phases[0].state.finalize.records_after_gc == 2
+  and .phases[0].state.finalize.records_after_gc >= .phases[0].state.finalize.eligible
+  and .phases[0].state.content_gc_seconds == 0.1
 ' "$rolling_dir/canary-result.json" >/dev/null
 
 replay_full_dir="$test_root/replay-full"
@@ -403,7 +518,48 @@ if MOCK_OMIT_LOGICAL_GENERATION=1 run_mock fresh "$schema_dir" >/dev/null 2>&1; 
   echo "Expected missing logical-generation summary fields to fail closed" >&2
   exit 1
 fi
-command jq -e '.success == false' "$schema_dir/canary-result.json" >/dev/null
+command jq -e '
+  .schema_version == "buildkit-state-canary-result.v2"
+  and .success == false
+  and (.phases | length) == 1
+  and .phases[0].phase == "cold"
+  and .phases[0].success == false
+  and .current_set.current_set_replacement == false
+  and .current_set.same_ref_plateau == false
+  and .current_set.same_ref_solver_reuse == false
+  and .current_set.growth.bootstrap_blob_growth_within_tolerance == false
+  and .current_set.growth.bootstrap_bytes_growth_within_tolerance == false
+  and .current_set.growth.blob_count_within_tolerance == false
+  and .current_set.growth.bytes_within_tolerance == false
+' "$schema_dir/canary-result.json" >/dev/null
+
+retention_dir="$test_root/retention-failure"
+if MOCK_RETENTION_POLICY=pruned-main-cache run_mock rolling "$retention_dir" >/dev/null 2>&1; then
+  echo "Expected unsupported main-cache retention policy to fail closed" >&2
+  exit 1
+fi
+command jq -e '.success == false and .phases[0].checks.summary_valid == false' "$retention_dir/canary-result.json" >/dev/null
+
+content_gc_dir="$test_root/content-gc-failure"
+if MOCK_CONTENT_GC_APPLIED=0 run_mock rolling "$content_gc_dir" >/dev/null 2>&1; then
+  echo "Expected absent terminal content GC to fail closed" >&2
+  exit 1
+fi
+command jq -e '.success == false and .phases[0].checks.summary_valid == false' "$content_gc_dir/canary-result.json" >/dev/null
+
+content_gc_records_dir="$test_root/content-gc-records-failure"
+if MOCK_RECORDS_AFTER_GC=1 run_mock rolling "$content_gc_records_dir" >/dev/null 2>&1; then
+  echo "Expected content GC record-set mutation to fail closed" >&2
+  exit 1
+fi
+command jq -e '.success == false and .phases[0].checks.summary_valid == false' "$content_gc_records_dir/canary-result.json" >/dev/null
+
+content_gc_seconds_dir="$test_root/content-gc-seconds-failure"
+if MOCK_OMIT_CONTENT_GC_SECONDS=1 run_mock rolling "$content_gc_seconds_dir" >/dev/null 2>&1; then
+  echo "Expected missing content GC timing to fail closed" >&2
+  exit 1
+fi
+command jq -e '.success == false and .phases[0].checks.summary_valid == false' "$content_gc_seconds_dir/canary-result.json" >/dev/null
 
 mountcache_dir="$test_root/mountcache-failure"
 write_mock_preflight "$mountcache_dir"

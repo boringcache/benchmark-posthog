@@ -99,10 +99,13 @@ least 80 GiB free for `replay-full` and 55 GiB for the shorter lanes. This
 accounts for the live BuildKit root, direct state transfer, and normal Docker
 working space rather than discovering runner exhaustion mid-sequence.
 
-- `fresh` uses one run-unique state tag for a cold build followed by two
-  same-ref restores into newly created managed builders. Cold-to-first-warm
-  contraction is recorded as bootstrap convergence, while positive growth is
-  bounded. The first-to-second warm generation must plateau within tolerance.
+- `fresh` uses one run-unique state tag for a cold build followed by 2, 4, or 8
+  same-ref restores into newly created managed builders (`2` by default).
+  Every warm phase uses the exact same source SHA. Cold-to-first-warm movement
+  is recorded separately as bootstrap convergence, while positive growth is
+  bounded. Every chronological transition is reported; the final warm-to-warm
+  pair must plateau within tolerance. Intermediate movement remains evidence
+  of convergence shape rather than an independent failure gate.
 - `rolling` uses one stable tag scoped by BuildKit image digest, native
   platform, and source stream, then records a single commit build. The first
   run may bootstrap; later runs must report `restore.status=restored` to count
@@ -118,7 +121,7 @@ Replay source checkout batches the exact commit set into one depth-one fetch
 with Git auto-maintenance disabled. This avoids `.git/shallow` rewrite races
 without relaxing per-commit identity or first-parent validation.
 
-The artifact contains `buildkit-state-summary.v1`, wrapper/build and daemon
+The artifact contains `buildkit-state-summary.v2`, wrapper/build and daemon
 logs, observability JSONL, exact release/image/source provenance, transport
 counters, timings, and a managed-resource cleanup check for every phase. The
 hosted product lane uses BuildKit's cache-only output so it measures the real
@@ -142,15 +145,23 @@ The canary requires explicit `save.logical_generation_blobs` and
 `save.logical_generation_bytes` summary fields and fails closed when they are
 absent. CAS upload bytes/counts remain explicitly labeled as transport delta;
 they are not presented as an exact parent-set difference. The artifact also
-records parent/restored/current generation lineage plus prune bytes/counts.
+records parent/restored/current generation lineage, the
+`complete-main-cache-v1` retention policy, terminal content-GC application and
+timing, and unchanged before/after main-cache record counts. A phase is invalid
+unless GC leaves the complete main record set intact and that set still covers
+every eligible finalizer record.
 The reported 0/1 head-fetch count is derived from the state summary's single
 exact restored-generation field; it is not a packet counter. Fresh canaries
-only pass when the same-ref logical current set
-plateaus within the selected provisional tolerance (2% by default), which
-guards against accidentally publishing parent-plus-current unions, and when
-the destroyed-builder rerun has more cached steps and fewer executed steps than
-the cold build. The core canary forces BuildKit mountcache off so archive
-growth cannot be mistaken for state-generation growth.
+only pass when the final same-ref warm pair plateaus within the selected
+provisional tolerance (2% by default), which guards against accidentally
+publishing parent-plus-current unions. Every warm generation must also restore
+exactly the preceding head into a new builder, fetch one head, leave no managed
+resources behind, and show more cached steps plus fewer executed steps than the
+cold build. The result records lineage, solver reuse, logical deltas,
+percentages, and tolerance status for every transition so 4- and 8-warm runs
+can show whether convergence is monotonic, oscillating, or still moving. The
+core canary forces BuildKit mountcache off so archive growth cannot be mistaken
+for state-generation growth.
 
 Replay artifacts add the exact source plan and, for every measured generation,
 the committed/restored/parent lineage, logical current-set bytes and blobs,

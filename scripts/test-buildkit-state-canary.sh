@@ -132,7 +132,7 @@ boringcache() {
   local warm_record_delta
   local transport_blobs transport_bytes saw_cacheonly saw_read_only saw_probe_target arg
   local is_probe save_status publish_status record_count record_flow_created record_flow_failure
-  local replay_index retention_source retention_baseline prune_triggered prune_target_reason
+  local replay_index replay_predecessor_index retention_source retention_baseline prune_triggered prune_target_reason
   local pruned_records pruned_bytes records_before_prune records_after_prune
   local prune_cache_usage_before prune_cache_usage_after prune_disk_total
   local prune_disk_free_before prune_disk_free_after prune_disk_available_before prune_disk_available_after
@@ -175,7 +175,7 @@ boringcache() {
   prune_min_free_space=0
   prune_effective_keep=0
   prune_failure="${MOCK_PRUNE_FAILURE:-}"
-  case "$BORINGCACHE_STATE_SUMMARY_PATH" in
+  case "$(basename "$BORINGCACHE_STATE_SUMMARY_PATH")" in
     *mount-probe.state-summary.json)
       phase=mount-probe
       is_probe=1
@@ -284,6 +284,23 @@ boringcache() {
         candidate_bytes=120000
         candidate_files=120
       fi
+      ;;
+    replay-repeat-*.state-summary.json)
+      phase="$(basename "$BORINGCACHE_STATE_SUMMARY_PATH" .state-summary.json)"
+      if [[ "${BORINGCACHE_STATE_CANARY_LANE:-}" == replay-full ]]; then
+        replay_predecessor_index=11
+      else
+        replay_predecessor_index=2
+      fi
+      restore_status=restored
+      printf -v restored_generation 'sha256:%064x' "$((200 + replay_predecessor_index))"
+      parent="$restored_generation"
+      printf -v generation 'sha256:%064x' "$((201 + replay_predecessor_index))"
+      logical_blobs="$((100 + replay_predecessor_index + ${MOCK_REPLAY_REPEAT_BLOB_DELTA:-0}))"
+      logical_bytes="$((100000 + (replay_predecessor_index * 1000) + ${MOCK_REPLAY_REPEAT_BYTE_DELTA:-0}))"
+      required_blobs="$((2 + replay_predecessor_index + ${MOCK_REPLAY_REPEAT_REQUIRED_BLOB_DELTA:-0}))"
+      transport_blobs=1
+      transport_bytes=1000
       ;;
     *replay-*.state-summary.json)
       phase="$(basename "$BORINGCACHE_STATE_SUMMARY_PATH" .state-summary.json)"
@@ -788,6 +805,15 @@ boringcache() {
   echo '#1 [mock] build'
   if [[ "$phase" == cold || "$phase" == replay-001-* || "$restore_status" == clean_start ]]; then
     echo '#1 DONE 1.0s'
+  elif [[ "$phase" == replay-repeat-* ]]; then
+    local cached_count cached_index
+    cached_count=68
+    if [[ "${MOCK_REPLAY_REPEAT_CACHED_REGRESSION:-0}" == 1 ]]; then
+      cached_count=67
+    fi
+    for ((cached_index = 1; cached_index <= cached_count; cached_index++)); do
+      printf '#%d CACHED\n' "$cached_index"
+    done
   elif [[ "$phase" == replay-* ]]; then
     local cached_count cached_index
     cached_count=68
@@ -1236,6 +1262,7 @@ command jq -e '
   and .current_set.replay.retention_sources_valid == true
   and .current_set.replay.all_prune_contracts_valid == true
   and .current_set.replay.scaffold_prune_generations == 11
+  and .current_set.replay.scaffold_prune_phases == 12
   and .current_set.replay.scaffold_prune_observed == true
   and .current_set.replay.minimum_cached_steps == 68
   and .current_set.replay.restored_successors_measured == 10
@@ -1247,6 +1274,18 @@ command jq -e '
   and .current_set.replay.growth_observation.delta_bytes == 10000
   and .current_set.replay.all_successors_within_tolerance == true
   and (.current_set.replay.generations | length) == 11
+  and .current_set.replay.repeat.measured == true
+  and .current_set.replay.repeat.same_source == true
+  and .current_set.replay.repeat.source_sha == .current_set.replay.generations[-1].source_sha
+  and .current_set.replay.repeat.continuity == true
+  and .current_set.replay.repeat.current_head_only == true
+  and .current_set.replay.repeat.logical_set.blob_delta_from_previous == 0
+  and .current_set.replay.repeat.logical_set.required_blob_delta_from_previous == 0
+  and .current_set.replay.repeat.record_set.eligible_delta_from_previous == 0
+  and .current_set.replay.repeat.record_set.records_after_gc_delta_from_previous == 0
+  and .current_set.replay.repeat.state_contract_satisfied == true
+  and .current_set.replay.repeat.solver_reuse_proven == true
+  and .current_set.replay.repeat.contract_satisfied == true
   and .current_set.replay.generations[0].continuity == true
   and .current_set.replay.generations[0].prune.retention_source == "post-clean-measured"
   and .current_set.replay.generations[0].prune.triggered == true
@@ -1266,7 +1305,7 @@ command jq -e '
   and .backend_current_set.all_phases_valid == true
   and .backend_current_set.all_phases_retention_converged == true
   and .backend_current_set.max_active_versions == 1
-  and (.backend_current_set.phases | length) == 11
+  and (.backend_current_set.phases | length) == 12
   and all(.backend_current_set.phases[];
     .active_versions == 1
     and .active_storage_bytes == .current_entry_bytes
@@ -1279,22 +1318,71 @@ command jq -e '
 ' "$replay_full_dir/canary-result.json" >/dev/null
 
 cache_hit_regression_dir="$test_root/replay-cache-hit-regression"
-if MOCK_REPLAY_CACHED_REGRESSION_INDEX=7 \
-  run_mock replay-full "$cache_hit_regression_dir" >/dev/null 2>&1; then
-  echo "Expected a replay successor below the PostHog cache-hit floor to fail graduation" >&2
+MOCK_REPLAY_CACHED_REGRESSION_INDEX=7 \
+  run_mock replay-full "$cache_hit_regression_dir" >/dev/null
+command jq -e '
+  .success == true
+  and .current_set.current_set_replacement == true
+  and .current_set.replay.minimum_cached_steps == 68
+  and .current_set.replay.restored_successors_measured == 10
+  and .current_set.replay.all_restored_successors_hit_contract == false
+  and .current_set.replay.minimum_observed_successor_cached_steps == 67
+  and .current_set.replay.changed_source_telemetry.correctness_gate == false
+  and .current_set.replay.changed_source_telemetry.all_hit_floor_satisfied == false
+  and .current_set.replay.changed_source_telemetry.minimum_observed_cached_steps == 67
+  and .current_set.replay.ready_for_graduation == true
+  and .current_set.replay.generations[6].build.cached_steps == 67
+  and .current_set.replay.generations[6].build.hit_contract_satisfied == false
+  and .current_set.replay.repeat.contract_satisfied == true
+' "$cache_hit_regression_dir/canary-result.json" >/dev/null
+
+repeat_cache_hit_regression_dir="$test_root/replay-repeat-cache-hit-regression"
+if MOCK_REPLAY_REPEAT_CACHED_REGRESSION=1 \
+  run_mock replay-full "$repeat_cache_hit_regression_dir" >/dev/null 2>&1; then
+  echo "Expected a same-source replay repeat below the solver-reuse floor to fail graduation" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.current_set_replacement == true
+  and .current_set.replay.all_restored_successors_hit_contract == true
+  and .current_set.replay.repeat.state_contract_satisfied == true
+  and .current_set.replay.repeat.build.cached_steps == 67
+  and .current_set.replay.repeat.solver_reuse_proven == false
+  and .current_set.replay.repeat.contract_satisfied == false
+  and .current_set.replay.ready_for_graduation == false
+' "$repeat_cache_hit_regression_dir/canary-result.json" >/dev/null
+
+repeat_state_regression_dir="$test_root/replay-repeat-state-regression"
+if MOCK_REPLAY_REPEAT_BLOB_DELTA=1 \
+  run_mock replay-full "$repeat_state_regression_dir" >/dev/null 2>&1; then
+  echo "Expected same-source replay state growth to fail the correctness contract" >&2
   exit 1
 fi
 command jq -e '
   .success == false
   and .current_set.current_set_replacement == false
-  and .current_set.replay.minimum_cached_steps == 68
-  and .current_set.replay.restored_successors_measured == 10
-  and .current_set.replay.all_restored_successors_hit_contract == false
-  and .current_set.replay.minimum_observed_successor_cached_steps == 67
+  and .current_set.replay.repeat.logical_set.blob_delta_from_previous == 1
+  and .current_set.replay.repeat.state_contract_satisfied == false
+  and .current_set.replay.repeat.solver_reuse_proven == true
+  and .current_set.replay.repeat.contract_satisfied == false
   and .current_set.replay.ready_for_graduation == false
-  and .current_set.replay.generations[6].build.cached_steps == 67
-  and .current_set.replay.generations[6].build.hit_contract_satisfied == false
-' "$cache_hit_regression_dir/canary-result.json" >/dev/null
+' "$repeat_state_regression_dir/canary-result.json" >/dev/null
+
+repeat_required_body_regression_dir="$test_root/replay-repeat-required-body-regression"
+if MOCK_REPLAY_REPEAT_REQUIRED_BLOB_DELTA=1 \
+  run_mock replay-full "$repeat_required_body_regression_dir" >/dev/null 2>&1; then
+  echo "Expected same-source replay required-body growth to fail the correctness contract" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.current_set_replacement == false
+  and .current_set.replay.repeat.logical_set.required_blob_delta_from_previous == 1
+  and .current_set.replay.repeat.state_contract_satisfied == false
+  and .current_set.replay.repeat.contract_satisfied == false
+  and .current_set.replay.ready_for_graduation == false
+' "$repeat_required_body_regression_dir/canary-result.json" >/dev/null
 
 backend_tail_dir="$test_root/replay-backend-version-tail"
 MOCK_BACKEND_VERSION_COUNT=2 \
@@ -1308,7 +1396,7 @@ command jq -e '
   and .backend_current_set.all_phases_valid == true
   and .backend_current_set.all_phases_retention_converged == false
   and .backend_current_set.max_active_versions == 2
-  and (.backend_current_set.phases | length) == 11
+  and (.backend_current_set.phases | length) == 12
   and all(.backend_current_set.phases[];
     .active_storage_bytes > .current_entry_bytes
     and .observed_generation == .expected_generation
@@ -1348,6 +1436,7 @@ command jq -e '
   and .current_set.replay.post_clean_baselines_valid == true
   and .current_set.replay.all_prune_contracts_valid == true
   and .current_set.replay.scaffold_prune_generations == 10
+  and .current_set.replay.scaffold_prune_phases == 11
   and .current_set.replay.scaffold_prune_observed == true
   and .current_set.replay.ready_for_graduation == false
 ' "$missing_scaffold_prune_dir/canary-result.json" >/dev/null
@@ -1484,6 +1573,10 @@ command jq -e '
   and .current_set.replay.planned_generations == 11
   and .current_set.replay.measured_generations == 2
   and (.current_set.replay.generations | length) == 2
+  and .current_set.replay.repeat.measured == true
+  and .current_set.replay.repeat.same_source == true
+  and .current_set.replay.repeat.state_contract_satisfied == true
+  and .current_set.replay.repeat.solver_reuse_proven == true
 ' "$replay_endpoints_dir/canary-result.json" >/dev/null
 
 growth_dir="$test_root/growth-failure"

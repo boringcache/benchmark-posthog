@@ -114,10 +114,14 @@ working space rather than discovering runner exhaustion mid-sequence.
   as warm evidence.
 - `replay-full` requires exactly 11 comma-separated immutable PostHog SHAs,
   verifies every SHA and first-parent edge, then advances one brand-new
-  run/attempt-scoped state tag through all 11 generations in order.
+  run/attempt-scoped state tag through all 11 generations in order. A twelfth
+  product phase repeats the final source SHA in another new builder; it is
+  reported separately from the 11-generation source plan and proves same-source
+  lineage, state-set stability, record stability, and solver reuse.
 - `replay-endpoints` validates and records the same exact 11-commit plan but
-  measures only its base and target. This is the shorter smoke path; it is not
-  presented as evidence for every intermediate generation.
+  measures only its base and target, followed by the same explicit final-source
+  repeat. This is the shorter smoke path; it is not presented as evidence for
+  every intermediate generation.
 
 Replay source checkout batches the exact commit set into one depth-one fetch
 with Git auto-maintenance disabled. This avoids `.git/shallow` rewrite races
@@ -179,8 +183,12 @@ delta and percent change from the previous measured generation, transport
 bytes and blobs, and cleanup result. Cross-commit plateau
 is reported against the selected provisional tolerance for diagnosis; it is
 not a correctness failure because a real source change may legitimately alter
-the logical state size. Exact ordered source replay, one-head restore, CAS
-lineage continuity, state-summary validity, and cleanup remain hard gates.
+the logical state size. Changed-source solver hits are likewise telemetry: an
+arbitrary commit can legitimately invalidate work. Exact ordered source replay,
+one-head restore, CAS lineage continuity, state-summary validity, and cleanup
+remain hard gates. `replay-full` graduation additionally requires the explicit
+same-source repeat to keep logical/required content and retained record counts
+stable within the metadata-byte tolerance while satisfying the solver-hit floor.
 
 ## BoringBuild EC2 Shape Sweep
 

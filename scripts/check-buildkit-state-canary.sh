@@ -129,6 +129,7 @@ require_text "$runner" 'ready_for_graduation'
 require_text "$runner" "clean_start_followup_proven"
 require_text "$runner" "plateau_window_start_sequence"
 require_text "$runner" "replay-successor"
+require_text "$runner" "replay-repeat-"
 require_text "$runner" "preflight-checklist.json"
 require_text "$runner" ".save.logical_generation_blobs"
 require_text "$runner" ".save.logical_generation_bytes"
@@ -146,6 +147,10 @@ require_text "$runner" 'growth_observation'
 require_text "$runner" 'clean_start_free'
 require_text "$runner" 'replay_min_cached_steps=68'
 require_text "$runner" 'all_restored_successors_hit_contract'
+require_text "$runner" 'changed_source_telemetry'
+require_text "$runner" 'correctness_gate: false'
+require_text "$runner" 'repeat_state_contract'
+require_text "$runner" 'repeat_solver_reuse'
 require_text "$runner" 'buildkit-state-backend-current-set.v1'
 require_text "$runner" 'boringcache inspect "$workspace" "$cache_tag" --json'
 require_text "$runner" '.versions.version_count == 1'
@@ -171,10 +176,13 @@ require_text "$test_runner" "Expected extra same-ref records created during the 
 require_text "$test_runner" "Expected a replay without per-build scaffold cleanup to fail graduation"
 require_text "$test_runner" "replay-oversized-logical-core"
 require_text "$test_runner" "Expected an unsafe scaffold-clean retention report to fail closed"
-require_text "$test_runner" "Expected a replay successor below the PostHog cache-hit floor to fail graduation"
+require_text "$test_runner" "Expected a same-source replay repeat below the solver-reuse floor to fail graduation"
+require_text "$test_runner" "Expected same-source replay state growth to fail the correctness contract"
+require_text "$test_runner" "Expected same-source replay required-body growth to fail the correctness contract"
 require_text "$test_runner" "Expected a replay whose exact backend head is not current to fail"
 require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode == 'fixture' && '1' || '0' }}"
 require_text "$workflow" "Observed BuildKit state record flow"
+require_text "$workflow" "changed-source solver floor"
 
 for file in "$workflow" "$runner" "$preflight_runner"; do
   reject_text "$file" "boringcache/one"

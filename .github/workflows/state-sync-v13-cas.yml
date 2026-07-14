@@ -649,7 +649,7 @@ jobs:
                 echo
               fi
               jq -r 'if .current_set.replay != null then
-                "Replay continuity: \(.current_set.current_set_replacement); exact source sequence: \(.current_set.exact_source_sequence); current head only: \(.current_set.only_current_head_fetched); clean-start boundaries/follow-up: \(.current_set.clean_start_boundaries // 0)/\(.current_set.clean_start_followup_proven); active window starts at sequence \(.current_set.replay.plateau_window_start_sequence); logical successors within \(.current_set.replay.tolerance_percent)%: \(.current_set.replay.all_successors_within_tolerance) (telemetry, not a cross-commit correctness gate)."
+                "Replay continuity: \(.current_set.current_set_replacement); exact rolling source sequence: \(.current_set.exact_source_sequence); current head only: \(.current_set.only_current_head_fetched); clean-start boundaries/follow-up: \(.current_set.clean_start_boundaries // 0)/\(.current_set.clean_start_followup_proven); explicit final-source repeat state/solver proof: \(.current_set.replay.repeat.state_contract_satisfied)/\(.current_set.replay.repeat.solver_reuse_proven); changed-source solver floor: \(.current_set.replay.all_restored_successors_hit_contract) and logical successors within \(.current_set.replay.tolerance_percent)%: \(.current_set.replay.all_successors_within_tolerance) (both telemetry, not cross-commit correctness gates)."
               elif .current_set.growth == null then
                 "Current-set replacement: \(.current_set.current_set_replacement); current head only: \(.current_set.only_current_head_fetched)."
               else

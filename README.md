@@ -22,9 +22,10 @@ This repo exists separately from [`boringcache/benchmarks`](https://github.com/b
   for targeted mountcache experiments, but it is not part of the default rolling
   BuildKit lane. Turbo's local cache grows as a task-output store, so preserving
   it as a whole cache-mount archive can make every future restore slower.
-- `scenarios/posthog-toolcache/Dockerfile` remains available for explicit Turbo
-  toolcache experiments, but the default BuildKit lane does not use the local
-  Dockerfile fixture.
+- State canaries derive their Turbo tool-cache Dockerfile from the exact
+  checked-out upstream commit for every measured phase. The renderer adds only
+  the stable remote-cache secret hooks and terminal mount probe, and fails
+  closed when upstream changes those insertion points.
 - `scripts/prepare-source.sh` only resets the upstream checkout and applies named benchmark scenarios.
 
 Pinned upstream source:
@@ -75,9 +76,20 @@ This repo uses split BoringCache tokens as the standard CI shape:
 
 [`state-sync-v13-cas.yml`](.github/workflows/state-sync-v13-cas.yml) is
 the isolated pre-graduation path for the CLI `--backend state` product. It is
-manual-only and does not alter the public GHA, ECR, BC OCI, or managed
+independently dispatched and does not alter the public GHA, ECR, BC OCI, or managed
 `type=boringcache` lanes. It deliberately does not use `boringcache/one` or a
 Docker cache importer/exporter.
+
+The main rolling dispatcher can queue the canary after every synced upstream
+commit without weakening its immutable pins. Set
+`POSTHOG_STATE_CANARY_ENABLED=true` and configure the exact CLI release,
+per-platform CLI SHA256, and per-platform BuildKit digest variables referenced
+by [`rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml). Each native
+architecture resolves the exact `upstream` gitlink from the triggering main
+commit and advances its stable `main` rolling scope once. The first run is a
+measured bootstrap; later commits are warm rolling deltas. Maintainers should
+seed the immediate parent before enabling a new image digest when a paired
+cold-parent/warm-current comparison is needed.
 
 Every dispatch requires an exact CLI release tag, an independently supplied
 SHA256 for its native release asset, and an exact
@@ -127,7 +139,7 @@ Replay source checkout batches the exact commit set into one depth-one fetch
 with Git auto-maintenance disabled. This avoids `.git/shallow` rewrite races
 without relaxing per-commit identity or first-parent validation.
 
-The artifact contains `buildkit-state-summary.v2`, wrapper/build and daemon
+The artifact contains `buildkit-state-summary.v3`, wrapper/build and daemon
 logs, observability JSONL, exact release/image/source provenance, transport
 counters, timings, and a managed-resource cleanup check for every phase. The
 hosted product lane uses BuildKit's cache-only output so it measures the real
@@ -206,12 +218,12 @@ The runner needs AWS CLI v2 on `PATH` because BoringBuild verifies EC2 credentia
 ## Repo Layout
 
 - [`scripts/prepare-source.sh`](scripts/prepare-source.sh)
-- [`scripts/check-posthog-toolcache-dockerfile.sh`](scripts/check-posthog-toolcache-dockerfile.sh) verifies the toolcache Dockerfile stays equal to the pinned upstream Dockerfile plus the static Turbo remote-cache secret hooks.
+- [`scripts/render-posthog-toolcache-dockerfile.sh`](scripts/render-posthog-toolcache-dockerfile.sh) derives the state-canary tool-cache fixture from each exact upstream source instead of carrying a drifting Dockerfile copy.
 - [`scripts/run-boringbuild-ec2-shape-sweep.sh`](scripts/run-boringbuild-ec2-shape-sweep.sh)
 - [`docs/buildkit-mountcache-planner-experiment.md`](docs/buildkit-mountcache-planner-experiment.md) records the BuildKit mountcache planner experiment and the BC BuildKit vs ECR comparison for the July 6, 2026 spike run.
 - [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, ECR, and explicit BoringCache OCI and BuildKit-backend product lanes side by side.
-- [`.github/workflows/rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml) runs the rolling lane after upstream sync.
-- [`.github/workflows/sync.yml`](.github/workflows/sync.yml) keeps the pinned upstream source current.
+- [`.github/workflows/rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml) runs the product rolling lanes and the variable-gated BuildKit state canary after upstream sync.
+- [`.github/workflows/sync.yml`](.github/workflows/sync.yml) checks for a newer pinned upstream source every 30 minutes.
 
 ## Output
 

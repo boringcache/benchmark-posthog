@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: ""
+      state_canary:
+        description: "Also dispatch the configured BuildKit state rolling canary on both native architectures."
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -126,3 +131,37 @@ jobs:
           }
 
           dispatch_workflow "posthog-benchmark.yml"
+
+  dispatch-state-canary:
+    name: Dispatch state canary (${{ matrix.cli_platform }})
+    if: >-
+      (github.event_name == 'push' && vars.POSTHOG_STATE_CANARY_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.state_canary)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cli_platform: linux-amd64
+            runner_label: ubuntu-latest
+          - cli_platform: linux-arm64
+            runner_label: ubuntu-24.04-arm
+    steps:
+      - name: Checkout exact rolling source pointer
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Dispatch BuildKit state rolling canary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE_CANARY_REF: ${{ github.ref_name }}
+          STATE_CANARY_CLI_RELEASE_TAG: ${{ vars.POSTHOG_STATE_CANARY_CLI_RELEASE_TAG }}
+          STATE_CANARY_CLI_ASSET_SHA256: ${{ matrix.cli_platform == 'linux-amd64' && vars.POSTHOG_STATE_CANARY_CLI_AMD64_SHA256 || vars.POSTHOG_STATE_CANARY_CLI_ARM64_SHA256 }}
+          STATE_CANARY_PLATFORM: ${{ matrix.cli_platform }}
+          STATE_CANARY_RUNNER_LABEL: ${{ matrix.runner_label }}
+          STATE_CANARY_BUILDKIT_IMAGE: ${{ matrix.cli_platform == 'linux-amd64' && vars.POSTHOG_STATE_CANARY_BUILDKIT_AMD64_IMAGE || vars.POSTHOG_STATE_CANARY_BUILDKIT_ARM64_IMAGE }}
+          STATE_CANARY_ROLLING_SCOPE: main
+        run: ./scripts/dispatch-buildkit-state-rolling-canary.sh

@@ -35,6 +35,10 @@ docker_platform="${BORINGCACHE_STATE_CANARY_PLATFORM:-linux/amd64}"
 plateau_tolerance_percent="${BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT:-2}"
 warm_generations="${BORINGCACHE_STATE_CANARY_WARM_GENERATIONS:-2}"
 replay_plan_path="${BORINGCACHE_STATE_CANARY_REPLAY_PLAN:-}"
+replay_max_logical_core_bytes=17179869184
+replay_scorecard_min_logical_core_bytes=6442450944
+replay_scorecard_max_logical_core_bytes=8589934592
+replay_min_cached_steps=68
 
 case "$composition_mode" in
   off)
@@ -211,6 +215,10 @@ jq -n \
   --argjson replay_selected_commits "$replay_selected_commits" \
   --argjson plateau_tolerance_percent "$plateau_tolerance_percent" \
   --argjson warm_generations "$warm_generations" \
+  --argjson replay_max_logical_core_bytes "$replay_max_logical_core_bytes" \
+  --argjson replay_scorecard_min_logical_core_bytes "$replay_scorecard_min_logical_core_bytes" \
+  --argjson replay_scorecard_max_logical_core_bytes "$replay_scorecard_max_logical_core_bytes" \
+  --argjson replay_min_cached_steps "$replay_min_cached_steps" \
   '{
     schema_version: $schema_version,
     lane: $lane,
@@ -233,6 +241,10 @@ jq -n \
     } end),
     plateau_tolerance_percent: $plateau_tolerance_percent,
     warm_generations: $warm_generations,
+    replay_max_logical_core_bytes: $replay_max_logical_core_bytes,
+    replay_scorecard_min_logical_core_bytes: $replay_scorecard_min_logical_core_bytes,
+    replay_scorecard_max_logical_core_bytes: $replay_scorecard_max_logical_core_bytes,
+    replay_min_cached_steps: $replay_min_cached_steps,
     mountcache_enabled: ($composition_mode == "fixture")
   }' > "$artifact_dir/inputs.json"
 
@@ -302,6 +314,10 @@ write_combined_result() {
     --arg lane "$lane" \
     --argjson tolerance "$plateau_tolerance_percent" \
     --argjson warm_generations "$warm_generations" \
+    --argjson replay_max_logical_core_bytes "$replay_max_logical_core_bytes" \
+    --argjson replay_scorecard_min_logical_core_bytes "$replay_scorecard_min_logical_core_bytes" \
+    --argjson replay_scorecard_max_logical_core_bytes "$replay_scorecard_max_logical_core_bytes" \
+    --argjson replay_min_cached_steps "$replay_min_cached_steps" \
     'def absolute_delta_within_tolerance($delta; $limit):
        if (($delta | type) == "number" and ($limit | type) == "number") then
          (($delta | if . < 0 then -. else . end) <= $limit)
@@ -319,26 +335,61 @@ write_combined_result() {
         | [range(1; ($base.phases | length)) as $index
           | $base.phases[$index - 1] as $previous
           | $base.phases[$index] as $current
-          | ($current.state.logical_generation_blobs - $previous.state.logical_generation_blobs) as $blob_delta
-          | ($current.state.logical_generation_bytes - $previous.state.logical_generation_bytes) as $byte_delta
-          | ($current.state.finalize.required_blobs - $previous.state.finalize.required_blobs) as $required_blob_delta
+          | ($current.state.restore_status == "clean_start") as $clean_start_boundary
+          | (if $clean_start_boundary then null else
+               ($current.state.logical_generation_blobs - $previous.state.logical_generation_blobs)
+             end) as $blob_delta
+          | (if $clean_start_boundary then null else
+               ($current.state.logical_generation_bytes - $previous.state.logical_generation_bytes)
+             end) as $byte_delta
+          | (if $clean_start_boundary then null else
+               ($current.state.finalize.required_blobs - $previous.state.finalize.required_blobs)
+             end) as $required_blob_delta
           | (($previous.state.logical_generation_blobs * $tolerance / 100) | ceil) as $blob_tolerance
           | (($previous.state.logical_generation_bytes * $tolerance / 100) | ceil) as $byte_tolerance
           | {
               transition_index: $index,
               from_phase: $previous.phase,
               to_phase: $current.phase,
-              kind: (if $index == 1 then "bootstrap" else "same-ref" end),
-              final_convergence_pair: ($index == (($base.phases | length) - 1) and $index > 1),
+              kind: (
+                if $clean_start_boundary then "clean-start"
+                elif $index == 1 then "bootstrap"
+                else "same-ref"
+                end
+              ),
+              clean_start_boundary: $clean_start_boundary,
+              next_phase_restores_root: (
+                if ($clean_start_boundary | not) then null
+                elif $index >= (($base.phases | length) - 1) then false
+                else
+                  $base.phases[$index + 1].state.restore_status == "restored"
+                  and $base.phases[$index + 1].state.restored_generation == $current.state.generation
+                  and $base.phases[$index + 1].state.parent_generation == $current.state.generation
+                end
+              ),
+              final_convergence_pair: (
+                ($clean_start_boundary | not)
+                and $index == (($base.phases | length) - 1)
+                and $index > 1
+              ),
               lineage: {
                 previous_generation: $previous.state.generation,
+                candidate_generation: $current.state.restore.candidate_generation,
                 restored_generation: $current.state.restored_generation,
                 parent_generation: $current.state.parent_generation,
                 current_generation: $current.state.generation,
                 valid: (
-                  $current.state.restore_status == "restored"
-                  and $current.state.restored_generation == $previous.state.generation
-                  and $current.state.parent_generation == $previous.state.generation
+                  if $clean_start_boundary then
+                    $current.checks.clean_start_valid
+                    and $current.state.restore.candidate_generation == $previous.state.generation
+                    and $current.state.restored_generation == null
+                    and $current.state.parent_generation == null
+                    and $current.state.state_window.published_generation_count == 1
+                  else
+                    $current.state.restore_status == "restored"
+                    and $current.state.restored_generation == $previous.state.generation
+                    and $current.state.parent_generation == $previous.state.generation
+                  end
                 )
               },
               current_head_only: (
@@ -346,18 +397,26 @@ write_combined_result() {
                 and $current.checks.current_head_only
               ),
               solver_reuse: (
-                $current.cached_steps > $cold.cached_steps
-                and $current.executed_steps < $cold.executed_steps
+                if $clean_start_boundary then null else
+                  $current.cached_steps > $cold.cached_steps
+                  and $current.executed_steps < $cold.executed_steps
+                end
               ),
               record_set: {
                 previous_eligible: $previous.state.finalize.eligible,
                 current_eligible: $current.state.finalize.eligible,
-                eligible_delta: ($current.state.finalize.eligible - $previous.state.finalize.eligible),
+                eligible_delta: (
+                  if $clean_start_boundary then null else
+                    ($current.state.finalize.eligible - $previous.state.finalize.eligible)
+                  end
+                ),
                 previous_records_after_gc: $previous.state.finalize.records_after_gc,
                 current_records_after_gc: $current.state.finalize.records_after_gc,
                 records_after_gc_delta: (
-                  $current.state.finalize.records_after_gc
-                  - $previous.state.finalize.records_after_gc
+                  if $clean_start_boundary then null else
+                    $current.state.finalize.records_after_gc
+                    - $previous.state.finalize.records_after_gc
+                  end
                 )
               },
               replacement_transport: {
@@ -377,44 +436,56 @@ write_combined_result() {
                 byte_delta: $byte_delta,
                 required_blob_delta: $required_blob_delta,
                 blob_delta_percent: (
-                  if $previous.state.logical_generation_blobs == 0 then null
+                  if $clean_start_boundary or $previous.state.logical_generation_blobs == 0 then null
                   else (($blob_delta * 10000 / $previous.state.logical_generation_blobs) | round) / 100
                   end
                 ),
                 byte_delta_percent: (
-                  if $previous.state.logical_generation_bytes == 0 then null
+                  if $clean_start_boundary or $previous.state.logical_generation_bytes == 0 then null
                   else (($byte_delta * 10000 / $previous.state.logical_generation_bytes) | round) / 100
                   end
                 ),
                 blob_tolerance: $blob_tolerance,
                 byte_tolerance: $byte_tolerance,
                 within_tolerance: (
-                  $blob_delta == 0
-                  and $required_blob_delta == 0
-                  and absolute_delta_within_tolerance($byte_delta; $byte_tolerance)
+                  if $clean_start_boundary then null else
+                    $blob_delta == 0
+                    and $required_blob_delta == 0
+                    and absolute_delta_within_tolerance($byte_delta; $byte_tolerance)
+                  end
                 ),
                 positive_growth_within_tolerance: (
-                  $blob_delta == 0
-                  and $required_blob_delta == 0
-                  and $byte_delta <= $byte_tolerance
+                  if $clean_start_boundary then null else
+                    $blob_delta == 0
+                    and $required_blob_delta == 0
+                    and $byte_delta <= $byte_tolerance
+                  end
                 )
               }
             }
         ] as $transitions
         | ($transitions[0] // null) as $bootstrap
         | ($transitions[-1] // null) as $final_transition
+        | ([$transitions[] | select(.clean_start_boundary) | .transition_index] | max // 0) as $last_clean_start_index
+        | [$transitions[] | select(.clean_start_boundary)] as $clean_start_transitions
+        | [$transitions[]
+            | select(.transition_index > $last_clean_start_index)
+            | select(.clean_start_boundary | not)
+          ] as $plateau_transitions
+        | (all($clean_start_transitions[];
+            .lineage.valid and .next_phase_restores_root == true
+          )) as $clean_start_followup_proven
         | ($warm_phases[0] // null) as $warm
         | ($warm_phases[1] // null) as $repeat
         | ((($warm_phases | length) == $warm_generations)
-            and all($warm_phases[];
-              .cached_steps > $cold.cached_steps
-              and .executed_steps < $cold.executed_steps
-            )) as $all_warm_solver_reuse
-        | (all($transitions[];
+            and ($plateau_transitions | length) > 0
+            and all($plateau_transitions[]; .solver_reuse == true)
+          ) as $all_warm_solver_reuse
+        | (all($plateau_transitions[];
             .logical_set.blob_delta == 0
             and .logical_set.required_blob_delta == 0
           )) as $all_warm_content_counts_stable
-        | (all($transitions[];
+        | (all($plateau_transitions[];
             .record_set.eligible_delta == 0
             and .record_set.records_after_gc_delta == 0
           )) as $all_warm_record_counts_stable
@@ -438,7 +509,12 @@ write_combined_result() {
                 and .logical_set.current_blobs > 0
                 and .logical_set.current_bytes > 0
               )
-              and $bootstrap.logical_set.positive_growth_within_tolerance
+              and $clean_start_followup_proven
+              and ($plateau_transitions | length) > 0
+              and (
+                ($clean_start_transitions | length) > 0
+                or $bootstrap.logical_set.positive_growth_within_tolerance
+              )
               and $all_warm_content_counts_stable
               and $all_warm_record_counts_stable
               and $final_transition.final_convergence_pair
@@ -453,6 +529,10 @@ write_combined_result() {
             ),
             warm_generations_planned: $warm_generations,
             warm_generations_measured: ($warm_phases | length),
+            clean_start_boundaries: ($clean_start_transitions | length),
+            clean_start_followup_proven: $clean_start_followup_proven,
+            plateau_window_start_transition: ($last_clean_start_index + 1),
+            plateau_transitions_measured: ($plateau_transitions | length),
             all_warm_content_counts_stable: $all_warm_content_counts_stable,
             all_warm_record_counts_stable: $all_warm_record_counts_stable,
             same_ref_record_growth_observed: ($all_warm_record_counts_stable | not),
@@ -460,11 +540,17 @@ write_combined_result() {
             same_ref_replacement_uploaded_blobs: $warm_uploaded_blobs,
             same_ref_replacement_uploaded_bytes: $warm_uploaded_bytes,
             same_ref_count_plateau: (
+              $clean_start_followup_proven
+              and ($plateau_transitions | length) > 0
+              and
               $all_warm_content_counts_stable
               and $all_warm_record_counts_stable
               and ($final_transition.logical_set.within_tolerance // false)
             ),
             same_ref_plateau: (
+              $clean_start_followup_proven
+              and ($plateau_transitions | length) > 0
+              and
               $all_warm_content_counts_stable
               and $all_warm_record_counts_stable
               and ($final_transition.logical_set.within_tolerance // false)
@@ -475,19 +561,24 @@ write_combined_result() {
             transitions: $transitions,
             growth: {
               tolerance_percent: $tolerance,
+              bootstrap_reset_by_clean_start: ($bootstrap.clean_start_boundary // false),
               bootstrap_logical_blob_delta: $bootstrap.logical_set.blob_delta,
               bootstrap_logical_byte_delta: $bootstrap.logical_set.byte_delta,
               bootstrap_required_blob_delta: $bootstrap.logical_set.required_blob_delta,
               bootstrap_blob_growth_within_tolerance: (
-                (($bootstrap.logical_set.blob_delta | type) == "number")
-                and ($bootstrap.logical_set.blob_delta == 0)
-                and (($bootstrap.logical_set.required_blob_delta | type) == "number")
-                and ($bootstrap.logical_set.required_blob_delta == 0)
+                if ($bootstrap.clean_start_boundary // false) then true else
+                  (($bootstrap.logical_set.blob_delta | type) == "number")
+                  and ($bootstrap.logical_set.blob_delta == 0)
+                  and (($bootstrap.logical_set.required_blob_delta | type) == "number")
+                  and ($bootstrap.logical_set.required_blob_delta == 0)
+                end
               ),
               bootstrap_bytes_growth_within_tolerance: (
-                (($bootstrap.logical_set.byte_delta | type) == "number")
-                and (($bootstrap.logical_set.byte_tolerance | type) == "number")
-                and ($bootstrap.logical_set.byte_delta <= $bootstrap.logical_set.byte_tolerance)
+                if ($bootstrap.clean_start_boundary // false) then true else
+                  (($bootstrap.logical_set.byte_delta | type) == "number")
+                  and (($bootstrap.logical_set.byte_tolerance | type) == "number")
+                  and ($bootstrap.logical_set.byte_delta <= $bootstrap.logical_set.byte_tolerance)
+                end
               ),
               logical_blob_delta: $final_transition.logical_set.blob_delta,
               logical_byte_delta: $final_transition.logical_set.byte_delta,
@@ -509,6 +600,7 @@ write_combined_result() {
               and $rolling.state.logical_generation_blobs > 0
               and $rolling.state.logical_generation_bytes > 0
               and $rolling.checks.current_head_only
+              and $rolling.state.restore_status != "clean_start"
               and (
                 ($rolling.state.restore_status == "miss" and $rolling.state.parent_generation == null)
                 or (
@@ -518,6 +610,10 @@ write_combined_result() {
               )
             ),
             only_current_head_fetched: ($rolling.checks.current_head_only),
+            clean_start_boundaries: (if $rolling.state.restore_status == "clean_start" then 1 else 0 end),
+            clean_start_followup_proven: (if $rolling.state.restore_status == "clean_start" then false else null end),
+            clean_start_followup_pending: ($rolling.state.restore_status == "clean_start"),
+            ready_for_graduation: ($rolling.state.restore_status != "clean_start"),
             same_ref_plateau: null,
             same_ref_solver_reuse: null,
             growth: null
@@ -527,17 +623,18 @@ write_combined_result() {
         | [range(0; ($phases | length)) as $index
           | $phases[$index] as $phase
           | (if $index == 0 then null else $phases[$index - 1] end) as $previous
-          | (if $previous == null then null else
+          | ($phase.state.restore_status == "clean_start") as $clean_start_boundary
+          | (if $previous == null or $clean_start_boundary then null else
                ($phase.state.logical_generation_blobs - $previous.state.logical_generation_blobs)
              end) as $blob_delta
-          | (if $previous == null then null else
+          | (if $previous == null or $clean_start_boundary then null else
                ($phase.state.logical_generation_bytes - $previous.state.logical_generation_bytes)
              end) as $byte_delta
-          | (if $previous == null then null else
+          | (if $previous == null or $clean_start_boundary then null else
                (($blob_delta | if . < 0 then -. else . end) <=
                  ((($previous.state.logical_generation_blobs * $tolerance / 100)) | ceil))
              end) as $blob_plateau
-          | (if $previous == null then null else
+          | (if $previous == null or $clean_start_boundary then null else
                (($byte_delta | if . < 0 then -. else . end) <=
                  ((($previous.state.logical_generation_bytes * $tolerance / 100)) | ceil))
              end) as $byte_plateau
@@ -547,9 +644,38 @@ write_combined_result() {
               generation: $phase.state.generation,
               restored_generation: $phase.state.restored_generation,
               parent_generation: $phase.state.parent_generation,
+              clean_start_boundary: $clean_start_boundary,
+              next_phase_restores_root: (
+                if ($clean_start_boundary | not) then null
+                elif $index >= (($phases | length) - 1) then false
+                else
+                  $phases[$index + 1].state.restore_status == "restored"
+                  and $phases[$index + 1].state.restored_generation == $phase.state.generation
+                  and $phases[$index + 1].state.parent_generation == $phase.state.generation
+                end
+              ),
               current_head_only: $phase.checks.current_head_only,
+              build: {
+                cached_steps: $phase.cached_steps,
+                executed_steps: $phase.executed_steps,
+                minimum_cached_steps: $replay_min_cached_steps,
+                hit_contract_satisfied: (
+                  if $index == 0 or $clean_start_boundary then null
+                  else $phase.cached_steps >= $replay_min_cached_steps
+                  end
+                )
+              },
               continuity: (
-                if $previous == null then
+                if $clean_start_boundary then
+                  $phase.checks.clean_start_valid
+                  and $phase.state.restored_generation == null
+                  and $phase.state.parent_generation == null
+                  and $phase.state.state_window.published_generation_count == 1
+                  and (
+                    $previous == null
+                    or $phase.state.restore.candidate_generation == $previous.state.generation
+                  )
+                elif $previous == null then
                   $phase.state.restore_status == "miss"
                   and $phase.state.parent_generation == null
                   and $phase.state.head_generations_fetched == 0
@@ -566,28 +692,96 @@ write_combined_result() {
                 blob_delta_from_previous: $blob_delta,
                 byte_delta_from_previous: $byte_delta,
                 blob_delta_percent: (
-                  if $previous == null or $previous.state.logical_generation_blobs == 0 then null
+                  if $previous == null or $clean_start_boundary or $previous.state.logical_generation_blobs == 0 then null
                   else (($blob_delta * 10000 / $previous.state.logical_generation_blobs) | round) / 100
                   end
                 ),
                 byte_delta_percent: (
-                  if $previous == null or $previous.state.logical_generation_bytes == 0 then null
+                  if $previous == null or $clean_start_boundary or $previous.state.logical_generation_bytes == 0 then null
                   else (($byte_delta * 10000 / $previous.state.logical_generation_bytes) | round) / 100
                   end
                 ),
                 within_previous_tolerance: (
-                  if $previous == null then null else ($blob_plateau and $byte_plateau) end
+                  if $previous == null or $clean_start_boundary then null else ($blob_plateau and $byte_plateau) end
                 )
               },
               transport_delta: {
                 blobs: $phase.state.transport_delta_blobs,
                 bytes: $phase.state.transport_delta_bytes
+              },
+              prune: {
+                retention_source: $phase.state.finalize.retention_source,
+                baseline_bytes: $phase.state.finalize.retention_disk_usage_baseline_bytes,
+                applied: $phase.state.finalize.prune_applied,
+                triggered: $phase.state.finalize.prune_triggered,
+                target_satisfied: $phase.state.finalize.prune_target_satisfied,
+                target_reason: $phase.state.finalize.prune_target_reason,
+                all: $phase.state.finalize.prune_all,
+                filter_count: $phase.state.finalize.prune_filter_count,
+                max_used_space_bytes: $phase.state.finalize.prune_max_used_space_bytes,
+                duration_ms: $phase.state.finalize.prune_duration_ms,
+                pruned_records: $phase.state.finalize.pruned_records,
+                pruned_bytes: $phase.state.finalize.pruned_bytes,
+                records_before: $phase.state.finalize.records_before_prune,
+                records_after: $phase.state.finalize.records_after_prune,
+                keep_duration_ms: $phase.state.finalize.prune_keep_duration_ms,
+                cutoff_unix_nano: $phase.state.finalize.prune_cutoff_unix_nano,
+                cache_usage_before_bytes: $phase.state.finalize.prune_cache_usage_before_bytes,
+                cache_usage_after_bytes: $phase.state.finalize.prune_cache_usage_after_bytes,
+                disk_total_bytes: $phase.state.finalize.prune_disk_total_bytes,
+                disk_free_before_bytes: $phase.state.finalize.prune_disk_free_before_bytes,
+                disk_free_after_bytes: $phase.state.finalize.prune_disk_free_after_bytes,
+                disk_available_before_bytes: $phase.state.finalize.prune_disk_available_before_bytes,
+                disk_available_after_bytes: $phase.state.finalize.prune_disk_available_after_bytes,
+                reserved_space_bytes: $phase.state.finalize.prune_reserved_space_bytes,
+                min_free_space_bytes: $phase.state.finalize.prune_min_free_space_bytes,
+                effective_keep_bytes: $phase.state.finalize.prune_effective_keep_bytes
               }
             }
         ] as $generations
+        | ([$generations[] | select(.clean_start_boundary) | .sequence_index] | max // 1) as $replay_window_start
+        | [$generations[] | select(.clean_start_boundary)] as $clean_start_generations
+        | [$generations[]
+            | select(.sequence_index > $replay_window_start)
+            | select(.clean_start_boundary | not)
+          ] as $active_successors
+        | [$generations[]
+            | select(.sequence_index > 1)
+            | select(.clean_start_boundary | not)
+          ] as $restored_successors
+        | (all($clean_start_generations[];
+            .continuity and .next_phase_restores_root == true
+          )) as $clean_start_followup_proven
+        | (all($generations[];
+            .logical_set.bytes <= $replay_max_logical_core_bytes
+          )) as $all_logical_core_within_bound
+        | ($generations[-1].logical_set.bytes // 0) as $final_logical_core_bytes
+        | ($generations[0].prune.baseline_bytes // 0) as $signed_baseline_bytes
+        | (all($generations[]; .prune.baseline_bytes == $signed_baseline_bytes)) as $baseline_unchanged
+        | (($generations[0].prune.retention_source // "") == "fresh-measured"
+            and all($generations[1:][]; .prune.retention_source == "restored-marker")
+          ) as $retention_sources_valid
+        | ([$generations[]
+            | select(.prune.triggered and .prune.pruned_records > 0)
+          ]) as $positive_prune_generations
+        | (all($generations[];
+            .prune.applied == true
+            and .prune.target_satisfied == true
+            and .prune.all == false
+            and .prune.filter_count == 0
+            and .prune.max_used_space_bytes == .prune.baseline_bytes
+            and .prune.keep_duration_ms == 0
+            and .prune.cutoff_unix_nano == 0
+            and (.prune.records_before - .prune.records_after) == .prune.pruned_records
+          )) as $all_prune_contracts_valid
+        | (($restored_successors | length) > 0
+            and all($restored_successors[]; .build.hit_contract_satisfied == true)
+          ) as $all_restored_successors_hit_contract
         | {
             current_set_replacement: (
               ($generations | length) == ($inputs[0].replay.selected_commits | length)
+              and $clean_start_followup_proven
+              and $all_restored_successors_hit_contract
               and all($generations[];
                 .continuity
                 and .current_head_only
@@ -598,6 +792,8 @@ write_combined_result() {
             exact_source_sequence: (
               ($generations | map(.source_sha)) == $inputs[0].replay.selected_commits
             ),
+            clean_start_boundaries: ($clean_start_generations | length),
+            clean_start_followup_proven: $clean_start_followup_proven,
             same_ref_plateau: null,
             same_ref_solver_reuse: null,
             growth: null,
@@ -606,8 +802,48 @@ write_combined_result() {
               planned_generations: ($inputs[0].replay.all_commits | length),
               measured_generations: ($generations | length),
               tolerance_percent: $tolerance,
+              plateau_window_start_sequence: $replay_window_start,
+              active_successors_measured: ($active_successors | length),
+              clean_start_free: (($clean_start_generations | length) == 0),
+              signed_baseline_bytes: $signed_baseline_bytes,
+              baseline_unchanged: $baseline_unchanged,
+              retention_sources_valid: $retention_sources_valid,
+              max_logical_core_bytes: $replay_max_logical_core_bytes,
+              all_logical_core_within_bound: $all_logical_core_within_bound,
+              all_prune_contracts_valid: $all_prune_contracts_valid,
+              positive_prune_generations: ($positive_prune_generations | length),
+              positive_prune_observed: (($positive_prune_generations | length) > 0),
+              minimum_cached_steps: $replay_min_cached_steps,
+              restored_successors_measured: ($restored_successors | length),
+              all_restored_successors_hit_contract: $all_restored_successors_hit_contract,
+              minimum_observed_successor_cached_steps: (
+                [$restored_successors[].build.cached_steps] | min // 0
+              ),
+              working_set_scorecard: {
+                target_min_bytes: $replay_scorecard_min_logical_core_bytes,
+                target_max_bytes: $replay_scorecard_max_logical_core_bytes,
+                final_logical_core_bytes: $final_logical_core_bytes,
+                final_within_target_band: (
+                  $final_logical_core_bytes >= $replay_scorecard_min_logical_core_bytes
+                  and $final_logical_core_bytes <= $replay_scorecard_max_logical_core_bytes
+                )
+              },
+              ready_for_graduation: (
+                if $lane == "replay-full" then
+                  ($clean_start_generations | length) == 0
+                  and $signed_baseline_bytes > 0
+                  and $baseline_unchanged
+                  and $retention_sources_valid
+                  and $all_logical_core_within_bound
+                  and $all_prune_contracts_valid
+                  and $all_restored_successors_hit_contract
+                  and ($positive_prune_generations | length) > 0
+                else
+                  null
+                end
+              ),
               all_successors_within_tolerance: all(
-                $generations[1:][];
+                $active_successors[];
                 .logical_set.within_previous_tolerance == true
               ),
               generations: $generations
@@ -615,6 +851,32 @@ write_combined_result() {
           }
       end) as $current_set
     | ($mount_probe[0]) as $terminal_mount_probe
+    | {
+        valid: all($base.phases[]; .backend_current_set.valid == true),
+        all_phases_valid: all($base.phases[]; .backend_current_set.valid == true),
+        max_active_versions: ([ $base.phases[].backend_current_set.active_versions ] | max // 0),
+        max_active_storage_bytes: ([ $base.phases[].backend_current_set.active_storage_bytes ] | max // 0),
+        phases: [ $base.phases[] | {
+          phase,
+          expected_generation: .backend_current_set.expected_generation,
+          observed_generation: .backend_current_set.observed_generation,
+          active_versions: .backend_current_set.active_versions,
+          active_storage_bytes: .backend_current_set.active_storage_bytes,
+          current_entry_bytes: .backend_current_set.current_entry_bytes,
+          valid: .backend_current_set.valid
+        } ]
+      } as $backend_current
+    | ($current_set
+        | .backend_current_version_set = $backend_current.valid
+        | .current_set_replacement = (.current_set_replacement and $backend_current.valid)
+        | if (.replay | type) == "object" then
+            .replay.ready_for_graduation = (
+              .replay.ready_for_graduation and $backend_current.valid
+            )
+          else
+            .
+          end
+      ) as $audited_current_set
     | (if $inputs[0].composition_mode == "fixture" then
         {
           mode: "fixture",
@@ -708,17 +970,117 @@ write_combined_result() {
         inputs: $inputs[0],
         success: (
           $base.all_phases_valid
-          and $current_set.current_set_replacement
-          and $current_set.only_current_head_fetched
-          and ($current_set.exact_source_sequence != false)
-          and ($current_set.same_ref_solver_reuse != false)
+          and $audited_current_set.current_set_replacement
+          and ($audited_current_set.clean_start_followup_pending != true)
+          and $audited_current_set.only_current_head_fetched
+          and ($audited_current_set.exact_source_sequence != false)
+          and ($audited_current_set.same_ref_solver_reuse != false)
+          and $backend_current.valid
+          and (if $lane == "replay-full" then
+                 $audited_current_set.replay.ready_for_graduation
+               else
+                 true
+               end)
           and $composition.valid
         ),
-        current_set: $current_set,
+        current_set: $audited_current_set,
+        backend_current_set: $backend_current,
         composition: $composition,
         terminal_mount_probe: $terminal_mount_probe,
         phases: $base.phases
       }' "${phase_files[@]}" > "$result"
+}
+
+audit_backend_current_set() {
+  local phase="$1"
+  local expected_generation="$2"
+  local expected_bytes="$3"
+  local result_path="$4"
+  local inspect_path attempt started finished command_status valid
+  local max_attempts=30
+  inspect_path="$artifact_dir/${phase}.backend-current-set-inspect.json"
+  [[ "$expected_generation" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "State generation is unavailable for the backend current-set audit in ${phase}" >&2
+    return 1
+  }
+  [[ "$expected_bytes" =~ ^[1-9][0-9]*$ ]] || {
+    echo "State logical bytes are unavailable for the backend current-set audit in ${phase}" >&2
+    return 1
+  }
+
+  started="$(date +%s)"
+  valid=false
+  command_status=1
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    set +e
+    BORINGCACHE_STATE_CANARY_EXPECTED_BACKEND_GENERATION="$expected_generation" \
+      BORINGCACHE_STATE_CANARY_EXPECTED_BACKEND_BYTES="$expected_bytes" \
+      boringcache inspect "$workspace" "$cache_tag" --json > "$inspect_path"
+    command_status=$?
+    set -e
+    if [[ "$command_status" -eq 0 ]] && jq -e \
+      --arg workspace "$workspace" \
+      --arg tag "$cache_tag" \
+      --arg generation "$expected_generation" \
+      --argjson expected_bytes "$expected_bytes" '
+        .workspace.slug == $workspace
+        and .identifier.query == $tag
+        and .identifier.matched_by == "tag"
+        and .entry.status == "ready"
+        and .entry.storage_mode == "cas"
+        and .entry.cas_layout == "buildkit-state-v1"
+        and .entry.manifest_root_digest == $generation
+        and .entry.stored_size_bytes == $expected_bytes
+        and .entry.blob_count > 0
+        and .entry.blob_total_size_bytes == .entry.stored_size_bytes
+        and .versions.tag == $tag
+        and .versions.version_count == 1
+        and .versions.current == true
+        and .versions.total_storage_bytes == .entry.stored_size_bytes
+      ' "$inspect_path" >/dev/null 2>&1; then
+      valid=true
+      break
+    fi
+    if ((attempt < max_attempts)); then
+      sleep 2
+    fi
+  done
+  finished="$(date +%s)"
+  if ((attempt > max_attempts)); then
+    attempt="$max_attempts"
+  fi
+
+  [[ -s "$inspect_path" ]] || printf '{}\n' > "$inspect_path"
+  jq -n \
+    --arg expected_generation "$expected_generation" \
+    --argjson expected_bytes "$expected_bytes" \
+    --argjson attempts "$attempt" \
+    --argjson elapsed_seconds "$((finished - started))" \
+    --argjson command_status "$command_status" \
+    --argjson valid "$valid" \
+    --slurpfile inspection "$inspect_path" '
+      {
+        schema_version: "buildkit-state-backend-current-set.v1",
+        attempted: true,
+        expected_generation: $expected_generation,
+        expected_bytes: $expected_bytes,
+        attempts: $attempts,
+        elapsed_seconds: $elapsed_seconds,
+        command_status: $command_status,
+        active_versions: ($inspection[0].versions.version_count // null),
+        active_storage_bytes: ($inspection[0].versions.total_storage_bytes // null),
+        current_entry_bytes: ($inspection[0].entry.stored_size_bytes // null),
+        current_entry_blob_count: ($inspection[0].entry.blob_count // null),
+        observed_generation: ($inspection[0].entry.manifest_root_digest // null),
+        current: ($inspection[0].versions.current // false),
+        valid: $valid
+      }
+    ' > "$result_path"
+
+  if [[ "$valid" != true ]]; then
+    echo "Backend did not converge to one exact current BuildKit state generation in ${phase}" >&2
+    return 1
+  fi
 }
 
 trap write_combined_result EXIT
@@ -734,6 +1096,7 @@ run_phase() {
   local observability_path="$artifact_dir/${phase}.observability.jsonl"
   local state_summary_path="$artifact_dir/${phase}.state-summary.json"
   local phase_result_path="$artifact_dir/${phase}.phase.json"
+  local backend_current_set_result_path="$artifact_dir/${phase}.backend-current-set.json"
   local resources_after="$artifact_dir/${phase}.managed-resources.after.txt"
   local resources_leaked="$artifact_dir/${phase}.managed-resources.leaked.txt"
 
@@ -752,6 +1115,7 @@ run_phase() {
     "$observability_path" \
     "$state_summary_path" \
     "$phase_result_path" \
+    "$backend_current_set_result_path" \
     "$resources_after" \
     "$resources_leaked"
 
@@ -799,18 +1163,34 @@ run_phase() {
   comm -13 "$baseline_resources" "$resources_after" > "$resources_leaked"
 
   local cached_steps executed_steps state_overhead restore_status publish_status
-  local restored_bytes restored_files logical_bytes logical_blobs transport_delta_bytes transport_delta_blobs
-  local restored_generation generation parent_generation head_generations_fetched
+  local restored_blobs restored_bytes restored_files logical_bytes logical_blobs transport_delta_bytes transport_delta_blobs
+  local restored_generation candidate_generation generation parent_generation head_generations_fetched
+  local candidate_blobs candidate_bytes candidate_files restore_core_blobs restore_core_bytes restore_core_files
+  local restore_mount_blobs restore_mount_bytes restore_mount_files restore_manifest_seconds restore_verify_seconds
+  local restore_url_plan_seconds restore_helper_seconds
+  local restore_download_sequential_blobs restore_download_parallel_blobs restore_download_range_parts
+  local restore_download_request_retries restore_download_origin_fallbacks
+  local window_baseline_bytes window_generation_count window_max_restore_bytes window_max_generations
+  local window_rebase_reason published_window_baseline_bytes published_window_generation_count
   local finalize_eligible finalize_already_ready finalize_materialized finalize_failed finalize_required_blobs
-  local finalize_seconds retention_policy content_gc_applied content_gc_duration_ms
+  local finalize_seconds retention_policy retention_source retention_disk_usage_baseline_bytes
+  local prune_applied prune_triggered prune_target_satisfied prune_target_reason prune_all prune_filter_count
+  local finalize_prune_max_used_space_bytes prune_duration_ms pruned_records pruned_bytes
+  local records_before_prune records_after_prune prune_keep_duration_ms prune_cutoff_unix_nano
+  local prune_cache_usage_before_bytes prune_cache_usage_after_bytes prune_disk_total_bytes
+  local prune_disk_free_before_bytes prune_disk_free_after_bytes
+  local prune_disk_available_before_bytes prune_disk_available_after_bytes
+  local prune_reserved_space_bytes prune_min_free_space_bytes prune_effective_keep_bytes
+  local content_gc_applied content_gc_duration_ms
   local records_before_gc records_after_gc content_gc_seconds
-  local mount_cache_json tool_cache_json
-  local summary_valid mount_cache_valid tool_cache_valid cleanup_valid expectation_valid current_head_only success
+  local state_record_flow_json mount_cache_json tool_cache_json
+  local summary_valid state_record_flow_valid clean_start_valid mount_cache_valid tool_cache_valid cleanup_valid expectation_valid current_head_only success
   cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$log_path" || true)"
   executed_steps="$(grep -Ec '^#[0-9]+ DONE ([0-9]+([.][0-9]+)?)s$' "$log_path" || true)"
   state_overhead=""
   restore_status="missing"
   publish_status="missing"
+  restored_blobs="0"
   restored_bytes="0"
   restored_files="0"
   logical_bytes="0"
@@ -818,6 +1198,32 @@ run_phase() {
   transport_delta_bytes="0"
   transport_delta_blobs="0"
   restored_generation=""
+  candidate_generation=""
+  candidate_blobs="0"
+  candidate_bytes="0"
+  candidate_files="0"
+  restore_core_blobs="0"
+  restore_core_bytes="0"
+  restore_core_files="0"
+  restore_mount_blobs="0"
+  restore_mount_bytes="0"
+  restore_mount_files="0"
+  restore_manifest_seconds="0"
+  restore_verify_seconds="0"
+  restore_url_plan_seconds="0"
+  restore_helper_seconds="0"
+  restore_download_sequential_blobs="0"
+  restore_download_parallel_blobs="0"
+  restore_download_range_parts="0"
+  restore_download_request_retries="0"
+  restore_download_origin_fallbacks="0"
+  window_baseline_bytes="0"
+  window_generation_count="0"
+  window_max_restore_bytes="0"
+  window_max_generations="0"
+  window_rebase_reason=""
+  published_window_baseline_bytes="0"
+  published_window_generation_count="0"
   generation=""
   parent_generation=""
   finalize_eligible="0"
@@ -827,15 +1233,44 @@ run_phase() {
   finalize_required_blobs="0"
   finalize_seconds=""
   retention_policy=""
+  retention_source=""
+  retention_disk_usage_baseline_bytes="0"
+  prune_applied=false
+  prune_triggered=false
+  prune_target_satisfied=false
+  prune_target_reason=""
+  prune_all=false
+  prune_filter_count="0"
+  finalize_prune_max_used_space_bytes="0"
+  prune_duration_ms="0"
+  pruned_records="0"
+  pruned_bytes="0"
+  records_before_prune="0"
+  records_after_prune="0"
+  prune_keep_duration_ms="0"
+  prune_cutoff_unix_nano="0"
+  prune_cache_usage_before_bytes="0"
+  prune_cache_usage_after_bytes="0"
+  prune_disk_total_bytes="0"
+  prune_disk_free_before_bytes="0"
+  prune_disk_free_after_bytes="0"
+  prune_disk_available_before_bytes="0"
+  prune_disk_available_after_bytes="0"
+  prune_reserved_space_bytes="0"
+  prune_min_free_space_bytes="0"
+  prune_effective_keep_bytes="0"
   content_gc_applied=false
   content_gc_duration_ms="0"
   records_before_gc="0"
   records_after_gc="0"
   content_gc_seconds=""
+  state_record_flow_json=null
   mount_cache_json=null
   tool_cache_json=null
   head_generations_fetched="0"
   summary_valid=false
+  state_record_flow_valid=false
+  clean_start_valid=false
   mount_cache_valid=false
   tool_cache_valid=false
   cleanup_valid=false
@@ -845,7 +1280,22 @@ run_phase() {
   if [[ -s "$state_summary_path" ]] && jq -e \
     --arg digest "$buildkit_digest" \
     --arg platform "$docker_platform" \
-    '.schema_version == "buildkit-state-summary.v2"
+    'def minimum($left; $right): if $left < $right then $left else $right end;
+      def maximum($left; $right): if $left > $right then $left else $right end;
+      def upstream_percent_bytes($total; $percentage):
+        (((($total * $percentage / 100) / 1073741824) | floor) + 1) * 1000000000;
+      def expected_effective_keep($finalize):
+        ($finalize.prune_min_free_space_bytes - $finalize.prune_disk_free_before_bytes) as $excess
+        | (if $excess > 0 then
+             minimum(
+               $finalize.prune_max_used_space_bytes;
+               $finalize.prune_cache_usage_before_bytes - $excess
+             )
+           else
+             $finalize.prune_max_used_space_bytes
+           end) as $pressure_keep
+        | maximum($pressure_keep; $finalize.prune_reserved_space_bytes);
+      .schema_version == "buildkit-state-summary.v2"
       and .compatibility.image_digest == $digest
       and .compatibility.platform == $platform
       and .compatibility.state_format == "buildkit-state-v1"
@@ -863,12 +1313,102 @@ run_phase() {
       and .finalize.required_blobs >= 0
       and (.finalize.seconds | type == "number")
       and .finalize.seconds >= 0
-      and .finalize.retention_policy == "complete-main-cache-v1"
+      and .finalize.retention_policy == "signed-working-set-main-cache-v1"
+      and (.finalize.retention_source == "fresh-measured"
+        or .finalize.retention_source == "restored-marker")
+      and (if .restore.status == "restored" then
+             .finalize.retention_source == "restored-marker"
+           else
+             .finalize.retention_source == "fresh-measured"
+           end)
+      and (.finalize.retention_disk_usage_baseline_bytes | type == "number")
+      and .finalize.retention_disk_usage_baseline_bytes > 0
+      and .finalize.prune_applied == true
+      and (.finalize.prune_triggered | type == "boolean")
+      and .finalize.prune_target_satisfied == true
+      and (.finalize.prune_target_reason == "within-effective-keep"
+        or .finalize.prune_target_reason == "pruned-to-effective-keep")
+      and .finalize.prune_all == false
+      and .finalize.prune_filter_count == 0
+      and (.finalize.prune_max_used_space_bytes | type == "number")
+      and .finalize.prune_max_used_space_bytes
+        == .finalize.retention_disk_usage_baseline_bytes
+      and (.finalize.prune_duration_ms | type == "number")
+      and .finalize.prune_duration_ms >= 0
+      and (.finalize.pruned_records | type == "number")
+      and .finalize.pruned_records >= 0
+      and (.finalize.pruned_bytes | type == "number")
+      and .finalize.pruned_bytes >= 0
+      and (.finalize.records_before_prune | type == "number")
+      and (.finalize.records_after_prune | type == "number")
+      and .finalize.records_before_prune >= .finalize.records_after_prune
+      and (.finalize.records_before_prune - .finalize.records_after_prune)
+        == .finalize.pruned_records
+      and (.finalize.prune_keep_duration_ms | type == "number")
+      and .finalize.prune_keep_duration_ms == 0
+      and (.finalize.prune_cutoff_unix_nano | type == "number")
+      and .finalize.prune_cutoff_unix_nano == 0
+      and (.finalize.prune_cache_usage_before_bytes | type == "number")
+      and (.finalize.prune_cache_usage_after_bytes | type == "number")
+      and .finalize.prune_cache_usage_before_bytes >= 0
+      and .finalize.prune_cache_usage_after_bytes >= 0
+      and .finalize.prune_cache_usage_after_bytes
+        <= .finalize.prune_cache_usage_before_bytes
+      and (.finalize.prune_disk_total_bytes | type == "number")
+      and .finalize.prune_disk_total_bytes > 0
+      and (.finalize.prune_disk_free_before_bytes | type == "number")
+      and (.finalize.prune_disk_free_after_bytes | type == "number")
+      and .finalize.prune_disk_free_before_bytes >= 0
+      and .finalize.prune_disk_free_after_bytes >= 0
+      and .finalize.prune_disk_free_before_bytes <= .finalize.prune_disk_total_bytes
+      and .finalize.prune_disk_free_after_bytes <= .finalize.prune_disk_total_bytes
+      and (.finalize.prune_disk_available_before_bytes | type == "number")
+      and (.finalize.prune_disk_available_after_bytes | type == "number")
+      and .finalize.prune_disk_available_before_bytes >= 0
+      and .finalize.prune_disk_available_after_bytes >= 0
+      and .finalize.prune_disk_available_before_bytes
+        <= .finalize.prune_disk_free_before_bytes
+      and .finalize.prune_disk_available_after_bytes
+        <= .finalize.prune_disk_free_after_bytes
+      and .finalize.prune_min_free_space_bytes
+        == upstream_percent_bytes(.finalize.prune_disk_total_bytes; 20)
+      and .finalize.prune_reserved_space_bytes == minimum(
+        .finalize.retention_disk_usage_baseline_bytes;
+        minimum(
+          upstream_percent_bytes(.finalize.prune_disk_total_bytes; 10);
+          10000000000
+        )
+      )
+      and .finalize.prune_effective_keep_bytes == expected_effective_keep(.finalize)
+      and .finalize.prune_effective_keep_bytes
+        >= .finalize.prune_reserved_space_bytes
+      and .finalize.prune_effective_keep_bytes
+        <= .finalize.prune_max_used_space_bytes
+      and .finalize.prune_triggered
+        == (.finalize.prune_cache_usage_before_bytes
+          > .finalize.prune_effective_keep_bytes)
+      and (if .finalize.prune_triggered then
+             .finalize.prune_target_reason == "pruned-to-effective-keep"
+             and .finalize.prune_cache_usage_before_bytes
+               > .finalize.prune_effective_keep_bytes
+             and .finalize.prune_cache_usage_after_bytes
+               <= .finalize.prune_effective_keep_bytes
+           else
+             .finalize.prune_target_reason == "within-effective-keep"
+             and .finalize.pruned_records == 0
+             and .finalize.pruned_bytes == 0
+             and .finalize.records_before_prune == .finalize.records_after_prune
+             and .finalize.prune_cache_usage_before_bytes
+               == .finalize.prune_cache_usage_after_bytes
+             and .finalize.prune_cache_usage_before_bytes
+               <= .finalize.prune_effective_keep_bytes
+           end)
       and .finalize.content_gc_applied == true
       and (.finalize.content_gc_duration_ms | type == "number")
       and .finalize.content_gc_duration_ms >= 0
       and (.finalize.records_before_gc | type == "number")
       and (.finalize.records_after_gc | type == "number")
+      and .finalize.records_after_prune == .finalize.records_before_gc
       and .finalize.records_before_gc == .finalize.records_after_gc
       and .finalize.records_after_gc >= .finalize.eligible
       and (.content_gc_seconds | type == "number")
@@ -891,15 +1431,42 @@ run_phase() {
     state_overhead="$(jq -r '.total_state_overhead_seconds' "$state_summary_path")"
     restore_status="$(jq -r '.restore.status' "$state_summary_path")"
     publish_status="$(jq -r '.save.publish_status' "$state_summary_path")"
-    restored_bytes="$(jq -r '.restore.bytes' "$state_summary_path")"
-    restored_files="$(jq -r '.restore.files' "$state_summary_path")"
+    restored_blobs="$(jq -r '.restore.blobs // 0' "$state_summary_path")"
+    restored_bytes="$(jq -r '.restore.bytes // 0' "$state_summary_path")"
+    restored_files="$(jq -r '.restore.files // 0' "$state_summary_path")"
     logical_bytes="$(jq -r '.save.logical_generation_bytes' "$state_summary_path")"
     logical_blobs="$(jq -r '.save.logical_generation_blobs' "$state_summary_path")"
     transport_delta_bytes="$(jq -r '.save.uploaded_bytes' "$state_summary_path")"
     transport_delta_blobs="$(jq -r '.save.uploaded_blobs' "$state_summary_path")"
     restored_generation="$(jq -r '.restore.generation // ""' "$state_summary_path")"
+    candidate_generation="$(jq -r '.restore.candidate_generation // ""' "$state_summary_path")"
+    candidate_blobs="$(jq -r '.restore.candidate_blobs // 0' "$state_summary_path")"
+    candidate_bytes="$(jq -r '.restore.candidate_bytes // 0' "$state_summary_path")"
+    candidate_files="$(jq -r '.restore.candidate_files // 0' "$state_summary_path")"
+    restore_core_blobs="$(jq -r '.restore.core_blobs // 0' "$state_summary_path")"
+    restore_core_bytes="$(jq -r '.restore.core_bytes // 0' "$state_summary_path")"
+    restore_core_files="$(jq -r '.restore.core_files // 0' "$state_summary_path")"
+    restore_mount_blobs="$(jq -r '.restore.mount_cache_blobs // 0' "$state_summary_path")"
+    restore_mount_bytes="$(jq -r '.restore.mount_cache_bytes // 0' "$state_summary_path")"
+    restore_mount_files="$(jq -r '.restore.mount_cache_files // 0' "$state_summary_path")"
+    restore_manifest_seconds="$(jq -r '.restore.manifest_seconds // 0' "$state_summary_path")"
+    restore_verify_seconds="$(jq -r '.restore.verify_seconds // 0' "$state_summary_path")"
+    restore_url_plan_seconds="$(jq -r '.restore.url_plan_seconds // 0' "$state_summary_path")"
+    restore_helper_seconds="$(jq -r '.restore.helper_seconds // 0' "$state_summary_path")"
+    restore_download_sequential_blobs="$(jq -r '.restore.download_sequential_blobs // 0' "$state_summary_path")"
+    restore_download_parallel_blobs="$(jq -r '.restore.download_parallel_blobs // 0' "$state_summary_path")"
+    restore_download_range_parts="$(jq -r '.restore.download_range_parts // 0' "$state_summary_path")"
+    restore_download_request_retries="$(jq -r '.restore.download_request_retries // 0' "$state_summary_path")"
+    restore_download_origin_fallbacks="$(jq -r '.restore.download_origin_fallbacks // 0' "$state_summary_path")"
+    window_baseline_bytes="$(jq -r '.restore.state_window_baseline_bytes // 0' "$state_summary_path")"
+    window_generation_count="$(jq -r '.restore.state_window_generation_count // 0' "$state_summary_path")"
+    window_max_restore_bytes="$(jq -r '.restore.state_window_max_restore_bytes // 0' "$state_summary_path")"
+    window_max_generations="$(jq -r '.restore.state_window_max_generations // 0' "$state_summary_path")"
+    window_rebase_reason="$(jq -r '.restore.state_window_rebase_reason // ""' "$state_summary_path")"
     generation="$(jq -r '.save.generation // ""' "$state_summary_path")"
     parent_generation="$(jq -r '.save.parent // ""' "$state_summary_path")"
+    published_window_baseline_bytes="$(jq -r '.save.state_window_baseline_bytes // 0' "$state_summary_path")"
+    published_window_generation_count="$(jq -r '.save.state_window_generation_count // 0' "$state_summary_path")"
     finalize_eligible="$(jq -r '.finalize.eligible' "$state_summary_path")"
     finalize_already_ready="$(jq -r '.finalize.already_ready' "$state_summary_path")"
     finalize_materialized="$(jq -r '.finalize.materialized' "$state_summary_path")"
@@ -907,12 +1474,101 @@ run_phase() {
     finalize_required_blobs="$(jq -r '.finalize.required_blobs' "$state_summary_path")"
     finalize_seconds="$(jq -r '.finalize.seconds' "$state_summary_path")"
     retention_policy="$(jq -r '.finalize.retention_policy' "$state_summary_path")"
+    retention_source="$(jq -r '.finalize.retention_source' "$state_summary_path")"
+    retention_disk_usage_baseline_bytes="$(jq -r '.finalize.retention_disk_usage_baseline_bytes' "$state_summary_path")"
+    prune_applied="$(jq -r '.finalize.prune_applied' "$state_summary_path")"
+    prune_triggered="$(jq -r '.finalize.prune_triggered' "$state_summary_path")"
+    prune_target_satisfied="$(jq -r '.finalize.prune_target_satisfied' "$state_summary_path")"
+    prune_target_reason="$(jq -r '.finalize.prune_target_reason' "$state_summary_path")"
+    prune_all="$(jq -r '.finalize.prune_all' "$state_summary_path")"
+    prune_filter_count="$(jq -r '.finalize.prune_filter_count' "$state_summary_path")"
+    finalize_prune_max_used_space_bytes="$(jq -r '.finalize.prune_max_used_space_bytes' "$state_summary_path")"
+    prune_duration_ms="$(jq -r '.finalize.prune_duration_ms' "$state_summary_path")"
+    pruned_records="$(jq -r '.finalize.pruned_records' "$state_summary_path")"
+    pruned_bytes="$(jq -r '.finalize.pruned_bytes' "$state_summary_path")"
+    records_before_prune="$(jq -r '.finalize.records_before_prune' "$state_summary_path")"
+    records_after_prune="$(jq -r '.finalize.records_after_prune' "$state_summary_path")"
+    prune_keep_duration_ms="$(jq -r '.finalize.prune_keep_duration_ms' "$state_summary_path")"
+    prune_cutoff_unix_nano="$(jq -r '.finalize.prune_cutoff_unix_nano' "$state_summary_path")"
+    prune_cache_usage_before_bytes="$(jq -r '.finalize.prune_cache_usage_before_bytes' "$state_summary_path")"
+    prune_cache_usage_after_bytes="$(jq -r '.finalize.prune_cache_usage_after_bytes' "$state_summary_path")"
+    prune_disk_total_bytes="$(jq -r '.finalize.prune_disk_total_bytes' "$state_summary_path")"
+    prune_disk_free_before_bytes="$(jq -r '.finalize.prune_disk_free_before_bytes' "$state_summary_path")"
+    prune_disk_free_after_bytes="$(jq -r '.finalize.prune_disk_free_after_bytes' "$state_summary_path")"
+    prune_disk_available_before_bytes="$(jq -r '.finalize.prune_disk_available_before_bytes' "$state_summary_path")"
+    prune_disk_available_after_bytes="$(jq -r '.finalize.prune_disk_available_after_bytes' "$state_summary_path")"
+    prune_reserved_space_bytes="$(jq -r '.finalize.prune_reserved_space_bytes' "$state_summary_path")"
+    prune_min_free_space_bytes="$(jq -r '.finalize.prune_min_free_space_bytes' "$state_summary_path")"
+    prune_effective_keep_bytes="$(jq -r '.finalize.prune_effective_keep_bytes' "$state_summary_path")"
     content_gc_applied="$(jq -r '.finalize.content_gc_applied' "$state_summary_path")"
     content_gc_duration_ms="$(jq -r '.finalize.content_gc_duration_ms' "$state_summary_path")"
     records_before_gc="$(jq -r '.finalize.records_before_gc' "$state_summary_path")"
     records_after_gc="$(jq -r '.finalize.records_after_gc' "$state_summary_path")"
     content_gc_seconds="$(jq -r '.content_gc_seconds' "$state_summary_path")"
+    state_record_flow_json="$(jq -c '.state_record_flow // null' "$state_summary_path")"
     mount_cache_json="$(jq -c '.mount_cache' "$state_summary_path")"
+    if jq -e --arg phase "$phase" '
+      def nonnegative_integer:
+        type == "number" and . >= 0 and . == floor;
+      def positive_integer:
+        type == "number" and . > 0 and . == floor;
+      def nonempty_string:
+        type == "string" and (gsub("^[[:space:]]+|[[:space:]]+$"; "") | length) > 0;
+      .state_record_flow as $flow
+      | $flow.status == "recorded"
+      and ($flow.total_records | nonnegative_integer)
+      and ($flow.eligible_records | nonnegative_integer)
+      and ($flow.created_during_build | nonnegative_integer)
+      and ($flow.local_source_records | nonnegative_integer)
+      and ($flow.local_sources_created_during_build | nonnegative_integer)
+      and $flow.eligible_records <= $flow.total_records
+      and $flow.created_during_build <= $flow.total_records
+      and $flow.local_source_records <= $flow.total_records
+      and $flow.created_during_build >= 3
+      and (if ($phase | test("^same-ref-(warm|repeat)")) then
+        $flow.created_during_build == 3
+      else
+        true
+      end)
+      and $flow.local_sources_created_during_build == 3
+      and $flow.local_sources_created_during_build <= $flow.created_during_build
+      and $flow.local_sources_created_during_build <= $flow.local_source_records
+      and ($flow.local_source_groups | type) == "array"
+      and ($flow.local_source_groups | length) > 0
+      and all($flow.local_source_groups[];
+        (.description | nonempty_string)
+        and (.total | nonnegative_integer)
+        and (.created_during_build | nonnegative_integer)
+        and .created_during_build <= .total
+      )
+      and (($flow.local_source_groups | map(.description) | unique | length)
+        == ($flow.local_source_groups | length))
+      and (($flow.local_source_groups | map(.total) | add // 0)
+        == $flow.local_source_records)
+      and (($flow.local_source_groups | map(.created_during_build) | add // 0)
+        == $flow.local_sources_created_during_build)
+      and ($flow.created_local_sources | type) == "array"
+      and ($flow.created_local_sources | length) == 3
+      and all($flow.created_local_sources[];
+        (.record_id | nonempty_string)
+        and (.description | nonempty_string)
+        and (.created_at_unix_nano | positive_integer)
+        and (.active_references | nonnegative_integer)
+        and (.retained | type) == "boolean"
+      )
+      and (($flow.created_local_sources | map(.record_id) | unique | length) == 3)
+      and all($flow.created_local_sources[];
+        .description as $description
+        | any($flow.local_source_groups[]; .description == $description)
+      )
+      and all($flow.local_source_groups[];
+        . as $group
+        | ([$flow.created_local_sources[] | select(.description == $group.description)] | length)
+          == $group.created_during_build
+      )
+    ' "$state_summary_path" >/dev/null; then
+      state_record_flow_valid=true
+    fi
     if jq -e \
       --arg composition_mode "$composition_mode" \
       'if $composition_mode == "fixture" then
@@ -946,7 +1602,71 @@ run_phase() {
       "$state_summary_path" >/dev/null; then
       mount_cache_valid=true
     fi
-    if [[ "$restore_status" == "restored" ]]; then
+    if jq -e '
+      def has_number($object; $name):
+        ($object | has($name)) and (($object[$name] | type) == "number");
+      def has_zero_number($object; $name):
+        has_number($object; $name) and $object[$name] == 0;
+      if .restore.status == "clean_start" then
+        (.restore | has("generation"))
+        and .restore.generation == null
+        and ((.restore.candidate_generation | type) == "string")
+        and (.restore.candidate_generation | test("^sha256:[0-9a-f]{64}$"))
+        and (.restore.candidate_blobs | type == "number" and . > 0)
+        and (.restore.candidate_bytes | type == "number" and . > 0)
+        and (.restore.candidate_files | type == "number" and . > 0)
+        and has_number(.restore; "resolve_seconds")
+        and .restore.resolve_seconds >= 0
+        and has_number(.restore; "manifest_seconds")
+        and .restore.manifest_seconds >= 0
+        and has_number(.restore; "verify_seconds")
+        and .restore.verify_seconds >= 0
+        and has_number(.restore; "seconds")
+        and .restore.seconds >= 0
+        and (.restore.state_window_baseline_bytes | type == "number" and . > 0)
+        and (.restore.state_window_generation_count | type == "number" and . > 0)
+        and (.restore.state_window_max_restore_bytes | type == "number" and . > 0)
+        and (.restore.state_window_max_generations | type == "number" and . > 0)
+        and (
+          (.restore.state_window_rebase_reason == "restore_bytes"
+            and .restore.candidate_bytes > .restore.state_window_max_restore_bytes)
+          or
+          (.restore.state_window_rebase_reason == "generation_count"
+            and .restore.state_window_generation_count >= .restore.state_window_max_generations)
+        )
+        and has_zero_number(.restore; "blobs")
+        and has_zero_number(.restore; "bytes")
+        and has_zero_number(.restore; "files")
+        and has_zero_number(.restore; "core_blobs")
+        and has_zero_number(.restore; "core_bytes")
+        and has_zero_number(.restore; "core_files")
+        and has_zero_number(.restore; "mount_cache_blobs")
+        and has_zero_number(.restore; "mount_cache_bytes")
+        and has_zero_number(.restore; "mount_cache_files")
+        and has_zero_number(.restore; "download_sequential_blobs")
+        and has_zero_number(.restore; "download_parallel_blobs")
+        and has_zero_number(.restore; "download_range_parts")
+        and has_zero_number(.restore; "download_request_retries")
+        and has_zero_number(.restore; "download_origin_fallbacks")
+        and has_zero_number(.restore; "url_plan_seconds")
+        and has_zero_number(.restore; "helper_seconds")
+        and (.save | has("generation"))
+        and ((.save.generation | type) == "string")
+        and (.save.generation | test("^sha256:[0-9a-f]{64}$"))
+        and .save.generation != .restore.candidate_generation
+        and (.save | has("parent"))
+        and .save.parent == null
+        and .save.publish_status == "published"
+        and (.save.state_window_baseline_bytes | type == "number" and . > 0)
+        and .save.state_window_baseline_bytes == .save.logical_generation_bytes
+        and .save.state_window_generation_count == 1
+      else
+        true
+      end
+    ' "$state_summary_path" >/dev/null; then
+      clean_start_valid=true
+    fi
+    if [[ "$restore_status" == "restored" || "$restore_status" == "clean_start" ]]; then
       head_generations_fetched=1
     fi
   fi
@@ -978,7 +1698,8 @@ run_phase() {
   fi
 
   if { [[ "$restore_status" == "miss" && "$head_generations_fetched" -eq 0 && -z "$restored_generation" ]] || \
-       [[ "$restore_status" == "restored" && "$head_generations_fetched" -eq 1 && -n "$restored_generation" ]]; }; then
+       [[ "$restore_status" == "restored" && "$head_generations_fetched" -eq 1 && -n "$restored_generation" ]] || \
+       [[ "$restore_status" == "clean_start" && "$head_generations_fetched" -eq 1 && -z "$restored_generation" && -n "$candidate_generation" && "$clean_start_valid" == true ]]; }; then
     current_head_only=true
   fi
 
@@ -988,27 +1709,45 @@ run_phase() {
 
   case "$expectation" in
     cold|replay-root)
-      if [[ "$restore_status" == "miss" && -z "$parent_generation" && "$logical_blobs" -gt 0 && "$logical_bytes" -gt 0 ]]; then
+      if [[ "$logical_blobs" -gt 0 && "$logical_bytes" -gt 0 ]] && \
+         { [[ "$restore_status" == "miss" && -z "$parent_generation" ]] || \
+           [[ "$restore_status" == "clean_start" && -z "$parent_generation" && "$clean_start_valid" == true ]]; }; then
         expectation_valid=true
       fi
       ;;
     same-ref|replay-successor)
-      if [[ "$restore_status" == "restored" && "$parent_generation" == "$restored_generation" && "$logical_blobs" -gt 0 && "$logical_bytes" -gt 0 ]]; then
+      if [[ "$logical_blobs" -gt 0 && "$logical_bytes" -gt 0 ]] && \
+         { [[ "$restore_status" == "restored" && "$parent_generation" == "$restored_generation" ]] || \
+           [[ "$restore_status" == "clean_start" && -z "$parent_generation" && "$clean_start_valid" == true ]]; }; then
         expectation_valid=true
       fi
       ;;
     rolling)
       if [[ "$logical_blobs" -gt 0 && "$logical_bytes" -gt 0 ]] && \
          { [[ "$restore_status" == "miss" && -z "$parent_generation" ]] || \
-           [[ "$restore_status" == "restored" && "$parent_generation" == "$restored_generation" ]]; }; then
+           [[ "$restore_status" == "restored" && "$parent_generation" == "$restored_generation" ]] || \
+           [[ "$restore_status" == "clean_start" && -z "$parent_generation" && "$clean_start_valid" == true ]]; }; then
         expectation_valid=true
       fi
       ;;
   esac
 
   success=false
-  if [[ "$command_status" -eq 0 && "$tee_status" -eq 0 && "$summary_valid" == true && "$mount_cache_valid" == true && "$tool_cache_valid" == true && "$cleanup_valid" == true && "$expectation_valid" == true && "$current_head_only" == true ]]; then
+  if [[ "$command_status" -eq 0 && "$tee_status" -eq 0 && "$summary_valid" == true && "$state_record_flow_valid" == true && "$clean_start_valid" == true && "$mount_cache_valid" == true && "$tool_cache_valid" == true && "$cleanup_valid" == true && "$expectation_valid" == true && "$current_head_only" == true ]]; then
     success=true
+  fi
+
+  jq -n '{
+    schema_version: "buildkit-state-backend-current-set.v1",
+    attempted: false,
+    valid: false
+  }' > "$backend_current_set_result_path"
+  if [[ "$success" == true ]] && ! audit_backend_current_set \
+    "$phase" \
+    "$generation" \
+    "$logical_bytes" \
+    "$backend_current_set_result_path"; then
+    success=false
   fi
 
   jq -n \
@@ -1025,11 +1764,38 @@ run_phase() {
     --argjson tee_status "$tee_status" \
     --argjson cached_steps "$cached_steps" \
     --argjson executed_steps "$executed_steps" \
+    --argjson restored_blobs "$restored_blobs" \
     --argjson restored_bytes "$restored_bytes" \
     --argjson restored_files "$restored_files" \
     --arg restored_generation "$restored_generation" \
+    --arg candidate_generation "$candidate_generation" \
+    --argjson candidate_blobs "$candidate_blobs" \
+    --argjson candidate_bytes "$candidate_bytes" \
+    --argjson candidate_files "$candidate_files" \
+    --argjson restore_core_blobs "$restore_core_blobs" \
+    --argjson restore_core_bytes "$restore_core_bytes" \
+    --argjson restore_core_files "$restore_core_files" \
+    --argjson restore_mount_blobs "$restore_mount_blobs" \
+    --argjson restore_mount_bytes "$restore_mount_bytes" \
+    --argjson restore_mount_files "$restore_mount_files" \
+    --arg restore_manifest_seconds "$restore_manifest_seconds" \
+    --arg restore_verify_seconds "$restore_verify_seconds" \
+    --arg restore_url_plan_seconds "$restore_url_plan_seconds" \
+    --arg restore_helper_seconds "$restore_helper_seconds" \
+    --argjson restore_download_sequential_blobs "$restore_download_sequential_blobs" \
+    --argjson restore_download_parallel_blobs "$restore_download_parallel_blobs" \
+    --argjson restore_download_range_parts "$restore_download_range_parts" \
+    --argjson restore_download_request_retries "$restore_download_request_retries" \
+    --argjson restore_download_origin_fallbacks "$restore_download_origin_fallbacks" \
+    --argjson window_baseline_bytes "$window_baseline_bytes" \
+    --argjson window_generation_count "$window_generation_count" \
+    --argjson window_max_restore_bytes "$window_max_restore_bytes" \
+    --argjson window_max_generations "$window_max_generations" \
+    --arg window_rebase_reason "$window_rebase_reason" \
     --arg generation "$generation" \
     --arg parent_generation "$parent_generation" \
+    --argjson published_window_baseline_bytes "$published_window_baseline_bytes" \
+    --argjson published_window_generation_count "$published_window_generation_count" \
     --argjson logical_bytes "$logical_bytes" \
     --argjson logical_blobs "$logical_blobs" \
     --argjson transport_delta_bytes "$transport_delta_bytes" \
@@ -1041,21 +1807,51 @@ run_phase() {
     --argjson finalize_required_blobs "$finalize_required_blobs" \
     --arg finalize_seconds "$finalize_seconds" \
     --arg retention_policy "$retention_policy" \
+    --arg retention_source "$retention_source" \
+    --argjson retention_disk_usage_baseline_bytes "$retention_disk_usage_baseline_bytes" \
+    --argjson prune_applied "$prune_applied" \
+    --argjson prune_triggered "$prune_triggered" \
+    --argjson prune_target_satisfied "$prune_target_satisfied" \
+    --arg prune_target_reason "$prune_target_reason" \
+    --argjson prune_all "$prune_all" \
+    --argjson prune_filter_count "$prune_filter_count" \
+    --argjson finalize_prune_max_used_space_bytes "$finalize_prune_max_used_space_bytes" \
+    --argjson prune_duration_ms "$prune_duration_ms" \
+    --argjson pruned_records "$pruned_records" \
+    --argjson pruned_bytes "$pruned_bytes" \
+    --argjson records_before_prune "$records_before_prune" \
+    --argjson records_after_prune "$records_after_prune" \
+    --argjson prune_keep_duration_ms "$prune_keep_duration_ms" \
+    --argjson prune_cutoff_unix_nano "$prune_cutoff_unix_nano" \
+    --argjson prune_cache_usage_before_bytes "$prune_cache_usage_before_bytes" \
+    --argjson prune_cache_usage_after_bytes "$prune_cache_usage_after_bytes" \
+    --argjson prune_disk_total_bytes "$prune_disk_total_bytes" \
+    --argjson prune_disk_free_before_bytes "$prune_disk_free_before_bytes" \
+    --argjson prune_disk_free_after_bytes "$prune_disk_free_after_bytes" \
+    --argjson prune_disk_available_before_bytes "$prune_disk_available_before_bytes" \
+    --argjson prune_disk_available_after_bytes "$prune_disk_available_after_bytes" \
+    --argjson prune_reserved_space_bytes "$prune_reserved_space_bytes" \
+    --argjson prune_min_free_space_bytes "$prune_min_free_space_bytes" \
+    --argjson prune_effective_keep_bytes "$prune_effective_keep_bytes" \
     --argjson content_gc_applied "$content_gc_applied" \
     --argjson content_gc_duration_ms "$content_gc_duration_ms" \
     --argjson records_before_gc "$records_before_gc" \
     --argjson records_after_gc "$records_after_gc" \
     --arg content_gc_seconds "$content_gc_seconds" \
+    --argjson state_record_flow "$state_record_flow_json" \
     --argjson mount_cache "$mount_cache_json" \
     --argjson tool_cache "$tool_cache_json" \
     --argjson head_generations_fetched "$head_generations_fetched" \
     --argjson summary_valid "$summary_valid" \
+    --argjson state_record_flow_valid "$state_record_flow_valid" \
+    --argjson clean_start_valid "$clean_start_valid" \
     --argjson mount_cache_valid "$mount_cache_valid" \
     --argjson tool_cache_valid "$tool_cache_valid" \
     --argjson cleanup_valid "$cleanup_valid" \
     --argjson expectation_valid "$expectation_valid" \
     --argjson current_head_only "$current_head_only" \
     --argjson success "$success" \
+    --slurpfile backend_current_set "$backend_current_set_result_path" \
     '{
       schema_version: $schema_version,
       phase: $phase,
@@ -1071,12 +1867,46 @@ run_phase() {
         restore_status: $restore_status,
         publish_status: $publish_status,
         overhead_seconds: (if $state_overhead_seconds == "" then null else ($state_overhead_seconds | tonumber) end),
+        restored_blobs: $restored_blobs,
         restored_bytes: $restored_bytes,
         restored_files: $restored_files,
         restored_generation: (if $restored_generation == "" then null else $restored_generation end),
+        restore: {
+          candidate_generation: (if $candidate_generation == "" then null else $candidate_generation end),
+          candidate_blobs: $candidate_blobs,
+          candidate_bytes: $candidate_bytes,
+          candidate_files: $candidate_files,
+          restored_blobs: $restored_blobs,
+          restored_bytes: $restored_bytes,
+          restored_files: $restored_files,
+          core_blobs: $restore_core_blobs,
+          core_bytes: $restore_core_bytes,
+          core_files: $restore_core_files,
+          mount_cache_blobs: $restore_mount_blobs,
+          mount_cache_bytes: $restore_mount_bytes,
+          mount_cache_files: $restore_mount_files,
+          manifest_seconds: ($restore_manifest_seconds | tonumber),
+          verify_seconds: ($restore_verify_seconds | tonumber),
+          url_plan_seconds: ($restore_url_plan_seconds | tonumber),
+          helper_seconds: ($restore_helper_seconds | tonumber),
+          download_sequential_blobs: $restore_download_sequential_blobs,
+          download_parallel_blobs: $restore_download_parallel_blobs,
+          download_range_parts: $restore_download_range_parts,
+          download_request_retries: $restore_download_request_retries,
+          download_origin_fallbacks: $restore_download_origin_fallbacks
+        },
         head_generations_fetched: $head_generations_fetched,
         generation: (if $generation == "" then null else $generation end),
         parent_generation: (if $parent_generation == "" then null else $parent_generation end),
+        state_window: {
+          candidate_baseline_bytes: $window_baseline_bytes,
+          candidate_generation_count: $window_generation_count,
+          max_restore_bytes: $window_max_restore_bytes,
+          max_generations: $window_max_generations,
+          rebase_reason: (if $window_rebase_reason == "" then null else $window_rebase_reason end),
+          published_baseline_bytes: $published_window_baseline_bytes,
+          published_generation_count: $published_window_generation_count
+        },
         logical_generation_bytes: $logical_bytes,
         logical_generation_blobs: $logical_blobs,
         transport_delta_bytes: $transport_delta_bytes,
@@ -1089,22 +1919,53 @@ run_phase() {
           required_blobs: $finalize_required_blobs,
           seconds: (if $finalize_seconds == "" then null else ($finalize_seconds | tonumber) end),
           retention_policy: $retention_policy,
+          retention_source: $retention_source,
+          retention_disk_usage_baseline_bytes: $retention_disk_usage_baseline_bytes,
+          prune_applied: $prune_applied,
+          prune_triggered: $prune_triggered,
+          prune_target_satisfied: $prune_target_satisfied,
+          prune_target_reason: $prune_target_reason,
+          prune_all: $prune_all,
+          prune_filter_count: $prune_filter_count,
+          prune_max_used_space_bytes: $finalize_prune_max_used_space_bytes,
+          prune_duration_ms: $prune_duration_ms,
+          pruned_records: $pruned_records,
+          pruned_bytes: $pruned_bytes,
+          records_before_prune: $records_before_prune,
+          records_after_prune: $records_after_prune,
+          prune_keep_duration_ms: $prune_keep_duration_ms,
+          prune_cutoff_unix_nano: $prune_cutoff_unix_nano,
+          prune_cache_usage_before_bytes: $prune_cache_usage_before_bytes,
+          prune_cache_usage_after_bytes: $prune_cache_usage_after_bytes,
+          prune_disk_total_bytes: $prune_disk_total_bytes,
+          prune_disk_free_before_bytes: $prune_disk_free_before_bytes,
+          prune_disk_free_after_bytes: $prune_disk_free_after_bytes,
+          prune_disk_available_before_bytes: $prune_disk_available_before_bytes,
+          prune_disk_available_after_bytes: $prune_disk_available_after_bytes,
+          prune_reserved_space_bytes: $prune_reserved_space_bytes,
+          prune_min_free_space_bytes: $prune_min_free_space_bytes,
+          prune_effective_keep_bytes: $prune_effective_keep_bytes,
           content_gc_applied: $content_gc_applied,
           content_gc_duration_ms: $content_gc_duration_ms,
           records_before_gc: $records_before_gc,
           records_after_gc: $records_after_gc
         },
         content_gc_seconds: (if $content_gc_seconds == "" then null else ($content_gc_seconds | tonumber) end),
+        state_record_flow: $state_record_flow,
         mount_cache: $mount_cache
       },
       tool_cache: $tool_cache,
+      backend_current_set: $backend_current_set[0],
       checks: {
         summary_valid: $summary_valid,
+        state_record_flow_valid: $state_record_flow_valid,
+        clean_start_valid: $clean_start_valid,
         mount_cache_valid: $mount_cache_valid,
         tool_cache_valid: $tool_cache_valid,
         managed_builder_destroyed: $cleanup_valid,
         phase_expectation_valid: $expectation_valid,
-        current_head_only: $current_head_only
+        current_head_only: $current_head_only,
+        backend_current_set_valid: ($backend_current_set[0].valid == true)
       },
       success: $success
     }' > "$phase_result_path"

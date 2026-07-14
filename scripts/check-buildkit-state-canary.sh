@@ -6,12 +6,14 @@ workflow="$repo_root/.github/workflows/state-sync-v13-cas.yml"
 runner="$repo_root/scripts/run-buildkit-state-canary.sh"
 preflight_runner="$repo_root/scripts/preflight-buildkit-state-canary.sh"
 test_runner="$repo_root/scripts/test-buildkit-state-canary.sh"
+record_flow_summary_renderer="$repo_root/scripts/render-buildkit-state-record-flow-summary.sh"
 fixture_checker="$repo_root/scripts/check-posthog-toolcache-dockerfile.sh"
 image_index_verifier="$repo_root/scripts/verify-buildkit-image-index.sh"
 
 bash -n "$runner"
 bash -n "$preflight_runner"
 bash -n "$test_runner"
+bash -n "$record_flow_summary_renderer"
 bash -n "$fixture_checker"
 bash -n "$image_index_verifier"
 
@@ -53,6 +55,7 @@ require_text "$workflow" "preflight-checklist.json"
 require_text "$workflow" "runner_disk_capacity"
 require_text "$workflow" "verify-buildkit-image-index.sh"
 require_text "$workflow" "buildkit-image-platform-manifest.sha256"
+require_text "$workflow" 'bash scripts/render-buildkit-state-record-flow-summary.sh "$result"'
 require_text "$workflow" "Resolve verified CLI version"
 require_text "$workflow" "BORINGCACHE_STATE_CANARY_CLI_VERSION"
 require_text "$preflight_runner" "expected_tag_head_v1"
@@ -92,7 +95,12 @@ require_text "$test_runner" "Expected one new logical blob on an intermediate wa
 require_text "$test_runner" "Expected one new required BuildKit body on an intermediate warm generation to fail the canary"
 require_text "$test_runner" "Expected terminal mount-cache hydration errors to fail the composition canary"
 require_text "$test_runner" "Expected same-ref BuildKit record growth to block graduation"
-require_text "$workflow" "all-warm stable content counts"
+require_text "$test_runner" "Expected invalid clean-start evidence"
+require_text "$test_runner" "Expected a terminal clean-start without a restoring product phase to remain pending"
+require_text "$test_runner" "Expected a clean-start followed by the wrong generation to fail continuity"
+require_text "$test_runner" "Expected a single rolling clean-start to remain pending until a later product restore"
+require_text "$workflow" "active-window stable content counts"
+require_text "$workflow" "> **NOT READY:** this rolling phase published a clean-start root"
 require_text "$runner" "same_ref_replacement_uploaded_bytes"
 require_text "$runner" "fully_state_cached_short_circuit"
 require_text "$runner" "run_terminal_mount_probe"
@@ -110,21 +118,62 @@ require_text "$runner" 'product_target_args+=(--target posthog-runtime)'
 require_text "$test_runner" "composition-short-circuit"
 require_text "$runner" "exact_source_sequence"
 require_text "$runner" "all_successors_within_tolerance"
+require_text "$runner" 'restore_status == "clean_start"'
+require_text "$runner" "candidate_generation"
+require_text "$runner" "state_window_rebase_reason"
+require_text "$runner" "has_zero_number"
+require_text "$runner" '.save.generation != .restore.candidate_generation'
+require_text "$runner" 'clean_start_followup_pending'
+require_text "$runner" 'and ($audited_current_set.clean_start_followup_pending != true)'
+require_text "$runner" 'ready_for_graduation'
+require_text "$runner" "clean_start_followup_proven"
+require_text "$runner" "plateau_window_start_sequence"
 require_text "$runner" "replay-successor"
 require_text "$runner" "preflight-checklist.json"
 require_text "$runner" ".save.logical_generation_blobs"
 require_text "$runner" ".save.logical_generation_bytes"
 require_text "$runner" 'buildkit-state-summary.v2'
-require_text "$runner" 'complete-main-cache-v1'
+require_text "$runner" 'signed-working-set-main-cache-v1'
+require_text "$runner" '.finalize.retention_source == "restored-marker"'
+require_text "$runner" '.finalize.retention_disk_usage_baseline_bytes > 0'
+require_text "$runner" '.finalize.prune_applied == true'
+require_text "$runner" '.finalize.prune_target_satisfied == true'
+require_text "$runner" '.finalize.prune_all == false'
+require_text "$runner" '.finalize.prune_filter_count == 0'
+require_text "$runner" 'upstream_percent_bytes'
+require_text "$runner" 'positive_prune_observed'
+require_text "$runner" 'all_logical_core_within_bound'
+require_text "$runner" 'working_set_scorecard'
+require_text "$runner" 'clean_start_free'
+require_text "$runner" 'replay_min_cached_steps=68'
+require_text "$runner" 'all_restored_successors_hit_contract'
+require_text "$runner" 'buildkit-state-backend-current-set.v1'
+require_text "$runner" 'boringcache inspect "$workspace" "$cache_tag" --json'
+require_text "$runner" '.versions.version_count == 1'
+require_text "$runner" '.versions.total_storage_bytes == .entry.stored_size_bytes'
 require_text "$runner" '.finalize.content_gc_applied == true'
+require_text "$runner" '.finalize.records_after_prune == .finalize.records_before_gc'
 require_text "$runner" '.finalize.records_before_gc == .finalize.records_after_gc'
 require_text "$runner" '.finalize.records_after_gc >= .finalize.eligible'
 require_text "$runner" '.content_gc_seconds'
+require_text "$runner" 'state_record_flow_valid'
+require_text "$runner" '$flow.status == "recorded"'
+require_text "$runner" '$flow.local_sources_created_during_build == 3'
+require_text "$runner" 'test("^same-ref-(warm|repeat)")'
+require_text "$runner" '($flow.created_local_sources | map(.record_id) | unique | length) == 3'
 require_text "$runner" "--output type=cacheonly"
 require_text "$runner" "buildkit-state-canary-result.v2"
 require_text "$runner" "buildkit-state-canary-phase.v2"
 require_text "$test_runner" "Expected a single-manifest document to fail the image-index gate"
+require_text "$test_runner" "Expected invalid BuildKit state record flow"
+require_text "$test_runner" "Expected extra same-ref records created during the user build to fail closed"
+require_text "$test_runner" "Expected a replay without a triggered positive prune to fail graduation"
+require_text "$test_runner" "Expected a replay above the 16 GiB logical-core ceiling to fail graduation"
+require_text "$test_runner" "Expected an unsafe signed working-set retention report to fail closed"
+require_text "$test_runner" "Expected a replay successor below the PostHog cache-hit floor to fail graduation"
+require_text "$test_runner" "Expected a replay with a superseded backend state version to fail graduation"
 require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode == 'fixture' && '1' || '0' }}"
+require_text "$workflow" "Observed BuildKit state record flow"
 
 for file in "$workflow" "$runner" "$preflight_runner"; do
   reject_text "$file" "boringcache/one"
@@ -138,9 +187,8 @@ reject_text "$preflight_runner" "--tool-cache"
 reject_text "$runner" ".save.reused_blobs"
 reject_text "$runner" ".save.reused_bytes"
 reject_text "$runner" 'buildkit-state-summary.v1'
-reject_text "$runner" 'prune_seconds'
-reject_text "$runner" 'pruned_records'
-reject_text "$runner" 'pruned_bytes'
+reject_text "$runner" '36507222016'
+reject_text "$runner" 'max-used-space-main-cache-v1'
 
 cli_version_line="$(grep -n -m1 'name: Resolve verified CLI version' "$workflow" | cut -d: -f1)"
 capability_probe_line="$(grep -n -m1 'name: Probe exact backend state capabilities' "$workflow" | cut -d: -f1)"

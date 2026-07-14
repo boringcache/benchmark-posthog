@@ -84,15 +84,94 @@ boringcache() {
     echo "boringcache mock-state-canary"
     return 0
   fi
+  if [[ "${1:-}" == "inspect" ]]; then
+    local backend_version_count="${MOCK_BACKEND_VERSION_COUNT:-1}"
+    local backend_generation="${BORINGCACHE_STATE_CANARY_EXPECTED_BACKEND_GENERATION:-}"
+    local backend_bytes="${BORINGCACHE_STATE_CANARY_EXPECTED_BACKEND_BYTES:-0}"
+    command jq -n \
+      --arg workspace "${2:-}" \
+      --arg tag "${3:-}" \
+      --arg generation "$backend_generation" \
+      --argjson bytes "$backend_bytes" \
+      --argjson version_count "$backend_version_count" '
+        {
+          workspace: {name: "benchmark-posthog", slug: $workspace},
+          identifier: {query: $tag, matched_by: "tag"},
+          entry: {
+            id: "00000000-0000-4000-8000-000000000001",
+            primary_tag: $tag,
+            status: "ready",
+            manifest_root_digest: $generation,
+            storage_mode: "cas",
+            stored_size_bytes: $bytes,
+            blob_count: 111,
+            blob_total_size_bytes: $bytes,
+            cas_layout: "buildkit-state-v1",
+            hit_count: 0,
+            created_at: "2026-07-14T00:00:00Z"
+          },
+          versions: {
+            tag: $tag,
+            version_count: $version_count,
+            current: true,
+            total_storage_bytes: ($bytes * $version_count)
+          }
+        }
+      '
+    return 0
+  fi
 
   local phase restore_status restored_generation parent generation logical_blobs logical_bytes
+  local clean_start candidate_generation candidate_blobs candidate_bytes candidate_files
+  local restore_blobs restore_helper_seconds window_baseline_bytes window_generation_count
+  local window_max_restore_bytes window_max_generations window_rebase_reason
+  local published_window_baseline_bytes published_window_generation_count invalid_clean_start
   local bootstrap_delta steady_delta blob_delta required_blob_delta required_blobs warm_index warm_count summary_name
   local transport_blobs transport_bytes saw_cacheonly saw_read_only saw_probe_target arg
-  local is_probe save_status publish_status record_count
+  local is_probe save_status publish_status record_count record_flow_created record_flow_failure
+  local replay_index retention_source retention_baseline prune_triggered prune_target_reason
+  local pruned_records pruned_bytes records_before_prune records_after_prune
+  local prune_cache_usage_before prune_cache_usage_after prune_disk_total
+  local prune_disk_free_before prune_disk_free_after prune_disk_available_before prune_disk_available_after
+  local prune_reserved_space prune_min_free_space prune_effective_keep prune_failure
   is_probe=0
+  clean_start=0
+  candidate_generation=""
+  candidate_blobs=0
+  candidate_bytes=0
+  candidate_files=0
+  restore_blobs=0
+  restore_helper_seconds=0
+  window_baseline_bytes=0
+  window_generation_count=0
+  window_max_restore_bytes=0
+  window_max_generations=0
+  window_rebase_reason=""
+  published_window_baseline_bytes=0
+  published_window_generation_count=0
+  invalid_clean_start="${MOCK_CLEAN_START_INVALID_EVIDENCE:-}"
   save_status=uploaded
   publish_status=published
-  record_count=2
+  record_count=5
+  record_flow_created=4
+  record_flow_failure="${MOCK_RECORD_FLOW_FAILURE:-}"
+  retention_source=fresh-measured
+  retention_baseline=100000
+  prune_triggered=0
+  prune_target_reason=within-effective-keep
+  pruned_records=0
+  pruned_bytes=0
+  prune_cache_usage_before="$retention_baseline"
+  prune_cache_usage_after="$retention_baseline"
+  prune_disk_total=100000000000
+  prune_disk_free_before=50000000000
+  prune_disk_free_after=50000000000
+  prune_disk_available_before=49000000000
+  prune_disk_available_after=49000000000
+  prune_reserved_space="$retention_baseline"
+  prune_min_free_space=19000000000
+  prune_effective_keep="$retention_baseline"
+  prune_failure="${MOCK_PRUNE_FAILURE:-}"
   case "$BORINGCACHE_STATE_SUMMARY_PATH" in
     *mount-probe.state-summary.json)
       phase=mount-probe
@@ -131,6 +210,7 @@ boringcache() {
       esac
       warm_count="${BORINGCACHE_STATE_CANARY_WARM_GENERATIONS:-2}"
       restore_status=restored
+      retention_source=restored-marker
       if ((warm_index == 1)); then
         restored_generation="$cold_generation"
       else
@@ -163,11 +243,25 @@ boringcache() {
       fi
       transport_blobs=1
       transport_bytes=1000
-      record_count="$((2 + ${MOCK_WARM_RECORD_DELTA:-0}))"
+      record_count="$((5 + ${MOCK_WARM_RECORD_DELTA:-0}))"
+      record_flow_created="${MOCK_WARM_RECORD_FLOW_CREATED:-3}"
+      if ((warm_index == ${MOCK_CLEAN_START_WARM_INDEX:-0})); then
+        clean_start=1
+        candidate_generation="$restored_generation"
+        candidate_blobs=100
+        candidate_bytes=100000
+        candidate_files=100
+      elif [[ "${MOCK_CLEAN_START_WRONG_FOLLOWUP:-0}" == 1 ]] && \
+           ((warm_index == ${MOCK_CLEAN_START_WARM_INDEX:-0} + 1)); then
+        restored_generation="sha256:$(printf '9%.0s' {1..64})"
+        parent="$restored_generation"
+      fi
       ;;
     *rolling.state-summary.json)
       phase=rolling
+      record_count=7
       restore_status=restored
+      retention_source=restored-marker
       restored_generation="$rolling_parent"
       parent="$rolling_parent"
       generation="$rolling_generation"
@@ -176,6 +270,13 @@ boringcache() {
       required_blobs=2
       transport_blobs=4
       transport_bytes=4000
+      if [[ "${MOCK_CLEAN_START_ROLLING:-0}" == 1 ]]; then
+        clean_start=1
+        candidate_generation="$restored_generation"
+        candidate_blobs=120
+        candidate_bytes=120000
+        candidate_files=120
+      fi
       ;;
     *replay-*.state-summary.json)
       phase="$(basename "$BORINGCACHE_STATE_SUMMARY_PATH" .state-summary.json)"
@@ -185,6 +286,9 @@ boringcache() {
       printf -v generation 'sha256:%064x' "$((200 + replay_index))"
       logical_blobs="$((100 + replay_index))"
       logical_bytes="$((100000 + (replay_index * 1000)))"
+      if ((replay_index == ${MOCK_OVERSIZED_REPLAY_INDEX:-0})); then
+        logical_bytes="${MOCK_OVERSIZED_REPLAY_BYTES:-17179869185}"
+      fi
       required_blobs="$((2 + replay_index))"
       transport_blobs=1
       transport_bytes=1000
@@ -196,8 +300,26 @@ boringcache() {
         transport_bytes="$logical_bytes"
       else
         restore_status=restored
+        retention_source=restored-marker
         printf -v restored_generation 'sha256:%064x' "$((199 + replay_index))"
         parent="$restored_generation"
+      fi
+      if ((replay_index == 6)) && [[ "${MOCK_DISABLE_REPLAY_POSITIVE_PRUNE:-0}" != 1 ]]; then
+        prune_triggered=1
+        prune_target_reason=pruned-to-effective-keep
+        pruned_records=2
+        pruned_bytes=30000
+        prune_cache_usage_before=120000
+        prune_cache_usage_after=90000
+        prune_disk_free_after=50000030000
+        prune_disk_available_after=49000030000
+      fi
+      if ((replay_index == ${MOCK_CLEAN_START_REPLAY_INDEX:-0})); then
+        clean_start=1
+        candidate_generation="$restored_generation"
+        candidate_blobs="$((99 + replay_index))"
+        candidate_bytes="$((99000 + (replay_index * 1000)))"
+        candidate_files="$candidate_blobs"
       fi
       ;;
     *)
@@ -205,6 +327,69 @@ boringcache() {
       return 1
       ;;
   esac
+
+  if [[ -n "${replay_index:-}" ]] && \
+     ((replay_index == ${MOCK_CHANGED_REPLAY_BASELINE_INDEX:-0})); then
+    retention_baseline=100001
+    prune_cache_usage_before="$retention_baseline"
+    prune_cache_usage_after="$retention_baseline"
+    prune_reserved_space="$retention_baseline"
+    prune_effective_keep="$retention_baseline"
+  fi
+
+  if [[ "$clean_start" == 1 ]]; then
+    restore_status=clean_start
+    retention_source=fresh-measured
+    restored_generation=""
+    parent=""
+    window_baseline_bytes=100000
+    window_generation_count=64
+    window_max_restore_bytes=17179869184
+    window_max_generations=64
+    case "${MOCK_CLEAN_START_REASON:-generation_count}" in
+      generation_count) window_rebase_reason=generation_count ;;
+      restore_bytes)
+        window_rebase_reason=restore_bytes
+        candidate_bytes=21474836480
+        window_baseline_bytes=8589934592
+        window_generation_count=2
+        window_max_restore_bytes=17179869184
+        ;;
+      *)
+        echo "Unknown mocked clean-start reason: ${MOCK_CLEAN_START_REASON}" >&2
+        return 1
+        ;;
+    esac
+    published_window_baseline_bytes="$logical_bytes"
+    published_window_generation_count=1
+    case "$invalid_clean_start" in
+      "") ;;
+      missing-candidate) candidate_generation="" ;;
+      restored-body)
+        restore_blobs=1
+        restore_helper_seconds=0.1
+        ;;
+      parented-root)
+        parent="$candidate_generation"
+        published_window_generation_count=2
+        ;;
+      below-window-limit) window_generation_count=63 ;;
+      below-restore-limit) candidate_bytes="$window_max_restore_bytes" ;;
+      same-generation) generation="$candidate_generation" ;;
+      omitted-zero|omitted-restore-generation|omitted-save-parent) ;;
+      *)
+        echo "Unknown mocked clean-start evidence failure: ${invalid_clean_start}" >&2
+        return 1
+        ;;
+    esac
+  fi
+
+  records_after_prune="$record_count"
+  records_before_prune="$((record_count + pruned_records))"
+  if [[ "$clean_start" != 1 ]]; then
+    published_window_baseline_bytes=100000
+    published_window_generation_count=1
+  fi
 
   command jq -n \
     --arg restore_status "$restore_status" \
@@ -217,13 +402,50 @@ boringcache() {
     --argjson required_blobs "$required_blobs" \
     --argjson transport_blobs "$transport_blobs" \
     --argjson transport_bytes "$transport_bytes" \
+    --argjson clean_start "$clean_start" \
+    --arg candidate_generation "$candidate_generation" \
+    --argjson candidate_blobs "$candidate_blobs" \
+    --argjson candidate_bytes "$candidate_bytes" \
+    --argjson candidate_files "$candidate_files" \
+    --argjson restore_blobs "$restore_blobs" \
+    --argjson restore_helper_seconds "$restore_helper_seconds" \
+    --argjson window_baseline_bytes "$window_baseline_bytes" \
+    --argjson window_generation_count "$window_generation_count" \
+    --argjson window_max_restore_bytes "$window_max_restore_bytes" \
+    --argjson window_max_generations "$window_max_generations" \
+    --arg window_rebase_reason "$window_rebase_reason" \
+    --argjson published_window_baseline_bytes "$published_window_baseline_bytes" \
+    --argjson published_window_generation_count "$published_window_generation_count" \
+    --arg invalid_clean_start "$invalid_clean_start" \
     --argjson include_logical_generation "$(if [[ "${MOCK_OMIT_LOGICAL_GENERATION:-0}" == 1 ]]; then echo false; else echo true; fi)" \
-    --arg retention_policy "${MOCK_RETENTION_POLICY:-complete-main-cache-v1}" \
+    --arg retention_policy "${MOCK_RETENTION_POLICY:-signed-working-set-main-cache-v1}" \
+    --arg retention_source "$retention_source" \
+    --argjson retention_baseline "$retention_baseline" \
+    --argjson prune_applied "$(if [[ "${MOCK_PRUNE_APPLIED:-1}" == 1 ]]; then echo true; else echo false; fi)" \
+    --argjson prune_triggered "$(if [[ "$prune_triggered" == 1 ]]; then echo true; else echo false; fi)" \
+    --arg prune_target_reason "$prune_target_reason" \
+    --argjson pruned_records "$pruned_records" \
+    --argjson pruned_bytes "$pruned_bytes" \
+    --argjson records_before_prune "$records_before_prune" \
+    --argjson records_after_prune "$records_after_prune" \
+    --argjson prune_cache_usage_before "$prune_cache_usage_before" \
+    --argjson prune_cache_usage_after "$prune_cache_usage_after" \
+    --argjson prune_disk_total "$prune_disk_total" \
+    --argjson prune_disk_free_before "$prune_disk_free_before" \
+    --argjson prune_disk_free_after "$prune_disk_free_after" \
+    --argjson prune_disk_available_before "$prune_disk_available_before" \
+    --argjson prune_disk_available_after "$prune_disk_available_after" \
+    --argjson prune_reserved_space "$prune_reserved_space" \
+    --argjson prune_min_free_space "$prune_min_free_space" \
+    --argjson prune_effective_keep "$prune_effective_keep" \
+    --arg prune_failure "$prune_failure" \
     --argjson content_gc_applied "$(if [[ "${MOCK_CONTENT_GC_APPLIED:-1}" == 1 ]]; then echo true; else echo false; fi)" \
     --arg save_status "$save_status" \
     --arg publish_status "$publish_status" \
     --argjson record_count "$record_count" \
-    --argjson records_after_gc "${MOCK_RECORDS_AFTER_GC:-$record_count}" \
+    --argjson record_flow_created "$record_flow_created" \
+    --arg record_flow_failure "$record_flow_failure" \
+    --argjson records_after_gc "${MOCK_RECORDS_AFTER_GC:-$records_after_prune}" \
     --argjson include_content_gc_seconds "$(if [[ "${MOCK_OMIT_CONTENT_GC_SECONDS:-0}" == 1 ]]; then echo false; else echo true; fi)" \
     --argjson mountcache_enabled "$(if [[ "${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}" == fixture ]]; then echo true; else echo false; fi)" \
     --argjson is_probe "$(if [[ "$is_probe" == 1 ]]; then echo true; else echo false; fi)" \
@@ -246,11 +468,80 @@ boringcache() {
         required_blobs: $required_blobs,
         report_digest: $image_digest,
         retention_policy: $retention_policy,
+        retention_source: $retention_source,
+        retention_disk_usage_baseline_bytes: $retention_baseline,
+        prune_applied: $prune_applied,
+        prune_triggered: $prune_triggered,
+        prune_target_satisfied: true,
+        prune_target_reason: $prune_target_reason,
+        prune_all: false,
+        prune_filter_count: 0,
+        prune_max_used_space_bytes: $retention_baseline,
+        pruned_records: $pruned_records,
+        pruned_bytes: $pruned_bytes,
+        prune_duration_ms: 50,
+        records_before_prune: $records_before_prune,
+        records_after_prune: $records_after_prune,
+        prune_keep_duration_ms: 0,
+        prune_cutoff_unix_nano: 0,
+        prune_cache_usage_before_bytes: $prune_cache_usage_before,
+        prune_cache_usage_after_bytes: $prune_cache_usage_after,
+        prune_disk_total_bytes: $prune_disk_total,
+        prune_disk_free_before_bytes: $prune_disk_free_before,
+        prune_disk_free_after_bytes: $prune_disk_free_after,
+        prune_disk_available_before_bytes: $prune_disk_available_before,
+        prune_disk_available_after_bytes: $prune_disk_available_after,
+        prune_reserved_space_bytes: $prune_reserved_space,
+        prune_min_free_space_bytes: $prune_min_free_space,
+        prune_effective_keep_bytes: $prune_effective_keep,
         content_gc_applied: $content_gc_applied,
         content_gc_duration_ms: 100,
-        records_before_gc: $record_count,
+        records_before_gc: $records_after_prune,
         records_after_gc: $records_after_gc,
         seconds: 0.2
+      },
+      state_record_flow: {
+        status: "recorded",
+        total_records: $records_before_prune,
+        eligible_records: 2,
+        created_during_build: $record_flow_created,
+        local_source_records: 3,
+        local_sources_created_during_build: 3,
+        local_source_groups: [
+          {
+            description: "mock local source alpha",
+            total: 2,
+            created_during_build: 2
+          },
+          {
+            description: "mock local source beta",
+            total: 1,
+            created_during_build: 1
+          }
+        ],
+        created_local_sources: [
+          {
+            record_id: "opaque-local-source-1",
+            description: "mock local source alpha",
+            created_at_unix_nano: 1,
+            active_references: 1,
+            retained: true
+          },
+          {
+            record_id: "opaque-local-source-2",
+            description: "mock local source alpha",
+            created_at_unix_nano: 2,
+            active_references: 0,
+            retained: false
+          },
+          {
+            record_id: "opaque-local-source-3",
+            description: "mock local source beta",
+            created_at_unix_nano: 3,
+            active_references: 2,
+            retained: true
+          }
+        ]
       },
       quiesce_seconds: 0.1,
       save: {
@@ -340,6 +631,98 @@ boringcache() {
       },
       total_state_overhead_seconds: 0.4
     }
+    | if $clean_start == 1 then
+        .restore += {
+          candidate_generation: (if $candidate_generation == "" then null else $candidate_generation end),
+          candidate_blobs: $candidate_blobs,
+          candidate_bytes: $candidate_bytes,
+          candidate_files: $candidate_files,
+          state_window_baseline_bytes: $window_baseline_bytes,
+          state_window_generation_count: $window_generation_count,
+          state_window_max_restore_bytes: $window_max_restore_bytes,
+          state_window_max_generations: $window_max_generations,
+          state_window_rebase_reason: $window_rebase_reason,
+          blobs: $restore_blobs,
+          core_blobs: 0,
+          core_bytes: 0,
+          core_files: 0,
+          mount_cache_blobs: 0,
+          mount_cache_bytes: 0,
+          mount_cache_files: 0,
+          download_sequential_blobs: 0,
+          download_parallel_blobs: 0,
+          download_range_parts: 0,
+          download_request_retries: 0,
+          download_origin_fallbacks: 0,
+          resolve_seconds: 0.1,
+          manifest_seconds: 0.1,
+          verify_seconds: 0.1,
+          url_plan_seconds: 0,
+          helper_seconds: $restore_helper_seconds,
+          seconds: 0.3
+        }
+        | .save.state_window_baseline_bytes = $published_window_baseline_bytes
+        | .save.state_window_generation_count = $published_window_generation_count
+      else . end
+    | if $clean_start == 1 and $invalid_clean_start == "omitted-zero" then
+        del(.restore.download_range_parts)
+      elif $clean_start == 1 and $invalid_clean_start == "omitted-restore-generation" then
+        del(.restore.generation)
+      elif $clean_start == 1 and $invalid_clean_start == "omitted-save-parent" then
+        del(.save.parent)
+      else . end
+    | if $record_flow_failure == "unavailable" then
+        .state_record_flow = {status: "unavailable"}
+      elif $record_flow_failure == "created-count" then
+        .state_record_flow.created_during_build = 2
+      elif $record_flow_failure == "group-total" then
+        .state_record_flow.local_source_groups[0].total = 1
+      elif $record_flow_failure == "group-created" then
+        .state_record_flow.local_source_groups[0].created_during_build = 1
+      elif $record_flow_failure == "duplicate-id" then
+        .state_record_flow.created_local_sources[2].record_id = "opaque-local-source-1"
+      elif $record_flow_failure == "empty-description" then
+        .state_record_flow.created_local_sources[2].description = ""
+      elif $record_flow_failure == "zero-timestamp" then
+        .state_record_flow.created_local_sources[2].created_at_unix_nano = 0
+      elif $record_flow_failure == "" then .
+      else error("unknown mocked record-flow failure")
+      end
+    | if $prune_failure == "not-applied" then
+        .finalize.prune_applied = false
+      elif $prune_failure == "wrong-source" then
+        .finalize.retention_source = "restored-marker"
+      elif $prune_failure == "changed-baseline" then
+        .finalize.retention_disk_usage_baseline_bytes += 1
+      elif $prune_failure == "unsafe-all" then
+        .finalize.prune_all = true
+      elif $prune_failure == "filtered" then
+        .finalize.prune_filter_count = 1
+      elif $prune_failure == "aged" then
+        .finalize.prune_keep_duration_ms = 1
+      elif $prune_failure == "cutoff" then
+        .finalize.prune_cutoff_unix_nano = 1
+      elif $prune_failure == "unsatisfied" then
+        .finalize.prune_target_satisfied = false
+        | .finalize.prune_target_reason = "unreclaimable-above-effective-keep"
+        | .finalize.prune_cache_usage_after_bytes = (.finalize.prune_effective_keep_bytes + 1)
+      elif $prune_failure == "record-delta" then
+        .finalize.records_before_prune += 1
+      elif $prune_failure == "gc-link" then
+        .finalize.records_before_gc += 1
+      elif $prune_failure == "disk" then
+        .finalize.prune_disk_available_before_bytes = (.finalize.prune_disk_free_before_bytes + 1)
+      elif $prune_failure == "min-free" then
+        .finalize.prune_min_free_space_bytes += 1
+      elif $prune_failure == "effective-keep" then
+        .finalize.prune_effective_keep_bytes -= 1
+      elif $prune_failure == "no-op-mutated" then
+        .finalize.pruned_records = 1
+        | .finalize.pruned_bytes = 1
+        | .finalize.records_before_prune += 1
+      elif $prune_failure == "" then .
+      else error("unknown mocked prune failure")
+      end
     | if $include_content_gc_seconds then .content_gc_seconds = 0.1 else . end
     | if $include_logical_generation then
         .save.logical_generation_blobs = $logical_blobs
@@ -407,8 +790,17 @@ boringcache() {
     printf '{"phase":"%s"}\n' "$phase" > "$BORINGCACHE_OBSERVABILITY_JSONL_PATH"
   fi
   echo '#1 [mock] build'
-  if [[ "$phase" == cold || "$phase" == replay-001-* ]]; then
+  if [[ "$phase" == cold || "$phase" == replay-001-* || "$restore_status" == clean_start ]]; then
     echo '#1 DONE 1.0s'
+  elif [[ "$phase" == replay-* ]]; then
+    local cached_count cached_index
+    cached_count=68
+    if ((replay_index == ${MOCK_REPLAY_CACHED_REGRESSION_INDEX:-0})); then
+      cached_count=67
+    fi
+    for ((cached_index = 1; cached_index <= cached_count; cached_index++)); do
+      printf '#%d CACHED\n' "$cached_index"
+    done
   else
     echo '#1 CACHED'
     echo '#2 CACHED'
@@ -416,6 +808,10 @@ boringcache() {
 }
 
 export -f git docker mock_warm_generation boringcache
+sleep() {
+  return 0
+}
+export -f sleep
 export source_sha image_digest cold_generation warm_generation rolling_parent rolling_generation repeat_generation
 
 write_mock_preflight() {
@@ -561,6 +957,14 @@ if ! command jq -e '
   and .current_set.all_warm_content_counts_stable == true
   and .current_set.growth.all_warm_content_counts_stable == true
   and (.phases | length) == 3
+  and all(.phases[];
+    .checks.state_record_flow_valid == true
+    and .state.state_record_flow.status == "recorded"
+    and .state.state_record_flow.local_sources_created_during_build == 3
+    and (.state.state_record_flow.created_local_sources | length) == 3
+  )
+  and .phases[0].state.state_record_flow.created_during_build > 3
+  and all(.phases[1:][]; .state.state_record_flow.created_during_build == 3)
   and (.phases[0].state.logical_generation_blobs > 0)
   and (.phases[1].state.parent_generation == .phases[0].state.generation)
   and (.phases[1].state.head_generations_fetched == 1)
@@ -592,6 +996,60 @@ command jq -e '
   and .current_set.transitions[-1].logical_set.within_tolerance == true
   and .current_set.growth.logical_blob_delta == 0
 ' "$fresh_four_dir/canary-result.json" >/dev/null
+
+fresh_clean_start_dir="$test_root/fresh-clean-start"
+MOCK_CLEAN_START_WARM_INDEX=2 run_mock fresh "$fresh_clean_start_dir" 4 >/dev/null
+command jq -e '
+  .success == true
+  and .current_set.current_set_replacement == true
+  and .current_set.clean_start_boundaries == 1
+  and .current_set.clean_start_followup_proven == true
+  and .current_set.plateau_window_start_transition == 3
+  and .current_set.plateau_transitions_measured == 2
+  and .current_set.transitions[1].kind == "clean-start"
+  and .current_set.transitions[1].logical_set.blob_delta == null
+  and .current_set.transitions[1].logical_set.byte_delta == null
+  and .current_set.transitions[1].next_phase_restores_root == true
+  and .phases[2].checks.clean_start_valid == true
+  and .phases[2].state.restore.candidate_generation == .phases[1].state.generation
+  and .phases[2].state.generation != .phases[2].state.restore.candidate_generation
+  and .phases[2].state.parent_generation == null
+  and .phases[2].state.state_window.published_generation_count == 1
+  and .phases[3].state.restored_generation == .phases[2].state.generation
+  and .phases[3].state.parent_generation == .phases[2].state.generation
+' "$fresh_clean_start_dir/canary-result.json" >/dev/null
+
+terminal_clean_start_dir="$test_root/fresh-terminal-clean-start"
+if MOCK_CLEAN_START_WARM_INDEX=4 \
+  run_mock fresh "$terminal_clean_start_dir" 4 >/dev/null 2>&1; then
+  echo "Expected a terminal clean-start without a restoring product phase to remain pending" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and all(.phases[]; .success == true)
+  and .current_set.current_set_replacement == false
+  and .current_set.clean_start_boundaries == 1
+  and .current_set.clean_start_followup_proven == false
+  and .current_set.transitions[-1].kind == "clean-start"
+  and .current_set.transitions[-1].next_phase_restores_root == false
+' "$terminal_clean_start_dir/canary-result.json" >/dev/null
+
+wrong_clean_start_followup_dir="$test_root/fresh-clean-start-wrong-followup"
+if MOCK_CLEAN_START_WARM_INDEX=2 \
+  MOCK_CLEAN_START_WRONG_FOLLOWUP=1 \
+  run_mock fresh "$wrong_clean_start_followup_dir" 4 >/dev/null 2>&1; then
+  echo "Expected a clean-start followed by the wrong generation to fail continuity" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and all(.phases[]; .success == true)
+  and .current_set.current_set_replacement == false
+  and .current_set.clean_start_followup_proven == false
+  and .current_set.transitions[1].next_phase_restores_root == false
+  and .current_set.transitions[2].lineage.valid == false
+' "$wrong_clean_start_followup_dir/canary-result.json" >/dev/null
 
 fresh_eight_dir="$test_root/fresh-eight"
 run_mock fresh "$fresh_eight_dir" 8 >/dev/null
@@ -696,14 +1154,57 @@ command jq -e '
   and .current_set.current_set_replacement == true
   and .current_set.only_current_head_fetched == true
   and (.phases[0].state.transport_delta_blobs == 4)
-  and .phases[0].state.finalize.retention_policy == "complete-main-cache-v1"
+  and .phases[0].state.finalize.retention_policy == "signed-working-set-main-cache-v1"
+  and .phases[0].state.finalize.retention_source == "restored-marker"
+  and .phases[0].state.finalize.retention_disk_usage_baseline_bytes == 100000
+  and .phases[0].state.finalize.prune_applied == true
+  and .phases[0].state.finalize.prune_triggered == false
+  and .phases[0].state.finalize.prune_target_satisfied == true
+  and .phases[0].state.finalize.prune_target_reason == "within-effective-keep"
+  and .phases[0].state.finalize.prune_all == false
+  and .phases[0].state.finalize.prune_filter_count == 0
+  and .phases[0].state.finalize.prune_max_used_space_bytes == 100000
+  and .phases[0].state.finalize.pruned_records == 0
+  and .phases[0].state.finalize.records_before_prune == 7
+  and .phases[0].state.finalize.records_after_prune == 7
+  and .phases[0].state.finalize.prune_cache_usage_before_bytes == 100000
+  and .phases[0].state.finalize.prune_cache_usage_after_bytes == 100000
+  and .phases[0].state.finalize.prune_disk_total_bytes == 100000000000
+  and .phases[0].state.finalize.prune_min_free_space_bytes == 19000000000
+  and .phases[0].state.finalize.prune_reserved_space_bytes == 100000
+  and .phases[0].state.finalize.prune_effective_keep_bytes == 100000
   and .phases[0].state.finalize.content_gc_applied == true
   and .phases[0].state.finalize.content_gc_duration_ms == 100
-  and .phases[0].state.finalize.records_before_gc == 2
-  and .phases[0].state.finalize.records_after_gc == 2
+  and .phases[0].state.finalize.records_before_gc == 7
+  and .phases[0].state.finalize.records_after_gc == 7
   and .phases[0].state.finalize.records_after_gc >= .phases[0].state.finalize.eligible
+  and .phases[0].checks.state_record_flow_valid == true
+  and .phases[0].state.state_record_flow.status == "recorded"
+  and .phases[0].state.state_record_flow.total_records == 7
+  and .phases[0].state.state_record_flow.created_during_build > 3
+  and .phases[0].state.state_record_flow.local_sources_created_during_build == 3
+  and (.phases[0].state.state_record_flow.created_local_sources | length) == 3
   and .phases[0].state.content_gc_seconds == 0.1
 ' "$rolling_dir/canary-result.json" >/dev/null
+
+rolling_clean_start_dir="$test_root/rolling-clean-start-pending"
+if MOCK_CLEAN_START_ROLLING=1 run_mock rolling "$rolling_clean_start_dir" >/dev/null 2>&1; then
+  echo "Expected a single rolling clean-start to remain pending until a later product restore" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and (.phases | length) == 1
+  and .phases[0].success == true
+  and .phases[0].checks.clean_start_valid == true
+  and .phases[0].state.restore_status == "clean_start"
+  and .phases[0].state.generation != .phases[0].state.restore.candidate_generation
+  and .current_set.current_set_replacement == false
+  and .current_set.clean_start_boundaries == 1
+  and .current_set.clean_start_followup_proven == false
+  and .current_set.clean_start_followup_pending == true
+  and .current_set.ready_for_graduation == false
+' "$rolling_clean_start_dir/canary-result.json" >/dev/null
 
 replay_full_dir="$test_root/replay-full"
 run_mock replay-full "$replay_full_dir" >/dev/null
@@ -715,12 +1216,238 @@ command jq -e '
   and .current_set.replay.mode == "replay-full"
   and .current_set.replay.planned_generations == 11
   and .current_set.replay.measured_generations == 11
+  and .current_set.replay.clean_start_free == true
+  and .current_set.replay.signed_baseline_bytes == 100000
+  and .current_set.replay.baseline_unchanged == true
+  and .current_set.replay.retention_sources_valid == true
+  and .current_set.replay.all_logical_core_within_bound == true
+  and .current_set.replay.all_prune_contracts_valid == true
+  and .current_set.replay.positive_prune_generations == 1
+  and .current_set.replay.positive_prune_observed == true
+  and .current_set.replay.minimum_cached_steps == 68
+  and .current_set.replay.restored_successors_measured == 10
+  and .current_set.replay.all_restored_successors_hit_contract == true
+  and .current_set.replay.minimum_observed_successor_cached_steps == 68
+  and .current_set.replay.ready_for_graduation == true
+  and .current_set.replay.working_set_scorecard.target_min_bytes == 6442450944
+  and .current_set.replay.working_set_scorecard.target_max_bytes == 8589934592
+  and .current_set.replay.working_set_scorecard.final_logical_core_bytes == 111000
+  and .current_set.replay.working_set_scorecard.final_within_target_band == false
   and .current_set.replay.all_successors_within_tolerance == true
   and (.current_set.replay.generations | length) == 11
   and .current_set.replay.generations[0].continuity == true
+  and .current_set.replay.generations[0].prune.retention_source == "fresh-measured"
+  and .current_set.replay.generations[0].prune.triggered == false
+  and .current_set.replay.generations[0].prune.pruned_records == 0
+  and .current_set.replay.generations[5].prune.retention_source == "restored-marker"
+  and .current_set.replay.generations[5].prune.triggered == true
+  and .current_set.replay.generations[5].prune.target_reason == "pruned-to-effective-keep"
+  and .current_set.replay.generations[5].prune.pruned_records == 2
+  and .current_set.replay.generations[5].prune.records_before == 7
+  and .current_set.replay.generations[5].prune.records_after == 5
   and .current_set.replay.generations[1].logical_set.blob_delta_from_previous == 1
   and .current_set.replay.generations[1].transport_delta.blobs == 1
+  and .current_set.replay.generations[1].build.cached_steps == 68
+  and .current_set.replay.generations[1].build.hit_contract_satisfied == true
+  and .current_set.backend_current_version_set == true
+  and .backend_current_set.all_phases_valid == true
+  and .backend_current_set.max_active_versions == 1
+  and (.backend_current_set.phases | length) == 11
+  and all(.backend_current_set.phases[];
+    .active_versions == 1
+    and .active_storage_bytes == .current_entry_bytes
+    and .observed_generation == .expected_generation
+    and .valid == true
+  )
+  and .backend_current_set.valid == true
 ' "$replay_full_dir/canary-result.json" >/dev/null
+
+cache_hit_regression_dir="$test_root/replay-cache-hit-regression"
+if MOCK_REPLAY_CACHED_REGRESSION_INDEX=7 \
+  run_mock replay-full "$cache_hit_regression_dir" >/dev/null 2>&1; then
+  echo "Expected a replay successor below the PostHog cache-hit floor to fail graduation" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.current_set_replacement == false
+  and .current_set.replay.minimum_cached_steps == 68
+  and .current_set.replay.restored_successors_measured == 10
+  and .current_set.replay.all_restored_successors_hit_contract == false
+  and .current_set.replay.minimum_observed_successor_cached_steps == 67
+  and .current_set.replay.ready_for_graduation == false
+  and .current_set.replay.generations[6].build.cached_steps == 67
+  and .current_set.replay.generations[6].build.hit_contract_satisfied == false
+' "$cache_hit_regression_dir/canary-result.json" >/dev/null
+
+backend_tail_dir="$test_root/replay-backend-version-tail"
+if MOCK_BACKEND_VERSION_COUNT=2 \
+  run_mock replay-full "$backend_tail_dir" >/dev/null 2>&1; then
+  echo "Expected a replay with a superseded backend state version to fail graduation" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.backend_current_version_set == false
+  and .current_set.replay.ready_for_graduation == false
+  and .backend_current_set.all_phases_valid == false
+  and .backend_current_set.max_active_versions == 2
+  and (.backend_current_set.phases | length) == 1
+  and .backend_current_set.phases[0].active_storage_bytes > .backend_current_set.phases[0].current_entry_bytes
+  and .backend_current_set.phases[0].valid == false
+  and .backend_current_set.valid == false
+' "$backend_tail_dir/canary-result.json" >/dev/null
+
+no_positive_prune_dir="$test_root/replay-no-positive-prune"
+if MOCK_DISABLE_REPLAY_POSITIVE_PRUNE=1 \
+  run_mock replay-full "$no_positive_prune_dir" >/dev/null 2>&1; then
+  echo "Expected a replay without a triggered positive prune to fail graduation" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.replay.clean_start_free == true
+  and .current_set.replay.baseline_unchanged == true
+  and .current_set.replay.all_logical_core_within_bound == true
+  and .current_set.replay.all_prune_contracts_valid == true
+  and .current_set.replay.positive_prune_generations == 0
+  and .current_set.replay.positive_prune_observed == false
+  and .current_set.replay.ready_for_graduation == false
+' "$no_positive_prune_dir/canary-result.json" >/dev/null
+
+changed_baseline_dir="$test_root/replay-changed-signed-baseline"
+if MOCK_CHANGED_REPLAY_BASELINE_INDEX=8 \
+  run_mock replay-full "$changed_baseline_dir" >/dev/null 2>&1; then
+  echo "Expected a replay that changed its signed working-set baseline to fail graduation" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and all(.phases[]; .checks.summary_valid == true and .success == true)
+  and .current_set.replay.clean_start_free == true
+  and .current_set.replay.retention_sources_valid == true
+  and .current_set.replay.baseline_unchanged == false
+  and .current_set.replay.positive_prune_observed == true
+  and .current_set.replay.ready_for_graduation == false
+' "$changed_baseline_dir/canary-result.json" >/dev/null
+
+oversized_replay_dir="$test_root/replay-oversized-logical-core"
+if MOCK_OVERSIZED_REPLAY_INDEX=7 \
+  run_mock replay-full "$oversized_replay_dir" >/dev/null 2>&1; then
+  echo "Expected a replay above the 16 GiB logical-core ceiling to fail graduation" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.replay.clean_start_free == true
+  and .current_set.replay.positive_prune_observed == true
+  and .current_set.replay.all_logical_core_within_bound == false
+  and .current_set.replay.ready_for_graduation == false
+  and .current_set.replay.generations[6].logical_set.bytes == 17179869185
+' "$oversized_replay_dir/canary-result.json" >/dev/null
+
+clean_start_dir="$test_root/replay-clean-start"
+if MOCK_CLEAN_START_REPLAY_INDEX=6 run_mock replay-full "$clean_start_dir" >/dev/null 2>&1; then
+  echo "Expected a fresh -10 replay with a clean-start boundary to fail graduation" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.current_set_replacement == true
+  and .current_set.clean_start_boundaries == 1
+  and .current_set.clean_start_followup_proven == true
+  and .current_set.replay.clean_start_free == false
+  and .current_set.replay.ready_for_graduation == false
+  and .current_set.replay.plateau_window_start_sequence == 6
+  and .current_set.replay.active_successors_measured == 5
+  and .current_set.replay.all_successors_within_tolerance == true
+  and .current_set.replay.generations[5].clean_start_boundary == true
+  and .current_set.replay.generations[5].next_phase_restores_root == true
+  and .current_set.replay.generations[5].logical_set.blob_delta_from_previous == null
+  and .current_set.replay.generations[5].logical_set.byte_delta_from_previous == null
+  and .current_set.replay.generations[5].logical_set.within_previous_tolerance == null
+  and .current_set.replay.generations[6].logical_set.blob_delta_from_previous == 1
+  and .phases[5].state.restore_status == "clean_start"
+  and .phases[5].state.restore.candidate_generation == .phases[4].state.generation
+  and .phases[5].state.restore.candidate_blobs > 0
+  and .phases[5].state.restore.candidate_bytes > 0
+  and .phases[5].state.restore.candidate_files > 0
+  and .phases[5].state.restore.restored_blobs == 0
+  and .phases[5].state.restore.restored_bytes == 0
+  and .phases[5].state.restore.restored_files == 0
+  and .phases[5].state.restore.helper_seconds == 0
+  and .phases[5].state.restored_generation == null
+  and .phases[5].state.parent_generation == null
+  and .phases[5].state.state_window.rebase_reason == "generation_count"
+  and .phases[5].state.state_window.candidate_generation_count
+      >= .phases[5].state.state_window.max_generations
+  and .phases[5].state.state_window.published_generation_count == 1
+  and .phases[5].state.state_window.published_baseline_bytes
+      == .phases[5].state.logical_generation_bytes
+  and .phases[5].checks.clean_start_valid == true
+  and .phases[6].state.restore_status == "restored"
+  and .phases[6].state.restored_generation == .phases[5].state.generation
+  and .phases[6].state.parent_generation == .phases[5].state.generation
+' "$clean_start_dir/canary-result.json" >/dev/null
+
+restore_bytes_clean_start_dir="$test_root/replay-clean-start-restore-bytes"
+if MOCK_CLEAN_START_REPLAY_INDEX=6 \
+  MOCK_CLEAN_START_REASON=restore_bytes \
+  run_mock replay-full "$restore_bytes_clean_start_dir" >/dev/null 2>&1; then
+  echo "Expected a restore-byte clean-start boundary to fail fresh -10 graduation" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.clean_start_boundaries == 1
+  and .current_set.clean_start_followup_proven == true
+  and .current_set.replay.clean_start_free == false
+  and .current_set.replay.ready_for_graduation == false
+  and .phases[5].state.state_window.rebase_reason == "restore_bytes"
+  and .phases[5].state.restore.candidate_bytes == 21474836480
+  and .phases[5].state.state_window.max_restore_bytes == 17179869184
+  and .phases[5].state.restore.candidate_bytes
+      > .phases[5].state.state_window.max_restore_bytes
+  and .phases[6].state.restored_generation == .phases[5].state.generation
+' "$restore_bytes_clean_start_dir/canary-result.json" >/dev/null
+
+for invalid_clean_start in \
+  missing-candidate \
+  restored-body \
+  parented-root \
+  below-window-limit \
+  same-generation \
+  omitted-zero \
+  omitted-restore-generation \
+  omitted-save-parent; do
+  invalid_clean_start_dir="$test_root/fresh-clean-start-${invalid_clean_start}"
+  if MOCK_CLEAN_START_WARM_INDEX=1 \
+    MOCK_CLEAN_START_INVALID_EVIDENCE="$invalid_clean_start" \
+    run_mock fresh "$invalid_clean_start_dir" >/dev/null 2>&1; then
+    echo "Expected invalid clean-start evidence (${invalid_clean_start}) to fail closed" >&2
+    exit 1
+  fi
+  command jq -e '
+    .success == false
+    and .phases[-1].state.restore_status == "clean_start"
+    and .phases[-1].checks.clean_start_valid == false
+    and .phases[-1].success == false
+  ' "$invalid_clean_start_dir/canary-result.json" >/dev/null
+done
+
+invalid_restore_bytes_dir="$test_root/fresh-clean-start-below-restore-limit"
+if MOCK_CLEAN_START_WARM_INDEX=1 \
+  MOCK_CLEAN_START_REASON=restore_bytes \
+  MOCK_CLEAN_START_INVALID_EVIDENCE=below-restore-limit \
+  run_mock fresh "$invalid_restore_bytes_dir" >/dev/null 2>&1; then
+  echo "Expected invalid clean-start evidence (below-restore-limit) to fail closed" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .phases[-1].state.restore_status == "clean_start"
+  and .phases[-1].checks.clean_start_valid == false
+' "$invalid_restore_bytes_dir/canary-result.json" >/dev/null
 
 replay_endpoints_dir="$test_root/replay-endpoints"
 run_mock replay-endpoints "$replay_endpoints_dir" >/dev/null
@@ -779,6 +1506,34 @@ if MOCK_RETENTION_POLICY=pruned-main-cache run_mock rolling "$retention_dir" >/d
 fi
 command jq -e '.success == false and .phases[0].checks.summary_valid == false' "$retention_dir/canary-result.json" >/dev/null
 
+for prune_failure in \
+  not-applied \
+  wrong-source \
+  changed-baseline \
+  unsafe-all \
+  filtered \
+  aged \
+  cutoff \
+  unsatisfied \
+  record-delta \
+  gc-link \
+  disk \
+  min-free \
+  effective-keep \
+  no-op-mutated; do
+  prune_failure_dir="$test_root/retention-${prune_failure}"
+  if MOCK_PRUNE_FAILURE="$prune_failure" \
+    run_mock fresh "$prune_failure_dir" >/dev/null 2>&1; then
+    echo "Expected an unsafe signed working-set retention report to fail closed (${prune_failure})" >&2
+    exit 1
+  fi
+  command jq -e '
+    .success == false
+    and .phases[0].checks.summary_valid == false
+    and .phases[0].success == false
+  ' "$prune_failure_dir/canary-result.json" >/dev/null
+done
+
 content_gc_dir="$test_root/content-gc-failure"
 if MOCK_CONTENT_GC_APPLIED=0 run_mock rolling "$content_gc_dir" >/dev/null 2>&1; then
   echo "Expected absent terminal content GC to fail closed" >&2
@@ -799,6 +1554,43 @@ if MOCK_OMIT_CONTENT_GC_SECONDS=1 run_mock rolling "$content_gc_seconds_dir" >/d
   exit 1
 fi
 command jq -e '.success == false and .phases[0].checks.summary_valid == false' "$content_gc_seconds_dir/canary-result.json" >/dev/null
+
+for record_flow_failure in \
+  unavailable \
+  created-count \
+  group-total \
+  group-created \
+  duplicate-id \
+  empty-description \
+  zero-timestamp; do
+  record_flow_dir="$test_root/record-flow-${record_flow_failure}"
+  if MOCK_RECORD_FLOW_FAILURE="$record_flow_failure" \
+    run_mock rolling "$record_flow_dir" >/dev/null 2>&1; then
+    echo "Expected invalid BuildKit state record flow (${record_flow_failure}) to fail closed" >&2
+    exit 1
+  fi
+  command jq -e '
+    .success == false
+    and .phases[0].checks.summary_valid == true
+    and .phases[0].checks.state_record_flow_valid == false
+    and .phases[0].success == false
+  ' "$record_flow_dir/canary-result.json" >/dev/null
+done
+
+same_ref_extra_record_dir="$test_root/record-flow-same-ref-extra-created"
+if MOCK_WARM_RECORD_FLOW_CREATED=4 \
+  run_mock fresh "$same_ref_extra_record_dir" >/dev/null 2>&1; then
+  echo "Expected extra same-ref records created during the user build to fail closed" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and (.phases | length) == 2
+  and .phases[0].checks.state_record_flow_valid == true
+  and .phases[0].state.state_record_flow.created_during_build > 3
+  and .phases[1].checks.state_record_flow_valid == false
+  and .phases[1].state.state_record_flow.created_during_build == 4
+' "$same_ref_extra_record_dir/canary-result.json" >/dev/null
 
 record_growth_dir="$test_root/record-growth-failure"
 if MOCK_WARM_RECORD_DELTA=3 run_mock fresh "$record_growth_dir" 2 fixture >/dev/null 2>&1; then
@@ -1007,5 +1799,37 @@ if MOCK_CAPABILITIES_FILE="$capabilities_bad" \
 fi
 command jq -e '.all_passed == false and .checks.buildkit_state_current_set_v1 == false' \
   "$preflight_bad_dir/preflight-backend.json" >/dev/null
+
+record_flow_summary_renderer="$repo_root/scripts/render-buildkit-state-record-flow-summary.sh"
+record_flow_summary_fixture="$test_root/record-flow-summary-malformed.json"
+command jq -n '
+  {
+    phases: [
+      {
+        phase: "scalar-flow",
+        checks: {state_record_flow_valid: false},
+        state: {state_record_flow: "malformed"}
+      },
+      {
+        phase: "malformed-details",
+        checks: {state_record_flow_valid: false},
+        state: {
+          state_record_flow: {
+            total_records: 5,
+            eligible_records: 4,
+            created_during_build: 3,
+            local_source_records: 3,
+            local_sources_created_during_build: 3,
+            local_source_groups: [7, {description: null, total: "bad", created_during_build: 1}],
+            created_local_sources: [false, {description: "context|line\nbreak"}]
+          }
+        }
+      }
+    ]
+  }
+' > "$record_flow_summary_fixture"
+record_flow_summary_output="$(bash "$record_flow_summary_renderer" "$record_flow_summary_fixture")"
+grep -F '| scalar-flow | no | n/a / n/a / n/a | n/a / n/a |  |  |' <<<"$record_flow_summary_output" >/dev/null
+grep -F '| malformed-details | no | 5 / 4 / 3 | 3 / 3 | <invalid group>; <invalid>: bad/1 | <invalid record>; context / line break |' <<<"$record_flow_summary_output" >/dev/null
 
 echo "BuildKit state canary mocked lifecycle is valid."

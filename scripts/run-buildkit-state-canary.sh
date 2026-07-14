@@ -37,6 +37,10 @@ warm_generations="${BORINGCACHE_STATE_CANARY_WARM_GENERATIONS:-2}"
 replay_plan_path="${BORINGCACHE_STATE_CANARY_REPLAY_PLAN:-}"
 replay_min_cached_steps=68
 
+if [[ "$composition_mode" == fixture && -z "${BORINGCACHE_STATE_CANARY_DOCKERFILE:-}" ]]; then
+  dockerfile_path="$artifact_dir/posthog-toolcache.Dockerfile"
+fi
+
 case "$composition_mode" in
   off)
     if [[ "${BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER:-0}" =~ ^(1|true|yes|on)$ ]]; then
@@ -1201,6 +1205,9 @@ run_phase() {
     echo "Prepared source moved from ${expected_source_sha} to ${prepared_sha}" >&2
     return 1
   fi
+  if [[ "$composition_mode" == fixture ]]; then
+    "$repo_root/scripts/render-posthog-toolcache-dockerfile.sh" "$dockerfile_path"
+  fi
 
   rm -f \
     "$log_path" \
@@ -2191,7 +2198,7 @@ run_terminal_mount_probe() {
       --metadata-hint "source_sha=${source_sha}" \
       -- \
       docker buildx build \
-        --file "$repo_root/scenarios/posthog-toolcache/Dockerfile" \
+        --file "$dockerfile_path" \
         --target boringcache-state-mount-probe \
         --no-cache-filter boringcache-state-mount-probe \
         --build-arg BORINGCACHE_STATE_MOUNT_PROBE=read-only \

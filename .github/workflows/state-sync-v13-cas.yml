@@ -465,7 +465,7 @@ jobs:
           printf '%s\n' "$source_sha" > "$CANARY_ARTIFACT_DIR/posthog-source.sha"
           ./scripts/prepare-source.sh base
           if [[ "$COMPOSITION_MODE" == fixture ]]; then
-            ./scripts/check-posthog-toolcache-dockerfile.sh
+            ./scripts/render-posthog-toolcache-dockerfile.sh "$CANARY_ARTIFACT_DIR/posthog-toolcache.Dockerfile"
           fi
 
       - name: Enforce complete pre-build checklist
@@ -559,7 +559,7 @@ jobs:
           BORINGCACHE_STATE_CANARY_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BORINGCACHE_STATE_CANARY_ARTIFACT_DIR: ${{ runner.temp }}/buildkit-state-canary
           BORINGCACHE_STATE_CANARY_PLATFORM: ${{ steps.inputs.outputs.docker_platform }}
-          BORINGCACHE_STATE_CANARY_DOCKERFILE: ${{ inputs.composition_mode == 'fixture' && 'scenarios/posthog-toolcache/Dockerfile' || 'upstream/Dockerfile' }}
+          BORINGCACHE_STATE_CANARY_DOCKERFILE: ${{ inputs.composition_mode == 'fixture' && format('{0}/posthog-toolcache.Dockerfile', runner.temp) || 'upstream/Dockerfile' }}
           BORINGCACHE_STATE_CANARY_CONTEXT: upstream
           BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT: ${{ inputs.plateau_tolerance_percent }}
           BORINGCACHE_STATE_CANARY_WARM_GENERATIONS: ${{ inputs.warm_generations }}

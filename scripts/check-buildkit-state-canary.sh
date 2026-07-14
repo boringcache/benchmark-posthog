@@ -3,18 +3,26 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workflow="$repo_root/.github/workflows/state-sync-v13-cas.yml"
+rolling_dispatch_workflow="$repo_root/.github/workflows/rolling-dispatch.yml"
+sync_workflow="$repo_root/.github/workflows/sync.yml"
 runner="$repo_root/scripts/run-buildkit-state-canary.sh"
 preflight_runner="$repo_root/scripts/preflight-buildkit-state-canary.sh"
 test_runner="$repo_root/scripts/test-buildkit-state-canary.sh"
+rolling_dispatcher="$repo_root/scripts/dispatch-buildkit-state-rolling-canary.sh"
+rolling_dispatcher_test="$repo_root/scripts/test-dispatch-buildkit-state-rolling-canary.sh"
 record_flow_summary_renderer="$repo_root/scripts/render-buildkit-state-record-flow-summary.sh"
-fixture_checker="$repo_root/scripts/check-posthog-toolcache-dockerfile.sh"
+fixture_renderer="$repo_root/scripts/render-posthog-toolcache-dockerfile.sh"
+fixture_renderer_test="$repo_root/scripts/test-render-posthog-toolcache-dockerfile.sh"
 image_index_verifier="$repo_root/scripts/verify-buildkit-image-index.sh"
 
 bash -n "$runner"
 bash -n "$preflight_runner"
 bash -n "$test_runner"
+bash -n "$rolling_dispatcher"
+bash -n "$rolling_dispatcher_test"
 bash -n "$record_flow_summary_renderer"
-bash -n "$fixture_checker"
+bash -n "$fixture_renderer"
+bash -n "$fixture_renderer_test"
 bash -n "$image_index_verifier"
 
 require_text() {
@@ -58,6 +66,21 @@ require_text "$workflow" "buildkit-image-platform-manifest.sha256"
 require_text "$workflow" 'bash scripts/render-buildkit-state-record-flow-summary.sh "$result"'
 require_text "$workflow" "Resolve verified CLI version"
 require_text "$workflow" "BORINGCACHE_STATE_CANARY_CLI_VERSION"
+require_text "$rolling_dispatch_workflow" "state_canary:"
+require_text "$rolling_dispatch_workflow" "vars.POSTHOG_STATE_CANARY_ENABLED == 'true'"
+require_text "$rolling_dispatch_workflow" "vars.POSTHOG_STATE_CANARY_CLI_RELEASE_TAG"
+require_text "$rolling_dispatch_workflow" "vars.POSTHOG_STATE_CANARY_CLI_AMD64_SHA256"
+require_text "$rolling_dispatch_workflow" "vars.POSTHOG_STATE_CANARY_CLI_ARM64_SHA256"
+require_text "$rolling_dispatch_workflow" "vars.POSTHOG_STATE_CANARY_BUILDKIT_AMD64_IMAGE"
+require_text "$rolling_dispatch_workflow" "vars.POSTHOG_STATE_CANARY_BUILDKIT_ARM64_IMAGE"
+require_text "$rolling_dispatch_workflow" "./scripts/dispatch-buildkit-state-rolling-canary.sh"
+require_text "$sync_workflow" 'cron: "*/30 * * * *"'
+require_text "$rolling_dispatcher" "git ls-tree HEAD upstream"
+require_text "$rolling_dispatcher" "STATE_CANARY_BUILDKIT_IMAGE must be an exact managed image digest"
+require_text "$rolling_dispatcher" "-f cache_lane=rolling"
+require_text "$rolling_dispatcher" "-f composition_mode=fixture"
+require_text "$rolling_dispatcher" '-f "posthog_source=${source_sha}"'
+require_text "$rolling_dispatcher" '-f "rolling_scope=${rolling_scope}"'
 require_text "$preflight_runner" "expected_tag_head_v1"
 require_text "$preflight_runner" "buildkit_state_current_set_v1"
 require_text "$preflight_runner" "cas_publish_bootstrap_if_match"
@@ -112,8 +135,10 @@ require_text "$runner" 'zero_eager_mount_restore'
 require_text "$runner" 'deferred_publish_lifecycle'
 require_text "$runner" 'and $all_warm_record_counts_stable'
 require_text "$workflow" 'turbo-rolling-${rolling_slug}'
-require_text "$fixture_checker" 'AS boringcache-state-mount-probe'
-require_text "$fixture_checker" 'AS posthog-runtime'
+require_text "$fixture_renderer" 'AS boringcache-state-mount-probe'
+require_text "$fixture_renderer" 'AS posthog-runtime'
+require_text "$runner" 'render-posthog-toolcache-dockerfile.sh" "$dockerfile_path"'
+require_text "$workflow" 'posthog-toolcache.Dockerfile'
 require_text "$runner" 'product_target_args+=(--target posthog-runtime)'
 require_text "$test_runner" "composition-short-circuit"
 require_text "$runner" "exact_source_sequence"
@@ -211,6 +236,8 @@ if ! ((cli_version_line < capability_probe_line && capability_probe_line < image
   exit 1
 fi
 
+"$rolling_dispatcher_test"
+"$fixture_renderer_test"
 "$test_runner"
 
 echo "BuildKit state canary contract is valid."

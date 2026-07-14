@@ -129,7 +129,7 @@ verify_posthog_turbo_tool_cache_contract() {
 
   if ! grep -q "boringcache-tool-cache-env" "$dockerfile"; then
     echo "Docker tool-cache turbo requested, but ${dockerfile_path} does not declare the static boringcache-tool-cache-env secret mount." >&2
-    echo "Use scenarios/posthog-toolcache/Dockerfile or another committed Dockerfile with the stable tool-cache contract." >&2
+    echo "Use a Dockerfile rendered with scripts/render-posthog-toolcache-dockerfile.sh or another Dockerfile with the stable tool-cache contract." >&2
     exit 1
   fi
 

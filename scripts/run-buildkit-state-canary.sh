@@ -312,6 +312,19 @@ write_combined_result() {
        else
          false
        end;
+     def replay_prune_contract:
+       .prune.applied == true
+       and .prune.target_satisfied == true
+       and .prune.target_reason == "scaffold-clean"
+       and .prune.all == true
+       and .prune.filter_count == 2
+       and .prune.max_used_space_bytes == 0
+       and .prune.keep_duration_ms == 0
+       and .prune.cutoff_unix_nano == 0
+       and .prune.reserved_space_bytes == 0
+       and .prune.min_free_space_bytes == 0
+       and .prune.effective_keep_bytes == 0
+       and (.prune.records_before - .prune.records_after) == .prune.pruned_records;
     {
       phases: .,
       all_phases_valid: (length > 0 and all(.[]; .success == true))
@@ -632,6 +645,15 @@ write_combined_result() {
                ($phase.state.logical_generation_bytes - $previous.state.logical_generation_bytes)
              end) as $byte_delta
           | (if $previous == null or $clean_start_boundary then null else
+               ($phase.state.finalize.required_blobs - $previous.state.finalize.required_blobs)
+             end) as $required_blob_delta
+          | (if $previous == null or $clean_start_boundary then null else
+               ($phase.state.finalize.eligible - $previous.state.finalize.eligible)
+             end) as $eligible_delta
+          | (if $previous == null or $clean_start_boundary then null else
+               ($phase.state.finalize.records_after_gc - $previous.state.finalize.records_after_gc)
+             end) as $records_after_gc_delta
+          | (if $previous == null or $clean_start_boundary then null else
                (($blob_delta | if . < 0 then -. else . end) <=
                  ((($previous.state.logical_generation_blobs * $tolerance / 100)) | ceil))
              end) as $blob_plateau
@@ -641,6 +663,7 @@ write_combined_result() {
              end) as $byte_plateau
           | {
               sequence_index: ($index + 1),
+              phase: $phase.phase,
               source_sha: $phase.source_sha,
               generation: $phase.state.generation,
               restored_generation: $phase.state.restored_generation,
@@ -690,8 +713,10 @@ write_combined_result() {
               logical_set: {
                 blobs: $phase.state.logical_generation_blobs,
                 bytes: $phase.state.logical_generation_bytes,
+                required_blobs: $phase.state.finalize.required_blobs,
                 blob_delta_from_previous: $blob_delta,
                 byte_delta_from_previous: $byte_delta,
+                required_blob_delta_from_previous: $required_blob_delta,
                 blob_delta_percent: (
                   if $previous == null or $clean_start_boundary or $previous.state.logical_generation_blobs == 0 then null
                   else (($blob_delta * 10000 / $previous.state.logical_generation_blobs) | round) / 100
@@ -705,6 +730,12 @@ write_combined_result() {
                 within_previous_tolerance: (
                   if $previous == null or $clean_start_boundary then null else ($blob_plateau and $byte_plateau) end
                 )
+              },
+              record_set: {
+                eligible: $phase.state.finalize.eligible,
+                records_after_gc: $phase.state.finalize.records_after_gc,
+                eligible_delta_from_previous: $eligible_delta,
+                records_after_gc_delta_from_previous: $records_after_gc_delta
               },
               transport_delta: {
                 blobs: $phase.state.transport_delta_blobs,
@@ -739,9 +770,35 @@ write_combined_result() {
                 effective_keep_bytes: $phase.state.finalize.prune_effective_keep_bytes
               }
             }
-        ] as $generations
+        ] as $observations
+        | ($inputs[0].replay.selected_commits | length) as $selected_count
+        | ($observations[0:$selected_count]) as $generations
+        | ($observations[$selected_count] // null) as $repeat
+        | (($observations | length) == ($selected_count + 1)
+            and ($generations | length) == $selected_count
+          ) as $sequence_shape_valid
+        | (($generations | map(.source_sha)) == $inputs[0].replay.selected_commits) as $exact_source_sequence
+        | ($repeat != null
+            and $repeat.source_sha == $generations[-1].source_sha
+          ) as $repeat_same_source
+        | ($repeat != null
+            and ($repeat.clean_start_boundary | not)
+            and $repeat.continuity
+            and $repeat.current_head_only
+            and $repeat.logical_set.blobs > 0
+            and $repeat.logical_set.bytes > 0
+            and $repeat.logical_set.blob_delta_from_previous == 0
+            and $repeat.logical_set.required_blob_delta_from_previous == 0
+            and $repeat.logical_set.within_previous_tolerance == true
+            and $repeat.record_set.eligible_delta_from_previous == 0
+            and $repeat.record_set.records_after_gc_delta_from_previous == 0
+            and ($repeat | replay_prune_contract)
+          ) as $repeat_state_contract
+        | ($repeat != null
+            and $repeat.build.hit_contract_satisfied == true
+          ) as $repeat_solver_reuse
         | ([$generations[] | select(.clean_start_boundary) | .sequence_index] | max // 1) as $replay_window_start
-        | [$generations[] | select(.clean_start_boundary)] as $clean_start_generations
+        | [$observations[] | select(.clean_start_boundary)] as $clean_start_generations
         | [$generations[]
             | select(.sequence_index > $replay_window_start)
             | select(.clean_start_boundary | not)
@@ -755,47 +812,41 @@ write_combined_result() {
           )) as $clean_start_followup_proven
         | ($generations[-1].logical_set.bytes // 0) as $final_logical_core_bytes
         | ($generations[0].logical_set.bytes // 0) as $first_logical_core_bytes
-        | (all($generations[];
+        | (all($observations[];
             .prune.baseline_bytes == ([.prune.cache_usage_after_bytes, 1] | max)
           )) as $post_clean_baselines_valid
-        | (all($generations[];
+        | (all($observations[];
             .prune.retention_source == "post-clean-measured"
           )) as $retention_sources_valid
         | ([$generations[]
             | select(.prune.triggered and .prune.pruned_records > 0)
           ]) as $scaffold_prune_generations
-        | (all($generations[];
-            .prune.applied == true
-            and .prune.target_satisfied == true
-            and .prune.target_reason == "scaffold-clean"
-            and .prune.all == true
-            and .prune.filter_count == 2
-            and .prune.max_used_space_bytes == 0
-            and .prune.keep_duration_ms == 0
-            and .prune.cutoff_unix_nano == 0
-            and .prune.reserved_space_bytes == 0
-            and .prune.min_free_space_bytes == 0
-            and .prune.effective_keep_bytes == 0
-            and (.prune.records_before - .prune.records_after) == .prune.pruned_records
-          )) as $all_prune_contracts_valid
+        | ([$observations[]
+            | select(.prune.triggered and .prune.pruned_records > 0)
+          ]) as $scaffold_prune_phases
+        | (all($observations[]; replay_prune_contract)) as $all_prune_contracts_valid
         | (($restored_successors | length) > 0
             and all($restored_successors[]; .build.hit_contract_satisfied == true)
           ) as $all_restored_successors_hit_contract
+        | ($sequence_shape_valid
+            and $exact_source_sequence
+            and $repeat_same_source
+            and $repeat_state_contract
+            and $clean_start_followup_proven
+            and $post_clean_baselines_valid
+            and $retention_sources_valid
+            and $all_prune_contracts_valid
+            and ($scaffold_prune_phases | length) == ($observations | length)
+            and all($observations[];
+              .continuity
+              and .current_head_only
+              and .logical_set.blobs > 0
+              and .logical_set.bytes > 0)
+          ) as $state_correctness_valid
         | {
-            current_set_replacement: (
-              ($generations | length) == ($inputs[0].replay.selected_commits | length)
-              and $clean_start_followup_proven
-              and $all_restored_successors_hit_contract
-              and all($generations[];
-                .continuity
-                and .current_head_only
-                and .logical_set.blobs > 0
-                and .logical_set.bytes > 0)
-            ),
-            only_current_head_fetched: all($generations[]; .current_head_only),
-            exact_source_sequence: (
-              ($generations | map(.source_sha)) == $inputs[0].replay.selected_commits
-            ),
+            current_set_replacement: $state_correctness_valid,
+            only_current_head_fetched: all($observations[]; .current_head_only),
+            exact_source_sequence: $exact_source_sequence,
             clean_start_boundaries: ($clean_start_generations | length),
             clean_start_followup_proven: $clean_start_followup_proven,
             same_ref_plateau: null,
@@ -813,26 +864,53 @@ write_combined_result() {
               retention_sources_valid: $retention_sources_valid,
               all_prune_contracts_valid: $all_prune_contracts_valid,
               scaffold_prune_generations: ($scaffold_prune_generations | length),
-              scaffold_prune_observed: (($scaffold_prune_generations | length) > 0),
+              scaffold_prune_phases: ($scaffold_prune_phases | length),
+              scaffold_prune_observed: (($scaffold_prune_phases | length) > 0),
               minimum_cached_steps: $replay_min_cached_steps,
               restored_successors_measured: ($restored_successors | length),
               all_restored_successors_hit_contract: $all_restored_successors_hit_contract,
               minimum_observed_successor_cached_steps: (
                 [$restored_successors[].build.cached_steps] | min // 0
               ),
+              changed_source_telemetry: {
+                correctness_gate: false,
+                restored_successors_measured: ($restored_successors | length),
+                all_hit_floor_satisfied: $all_restored_successors_hit_contract,
+                minimum_observed_cached_steps: (
+                  [$restored_successors[].build.cached_steps] | min // 0
+                ),
+                all_logical_sets_within_tolerance: all(
+                  $active_successors[];
+                  .logical_set.within_previous_tolerance == true
+                )
+              },
               growth_observation: {
                 first_logical_core_bytes: $first_logical_core_bytes,
                 final_logical_core_bytes: $final_logical_core_bytes,
                 delta_bytes: ($final_logical_core_bytes - $first_logical_core_bytes)
               },
+              repeat: (
+                if $repeat == null then
+                  {
+                    measured: false,
+                    same_source: false,
+                    state_contract_satisfied: false,
+                    solver_reuse_proven: false,
+                    contract_satisfied: false
+                  }
+                else
+                  $repeat + {
+                    measured: true,
+                    same_source: $repeat_same_source,
+                    state_contract_satisfied: $repeat_state_contract,
+                    solver_reuse_proven: $repeat_solver_reuse,
+                    contract_satisfied: ($repeat_state_contract and $repeat_solver_reuse)
+                  }
+                end
+              ),
               ready_for_graduation: (
                 if $lane == "replay-full" then
-                  $clean_start_followup_proven
-                  and $post_clean_baselines_valid
-                  and $retention_sources_valid
-                  and $all_prune_contracts_valid
-                  and $all_restored_successors_hit_contract
-                  and ($scaffold_prune_generations | length) == ($generations | length)
+                  $state_correctness_valid and $repeat_solver_reuse
                 else
                   null
                 end
@@ -2164,6 +2242,10 @@ else
     fi
     run_phase "$phase" "generation-$((index + 1))" base "$commit" "$expectation"
   done
+  last_index=$((${#selected_commits[@]} - 1))
+  commit="${selected_commits[$last_index]}"
+  phase="replay-repeat-${commit:0:12}"
+  run_phase "$phase" "generation-repeat" base "$commit" replay-successor
 fi
 
 if [[ "$composition_mode" == fixture ]]; then

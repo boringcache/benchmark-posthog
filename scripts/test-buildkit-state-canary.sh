@@ -129,6 +129,7 @@ boringcache() {
   local window_max_restore_bytes window_max_generations window_rebase_reason
   local published_window_baseline_bytes published_window_generation_count invalid_clean_start
   local bootstrap_delta steady_delta blob_delta required_blob_delta required_blobs warm_index warm_count summary_name
+  local warm_record_delta
   local transport_blobs transport_bytes saw_cacheonly saw_read_only saw_probe_target arg
   local is_probe save_status publish_status record_count record_flow_created record_flow_failure
   local replay_index retention_source retention_baseline prune_triggered prune_target_reason
@@ -192,6 +193,7 @@ boringcache() {
       ;;
     *cold.state-summary.json)
       phase=cold
+      record_count="$((5 + ${MOCK_COLD_RECORD_DELTA:-0}))"
       restore_status=miss
       restored_generation=""
       parent=""
@@ -244,7 +246,12 @@ boringcache() {
       fi
       transport_blobs=1
       transport_bytes=1000
-      record_count="$((5 + ${MOCK_WARM_RECORD_DELTA:-0}))"
+      warm_record_delta=0
+      if [[ -z "${MOCK_WARM_RECORD_DELTA_INDEX:-}" ]] || \
+         ((warm_index == MOCK_WARM_RECORD_DELTA_INDEX)); then
+        warm_record_delta="${MOCK_WARM_RECORD_DELTA:-0}"
+      fi
+      record_count="$((5 + warm_record_delta))"
       record_flow_created="${MOCK_WARM_RECORD_FLOW_CREATED:-3}"
       if ((warm_index == ${MOCK_CLEAN_START_WARM_INDEX:-0})); then
         clean_start=1
@@ -987,6 +994,24 @@ command jq -e '
   and .current_set.growth.logical_blob_delta == 0
 ' "$fresh_four_dir/canary-result.json" >/dev/null
 
+bootstrap_record_reduction_dir="$test_root/bootstrap-record-reduction"
+MOCK_COLD_RECORD_DELTA=8 run_mock fresh "$bootstrap_record_reduction_dir" 4 >/dev/null
+command jq -e '
+  .success == true
+  and .current_set.current_set_replacement == true
+  and .current_set.plateau_window_start_transition == 2
+  and .current_set.plateau_transitions_measured == 3
+  and .current_set.bootstrap_records_after_gc_delta == -8
+  and .current_set.bootstrap_record_count_non_growing == true
+  and .current_set.all_warm_record_counts_stable == true
+  and .current_set.same_ref_record_growth_observed == false
+  and .current_set.transitions[0].kind == "bootstrap"
+  and .current_set.transitions[0].record_set.records_after_gc_delta == -8
+  and all(.current_set.transitions[1:][].record_set;
+    .eligible_delta == 0 and .records_after_gc_delta == 0
+  )
+' "$bootstrap_record_reduction_dir/canary-result.json" >/dev/null
+
 fresh_clean_start_dir="$test_root/fresh-clean-start"
 MOCK_CLEAN_START_WARM_INDEX=2 run_mock fresh "$fresh_clean_start_dir" 4 >/dev/null
 command jq -e '
@@ -1593,7 +1618,8 @@ command jq -e '
 ' "$same_ref_extra_record_dir/canary-result.json" >/dev/null
 
 record_growth_dir="$test_root/record-growth-failure"
-if MOCK_WARM_RECORD_DELTA=3 run_mock fresh "$record_growth_dir" 2 fixture >/dev/null 2>&1; then
+if MOCK_WARM_RECORD_DELTA=3 MOCK_WARM_RECORD_DELTA_INDEX=2 \
+  run_mock fresh "$record_growth_dir" 2 fixture >/dev/null 2>&1; then
   echo "Expected same-ref BuildKit record growth to block graduation" >&2
   exit 1
 fi
@@ -1603,8 +1629,8 @@ command jq -e '
   and .current_set.all_warm_record_counts_stable == false
   and .current_set.same_ref_record_growth_observed == true
   and .current_set.same_ref_count_plateau == false
-  and .current_set.transitions[0].record_set.eligible_delta == 0
-  and .current_set.transitions[0].record_set.records_after_gc_delta == 3
+  and .current_set.transitions[1].record_set.eligible_delta == 0
+  and .current_set.transitions[1].record_set.records_after_gc_delta == 3
   and .composition.valid == true
   and .terminal_mount_probe.attempted == true
   and .terminal_mount_probe.valid == true

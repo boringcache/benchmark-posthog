@@ -455,19 +455,21 @@ write_combined_result() {
         | ($transitions[0] // null) as $bootstrap
         | ($transitions[-1] // null) as $final_transition
         | ([$transitions[] | select(.clean_start_boundary) | .transition_index] | max // 0) as $last_clean_start_index
+        | ([$last_clean_start_index, 1] | max) as $plateau_floor_index
         | [$transitions[] | select(.clean_start_boundary)] as $clean_start_transitions
         | [$transitions[]
-            | select(.transition_index > $last_clean_start_index)
+            | select(.transition_index > $plateau_floor_index)
             | select(.clean_start_boundary | not)
           ] as $plateau_transitions
+        | [$transitions[] | select(.clean_start_boundary | not)] as $solver_transitions
         | (all($clean_start_transitions[];
             .lineage.valid and .next_phase_restores_root == true
           )) as $clean_start_followup_proven
         | ($warm_phases[0] // null) as $warm
         | ($warm_phases[1] // null) as $repeat
         | ((($warm_phases | length) == $warm_generations)
-            and ($plateau_transitions | length) > 0
-            and all($plateau_transitions[]; .solver_reuse == true)
+            and ($solver_transitions | length) > 0
+            and all($solver_transitions[]; .solver_reuse == true)
           ) as $all_warm_solver_reuse
         | (all($plateau_transitions[];
             .logical_set.blob_delta == 0
@@ -477,6 +479,12 @@ write_combined_result() {
             .record_set.eligible_delta == 0
             and .record_set.records_after_gc_delta == 0
           )) as $all_warm_record_counts_stable
+        | (if ($bootstrap.clean_start_boundary // false) then true else
+            (($bootstrap.record_set.eligible_delta | type) == "number")
+            and $bootstrap.record_set.eligible_delta == 0
+            and (($bootstrap.record_set.records_after_gc_delta | type) == "number")
+            and $bootstrap.record_set.records_after_gc_delta <= 0
+          end) as $bootstrap_record_count_non_growing
         | ([
             $transitions[].replacement_transport.uploaded_blobs
           ] | add // 0) as $warm_uploaded_blobs
@@ -504,6 +512,7 @@ write_combined_result() {
                 or $bootstrap.logical_set.positive_growth_within_tolerance
               )
               and $all_warm_content_counts_stable
+              and $bootstrap_record_count_non_growing
               and $all_warm_record_counts_stable
               and $final_transition.final_convergence_pair
               and $final_transition.logical_set.within_tolerance
@@ -519,8 +528,10 @@ write_combined_result() {
             warm_generations_measured: ($warm_phases | length),
             clean_start_boundaries: ($clean_start_transitions | length),
             clean_start_followup_proven: $clean_start_followup_proven,
-            plateau_window_start_transition: ($last_clean_start_index + 1),
+            plateau_window_start_transition: ($plateau_floor_index + 1),
             plateau_transitions_measured: ($plateau_transitions | length),
+            bootstrap_record_count_non_growing: $bootstrap_record_count_non_growing,
+            bootstrap_records_after_gc_delta: $bootstrap.record_set.records_after_gc_delta,
             all_warm_content_counts_stable: $all_warm_content_counts_stable,
             all_warm_record_counts_stable: $all_warm_record_counts_stable,
             same_ref_record_growth_observed: ($all_warm_record_counts_stable | not),
@@ -553,6 +564,8 @@ write_combined_result() {
               bootstrap_logical_blob_delta: $bootstrap.logical_set.blob_delta,
               bootstrap_logical_byte_delta: $bootstrap.logical_set.byte_delta,
               bootstrap_required_blob_delta: $bootstrap.logical_set.required_blob_delta,
+              bootstrap_records_after_gc_delta: $bootstrap.record_set.records_after_gc_delta,
+              bootstrap_record_count_non_growing: $bootstrap_record_count_non_growing,
               bootstrap_blob_growth_within_tolerance: (
                 if ($bootstrap.clean_start_boundary // false) then true else
                   (($bootstrap.logical_set.blob_delta | type) == "number")

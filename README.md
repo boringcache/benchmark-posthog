@@ -102,10 +102,12 @@ working space rather than discovering runner exhaustion mid-sequence.
 - `fresh` uses one run-unique state tag for a cold build followed by 2, 4, or 8
   same-ref restores into newly created managed builders (`2` by default).
   Every warm phase uses the exact same source SHA. Cold-to-first-warm movement
-  is recorded separately as bootstrap convergence, while positive growth is
-  bounded. Every chronological transition is reported; the final warm-to-warm
-  pair must plateau within tolerance. Intermediate movement remains evidence
-  of convergence shape rather than an independent failure gate.
+  is recorded separately as bootstrap convergence: scaffold cleanup may reduce
+  the retained record count, but may not increase it, while logical growth is
+  bounded. Every later same-ref record set must remain flat. Every chronological
+  transition is reported; the final warm-to-warm pair must plateau within
+  tolerance. Intermediate movement remains evidence of convergence shape rather
+  than an independent failure gate.
 - `rolling` uses one stable tag scoped by BuildKit image digest, native
   platform, and source stream, then records a single commit build. The first
   run may bootstrap; later runs must report `restore.status=restored` to count

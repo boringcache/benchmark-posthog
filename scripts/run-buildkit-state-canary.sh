@@ -35,9 +35,6 @@ docker_platform="${BORINGCACHE_STATE_CANARY_PLATFORM:-linux/amd64}"
 plateau_tolerance_percent="${BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT:-2}"
 warm_generations="${BORINGCACHE_STATE_CANARY_WARM_GENERATIONS:-2}"
 replay_plan_path="${BORINGCACHE_STATE_CANARY_REPLAY_PLAN:-}"
-replay_max_logical_core_bytes=17179869184
-replay_scorecard_min_logical_core_bytes=6442450944
-replay_scorecard_max_logical_core_bytes=8589934592
 replay_min_cached_steps=68
 
 case "$composition_mode" in
@@ -215,9 +212,6 @@ jq -n \
   --argjson replay_selected_commits "$replay_selected_commits" \
   --argjson plateau_tolerance_percent "$plateau_tolerance_percent" \
   --argjson warm_generations "$warm_generations" \
-  --argjson replay_max_logical_core_bytes "$replay_max_logical_core_bytes" \
-  --argjson replay_scorecard_min_logical_core_bytes "$replay_scorecard_min_logical_core_bytes" \
-  --argjson replay_scorecard_max_logical_core_bytes "$replay_scorecard_max_logical_core_bytes" \
   --argjson replay_min_cached_steps "$replay_min_cached_steps" \
   '{
     schema_version: $schema_version,
@@ -241,9 +235,6 @@ jq -n \
     } end),
     plateau_tolerance_percent: $plateau_tolerance_percent,
     warm_generations: $warm_generations,
-    replay_max_logical_core_bytes: $replay_max_logical_core_bytes,
-    replay_scorecard_min_logical_core_bytes: $replay_scorecard_min_logical_core_bytes,
-    replay_scorecard_max_logical_core_bytes: $replay_scorecard_max_logical_core_bytes,
     replay_min_cached_steps: $replay_min_cached_steps,
     mountcache_enabled: ($composition_mode == "fixture")
   }' > "$artifact_dir/inputs.json"
@@ -314,9 +305,6 @@ write_combined_result() {
     --arg lane "$lane" \
     --argjson tolerance "$plateau_tolerance_percent" \
     --argjson warm_generations "$warm_generations" \
-    --argjson replay_max_logical_core_bytes "$replay_max_logical_core_bytes" \
-    --argjson replay_scorecard_min_logical_core_bytes "$replay_scorecard_min_logical_core_bytes" \
-    --argjson replay_scorecard_max_logical_core_bytes "$replay_scorecard_max_logical_core_bytes" \
     --argjson replay_min_cached_steps "$replay_min_cached_steps" \
     'def absolute_delta_within_tolerance($delta; $limit):
        if (($delta | type) == "number" and ($limit | type) == "number") then
@@ -752,26 +740,29 @@ write_combined_result() {
         | (all($clean_start_generations[];
             .continuity and .next_phase_restores_root == true
           )) as $clean_start_followup_proven
-        | (all($generations[];
-            .logical_set.bytes <= $replay_max_logical_core_bytes
-          )) as $all_logical_core_within_bound
         | ($generations[-1].logical_set.bytes // 0) as $final_logical_core_bytes
-        | ($generations[0].prune.baseline_bytes // 0) as $signed_baseline_bytes
-        | (all($generations[]; .prune.baseline_bytes == $signed_baseline_bytes)) as $baseline_unchanged
-        | (($generations[0].prune.retention_source // "") == "fresh-measured"
-            and all($generations[1:][]; .prune.retention_source == "restored-marker")
-          ) as $retention_sources_valid
+        | ($generations[0].logical_set.bytes // 0) as $first_logical_core_bytes
+        | (all($generations[];
+            .prune.baseline_bytes == ([.prune.cache_usage_after_bytes, 1] | max)
+          )) as $post_clean_baselines_valid
+        | (all($generations[];
+            .prune.retention_source == "post-clean-measured"
+          )) as $retention_sources_valid
         | ([$generations[]
             | select(.prune.triggered and .prune.pruned_records > 0)
-          ]) as $positive_prune_generations
+          ]) as $scaffold_prune_generations
         | (all($generations[];
             .prune.applied == true
             and .prune.target_satisfied == true
-            and .prune.all == false
-            and .prune.filter_count == 0
-            and .prune.max_used_space_bytes == .prune.baseline_bytes
+            and .prune.target_reason == "scaffold-clean"
+            and .prune.all == true
+            and .prune.filter_count == 2
+            and .prune.max_used_space_bytes == 0
             and .prune.keep_duration_ms == 0
             and .prune.cutoff_unix_nano == 0
+            and .prune.reserved_space_bytes == 0
+            and .prune.min_free_space_bytes == 0
+            and .prune.effective_keep_bytes == 0
             and (.prune.records_before - .prune.records_after) == .prune.pruned_records
           )) as $all_prune_contracts_valid
         | (($restored_successors | length) > 0
@@ -805,39 +796,30 @@ write_combined_result() {
               plateau_window_start_sequence: $replay_window_start,
               active_successors_measured: ($active_successors | length),
               clean_start_free: (($clean_start_generations | length) == 0),
-              signed_baseline_bytes: $signed_baseline_bytes,
-              baseline_unchanged: $baseline_unchanged,
+              post_clean_baselines_valid: $post_clean_baselines_valid,
               retention_sources_valid: $retention_sources_valid,
-              max_logical_core_bytes: $replay_max_logical_core_bytes,
-              all_logical_core_within_bound: $all_logical_core_within_bound,
               all_prune_contracts_valid: $all_prune_contracts_valid,
-              positive_prune_generations: ($positive_prune_generations | length),
-              positive_prune_observed: (($positive_prune_generations | length) > 0),
+              scaffold_prune_generations: ($scaffold_prune_generations | length),
+              scaffold_prune_observed: (($scaffold_prune_generations | length) > 0),
               minimum_cached_steps: $replay_min_cached_steps,
               restored_successors_measured: ($restored_successors | length),
               all_restored_successors_hit_contract: $all_restored_successors_hit_contract,
               minimum_observed_successor_cached_steps: (
                 [$restored_successors[].build.cached_steps] | min // 0
               ),
-              working_set_scorecard: {
-                target_min_bytes: $replay_scorecard_min_logical_core_bytes,
-                target_max_bytes: $replay_scorecard_max_logical_core_bytes,
+              growth_observation: {
+                first_logical_core_bytes: $first_logical_core_bytes,
                 final_logical_core_bytes: $final_logical_core_bytes,
-                final_within_target_band: (
-                  $final_logical_core_bytes >= $replay_scorecard_min_logical_core_bytes
-                  and $final_logical_core_bytes <= $replay_scorecard_max_logical_core_bytes
-                )
+                delta_bytes: ($final_logical_core_bytes - $first_logical_core_bytes)
               },
               ready_for_graduation: (
                 if $lane == "replay-full" then
-                  ($clean_start_generations | length) == 0
-                  and $signed_baseline_bytes > 0
-                  and $baseline_unchanged
+                  $clean_start_followup_proven
+                  and $post_clean_baselines_valid
                   and $retention_sources_valid
-                  and $all_logical_core_within_bound
                   and $all_prune_contracts_valid
                   and $all_restored_successors_hit_contract
-                  and ($positive_prune_generations | length) > 0
+                  and ($scaffold_prune_generations | length) == ($generations | length)
                 else
                   null
                 end
@@ -1280,22 +1262,7 @@ run_phase() {
   if [[ -s "$state_summary_path" ]] && jq -e \
     --arg digest "$buildkit_digest" \
     --arg platform "$docker_platform" \
-    'def minimum($left; $right): if $left < $right then $left else $right end;
-      def maximum($left; $right): if $left > $right then $left else $right end;
-      def upstream_percent_bytes($total; $percentage):
-        (((($total * $percentage / 100) / 1073741824) | floor) + 1) * 1000000000;
-      def expected_effective_keep($finalize):
-        ($finalize.prune_min_free_space_bytes - $finalize.prune_disk_free_before_bytes) as $excess
-        | (if $excess > 0 then
-             minimum(
-               $finalize.prune_max_used_space_bytes;
-               $finalize.prune_cache_usage_before_bytes - $excess
-             )
-           else
-             $finalize.prune_max_used_space_bytes
-           end) as $pressure_keep
-        | maximum($pressure_keep; $finalize.prune_reserved_space_bytes);
-      .schema_version == "buildkit-state-summary.v2"
+    '.schema_version == "buildkit-state-summary.v2"
       and .compatibility.image_digest == $digest
       and .compatibility.platform == $platform
       and .compatibility.state_format == "buildkit-state-v1"
@@ -1313,26 +1280,18 @@ run_phase() {
       and .finalize.required_blobs >= 0
       and (.finalize.seconds | type == "number")
       and .finalize.seconds >= 0
-      and .finalize.retention_policy == "signed-working-set-main-cache-v1"
-      and (.finalize.retention_source == "fresh-measured"
-        or .finalize.retention_source == "restored-marker")
-      and (if .restore.status == "restored" then
-             .finalize.retention_source == "restored-marker"
-           else
-             .finalize.retention_source == "fresh-measured"
-           end)
+      and .finalize.retention_policy == "state-window-scaffold-clean-v1"
+      and .finalize.retention_source == "post-clean-measured"
       and (.finalize.retention_disk_usage_baseline_bytes | type == "number")
       and .finalize.retention_disk_usage_baseline_bytes > 0
       and .finalize.prune_applied == true
       and (.finalize.prune_triggered | type == "boolean")
       and .finalize.prune_target_satisfied == true
-      and (.finalize.prune_target_reason == "within-effective-keep"
-        or .finalize.prune_target_reason == "pruned-to-effective-keep")
-      and .finalize.prune_all == false
-      and .finalize.prune_filter_count == 0
+      and .finalize.prune_target_reason == "scaffold-clean"
+      and .finalize.prune_all == true
+      and .finalize.prune_filter_count == 2
       and (.finalize.prune_max_used_space_bytes | type == "number")
-      and .finalize.prune_max_used_space_bytes
-        == .finalize.retention_disk_usage_baseline_bytes
+      and .finalize.prune_max_used_space_bytes == 0
       and (.finalize.prune_duration_ms | type == "number")
       and .finalize.prune_duration_ms >= 0
       and (.finalize.pruned_records | type == "number")
@@ -1354,6 +1313,8 @@ run_phase() {
       and .finalize.prune_cache_usage_after_bytes >= 0
       and .finalize.prune_cache_usage_after_bytes
         <= .finalize.prune_cache_usage_before_bytes
+      and .finalize.retention_disk_usage_baseline_bytes
+        == ([.finalize.prune_cache_usage_after_bytes, 1] | max)
       and (.finalize.prune_disk_total_bytes | type == "number")
       and .finalize.prune_disk_total_bytes > 0
       and (.finalize.prune_disk_free_before_bytes | type == "number")
@@ -1370,38 +1331,19 @@ run_phase() {
         <= .finalize.prune_disk_free_before_bytes
       and .finalize.prune_disk_available_after_bytes
         <= .finalize.prune_disk_free_after_bytes
-      and .finalize.prune_min_free_space_bytes
-        == upstream_percent_bytes(.finalize.prune_disk_total_bytes; 20)
-      and .finalize.prune_reserved_space_bytes == minimum(
-        .finalize.retention_disk_usage_baseline_bytes;
-        minimum(
-          upstream_percent_bytes(.finalize.prune_disk_total_bytes; 10);
-          10000000000
-        )
-      )
-      and .finalize.prune_effective_keep_bytes == expected_effective_keep(.finalize)
-      and .finalize.prune_effective_keep_bytes
-        >= .finalize.prune_reserved_space_bytes
-      and .finalize.prune_effective_keep_bytes
-        <= .finalize.prune_max_used_space_bytes
+      and .finalize.prune_min_free_space_bytes == 0
+      and .finalize.prune_reserved_space_bytes == 0
+      and .finalize.prune_effective_keep_bytes == 0
       and .finalize.prune_triggered
-        == (.finalize.prune_cache_usage_before_bytes
-          > .finalize.prune_effective_keep_bytes)
+        == (.finalize.pruned_records > 0 or .finalize.pruned_bytes > 0)
       and (if .finalize.prune_triggered then
-             .finalize.prune_target_reason == "pruned-to-effective-keep"
-             and .finalize.prune_cache_usage_before_bytes
-               > .finalize.prune_effective_keep_bytes
-             and .finalize.prune_cache_usage_after_bytes
-               <= .finalize.prune_effective_keep_bytes
+             .finalize.pruned_records > 0 or .finalize.pruned_bytes > 0
            else
-             .finalize.prune_target_reason == "within-effective-keep"
-             and .finalize.pruned_records == 0
+             .finalize.pruned_records == 0
              and .finalize.pruned_bytes == 0
              and .finalize.records_before_prune == .finalize.records_after_prune
              and .finalize.prune_cache_usage_before_bytes
                == .finalize.prune_cache_usage_after_bytes
-             and .finalize.prune_cache_usage_before_bytes
-               <= .finalize.prune_effective_keep_bytes
            end)
       and .finalize.content_gc_applied == true
       and (.finalize.content_gc_duration_ms | type == "number")

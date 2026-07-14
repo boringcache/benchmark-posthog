@@ -155,22 +155,22 @@ boringcache() {
   record_count=5
   record_flow_created=4
   record_flow_failure="${MOCK_RECORD_FLOW_FAILURE:-}"
-  retention_source=fresh-measured
+  retention_source=post-clean-measured
   retention_baseline=100000
-  prune_triggered=0
-  prune_target_reason=within-effective-keep
-  pruned_records=0
-  pruned_bytes=0
-  prune_cache_usage_before="$retention_baseline"
+  prune_triggered=1
+  prune_target_reason=scaffold-clean
+  pruned_records=3
+  pruned_bytes=3000
+  prune_cache_usage_before=103000
   prune_cache_usage_after="$retention_baseline"
   prune_disk_total=100000000000
   prune_disk_free_before=50000000000
   prune_disk_free_after=50000000000
   prune_disk_available_before=49000000000
   prune_disk_available_after=49000000000
-  prune_reserved_space="$retention_baseline"
-  prune_min_free_space=19000000000
-  prune_effective_keep="$retention_baseline"
+  prune_reserved_space=0
+  prune_min_free_space=0
+  prune_effective_keep=0
   prune_failure="${MOCK_PRUNE_FAILURE:-}"
   case "$BORINGCACHE_STATE_SUMMARY_PATH" in
     *mount-probe.state-summary.json)
@@ -210,7 +210,6 @@ boringcache() {
       esac
       warm_count="${BORINGCACHE_STATE_CANARY_WARM_GENERATIONS:-2}"
       restore_status=restored
-      retention_source=restored-marker
       if ((warm_index == 1)); then
         restored_generation="$cold_generation"
       else
@@ -261,7 +260,6 @@ boringcache() {
       phase=rolling
       record_count=7
       restore_status=restored
-      retention_source=restored-marker
       restored_generation="$rolling_parent"
       parent="$rolling_parent"
       generation="$rolling_generation"
@@ -300,19 +298,14 @@ boringcache() {
         transport_bytes="$logical_bytes"
       else
         restore_status=restored
-        retention_source=restored-marker
         printf -v restored_generation 'sha256:%064x' "$((199 + replay_index))"
         parent="$restored_generation"
       fi
-      if ((replay_index == 6)) && [[ "${MOCK_DISABLE_REPLAY_POSITIVE_PRUNE:-0}" != 1 ]]; then
-        prune_triggered=1
-        prune_target_reason=pruned-to-effective-keep
-        pruned_records=2
-        pruned_bytes=30000
-        prune_cache_usage_before=120000
-        prune_cache_usage_after=90000
-        prune_disk_free_after=50000030000
-        prune_disk_available_after=49000030000
+      if ((replay_index == 6)) && [[ "${MOCK_DISABLE_REPLAY_SCAFFOLD_PRUNE:-0}" == 1 ]]; then
+        prune_triggered=0
+        pruned_records=0
+        pruned_bytes=0
+        prune_cache_usage_before="$retention_baseline"
       fi
       if ((replay_index == ${MOCK_CLEAN_START_REPLAY_INDEX:-0})); then
         clean_start=1
@@ -331,15 +324,12 @@ boringcache() {
   if [[ -n "${replay_index:-}" ]] && \
      ((replay_index == ${MOCK_CHANGED_REPLAY_BASELINE_INDEX:-0})); then
     retention_baseline=100001
-    prune_cache_usage_before="$retention_baseline"
+    prune_cache_usage_before=103001
     prune_cache_usage_after="$retention_baseline"
-    prune_reserved_space="$retention_baseline"
-    prune_effective_keep="$retention_baseline"
   fi
 
   if [[ "$clean_start" == 1 ]]; then
     restore_status=clean_start
-    retention_source=fresh-measured
     restored_generation=""
     parent=""
     window_baseline_bytes=100000
@@ -418,7 +408,7 @@ boringcache() {
     --argjson published_window_generation_count "$published_window_generation_count" \
     --arg invalid_clean_start "$invalid_clean_start" \
     --argjson include_logical_generation "$(if [[ "${MOCK_OMIT_LOGICAL_GENERATION:-0}" == 1 ]]; then echo false; else echo true; fi)" \
-    --arg retention_policy "${MOCK_RETENTION_POLICY:-signed-working-set-main-cache-v1}" \
+    --arg retention_policy "${MOCK_RETENTION_POLICY:-state-window-scaffold-clean-v1}" \
     --arg retention_source "$retention_source" \
     --argjson retention_baseline "$retention_baseline" \
     --argjson prune_applied "$(if [[ "${MOCK_PRUNE_APPLIED:-1}" == 1 ]]; then echo true; else echo false; fi)" \
@@ -474,9 +464,9 @@ boringcache() {
         prune_triggered: $prune_triggered,
         prune_target_satisfied: true,
         prune_target_reason: $prune_target_reason,
-        prune_all: false,
-        prune_filter_count: 0,
-        prune_max_used_space_bytes: $retention_baseline,
+        prune_all: true,
+        prune_filter_count: 2,
+        prune_max_used_space_bytes: 0,
         pruned_records: $pruned_records,
         pruned_bytes: $pruned_bytes,
         prune_duration_ms: 50,
@@ -694,8 +684,8 @@ boringcache() {
         .finalize.retention_source = "restored-marker"
       elif $prune_failure == "changed-baseline" then
         .finalize.retention_disk_usage_baseline_bytes += 1
-      elif $prune_failure == "unsafe-all" then
-        .finalize.prune_all = true
+      elif $prune_failure == "unsafe-scope" then
+        .finalize.prune_all = false
       elif $prune_failure == "filtered" then
         .finalize.prune_filter_count = 1
       elif $prune_failure == "aged" then
@@ -704,8 +694,7 @@ boringcache() {
         .finalize.prune_cutoff_unix_nano = 1
       elif $prune_failure == "unsatisfied" then
         .finalize.prune_target_satisfied = false
-        | .finalize.prune_target_reason = "unreclaimable-above-effective-keep"
-        | .finalize.prune_cache_usage_after_bytes = (.finalize.prune_effective_keep_bytes + 1)
+        | .finalize.prune_target_reason = "foreign-policy"
       elif $prune_failure == "record-delta" then
         .finalize.records_before_prune += 1
       elif $prune_failure == "gc-link" then
@@ -716,10 +705,8 @@ boringcache() {
         .finalize.prune_min_free_space_bytes += 1
       elif $prune_failure == "effective-keep" then
         .finalize.prune_effective_keep_bytes -= 1
-      elif $prune_failure == "no-op-mutated" then
-        .finalize.pruned_records = 1
-        | .finalize.pruned_bytes = 1
-        | .finalize.records_before_prune += 1
+      elif $prune_failure == "triggered-mismatch" then
+        .finalize.prune_triggered = false
       elif $prune_failure == "" then .
       else error("unknown mocked prune failure")
       end
@@ -1154,25 +1141,25 @@ command jq -e '
   and .current_set.current_set_replacement == true
   and .current_set.only_current_head_fetched == true
   and (.phases[0].state.transport_delta_blobs == 4)
-  and .phases[0].state.finalize.retention_policy == "signed-working-set-main-cache-v1"
-  and .phases[0].state.finalize.retention_source == "restored-marker"
+  and .phases[0].state.finalize.retention_policy == "state-window-scaffold-clean-v1"
+  and .phases[0].state.finalize.retention_source == "post-clean-measured"
   and .phases[0].state.finalize.retention_disk_usage_baseline_bytes == 100000
   and .phases[0].state.finalize.prune_applied == true
-  and .phases[0].state.finalize.prune_triggered == false
+  and .phases[0].state.finalize.prune_triggered == true
   and .phases[0].state.finalize.prune_target_satisfied == true
-  and .phases[0].state.finalize.prune_target_reason == "within-effective-keep"
-  and .phases[0].state.finalize.prune_all == false
-  and .phases[0].state.finalize.prune_filter_count == 0
-  and .phases[0].state.finalize.prune_max_used_space_bytes == 100000
-  and .phases[0].state.finalize.pruned_records == 0
-  and .phases[0].state.finalize.records_before_prune == 7
+  and .phases[0].state.finalize.prune_target_reason == "scaffold-clean"
+  and .phases[0].state.finalize.prune_all == true
+  and .phases[0].state.finalize.prune_filter_count == 2
+  and .phases[0].state.finalize.prune_max_used_space_bytes == 0
+  and .phases[0].state.finalize.pruned_records == 3
+  and .phases[0].state.finalize.records_before_prune == 10
   and .phases[0].state.finalize.records_after_prune == 7
-  and .phases[0].state.finalize.prune_cache_usage_before_bytes == 100000
+  and .phases[0].state.finalize.prune_cache_usage_before_bytes == 103000
   and .phases[0].state.finalize.prune_cache_usage_after_bytes == 100000
   and .phases[0].state.finalize.prune_disk_total_bytes == 100000000000
-  and .phases[0].state.finalize.prune_min_free_space_bytes == 19000000000
-  and .phases[0].state.finalize.prune_reserved_space_bytes == 100000
-  and .phases[0].state.finalize.prune_effective_keep_bytes == 100000
+  and .phases[0].state.finalize.prune_min_free_space_bytes == 0
+  and .phases[0].state.finalize.prune_reserved_space_bytes == 0
+  and .phases[0].state.finalize.prune_effective_keep_bytes == 0
   and .phases[0].state.finalize.content_gc_applied == true
   and .phases[0].state.finalize.content_gc_duration_ms == 100
   and .phases[0].state.finalize.records_before_gc == 7
@@ -1180,7 +1167,7 @@ command jq -e '
   and .phases[0].state.finalize.records_after_gc >= .phases[0].state.finalize.eligible
   and .phases[0].checks.state_record_flow_valid == true
   and .phases[0].state.state_record_flow.status == "recorded"
-  and .phases[0].state.state_record_flow.total_records == 7
+  and .phases[0].state.state_record_flow.total_records == 10
   and .phases[0].state.state_record_flow.created_during_build > 3
   and .phases[0].state.state_record_flow.local_sources_created_during_build == 3
   and (.phases[0].state.state_record_flow.created_local_sources | length) == 3
@@ -1217,33 +1204,30 @@ command jq -e '
   and .current_set.replay.planned_generations == 11
   and .current_set.replay.measured_generations == 11
   and .current_set.replay.clean_start_free == true
-  and .current_set.replay.signed_baseline_bytes == 100000
-  and .current_set.replay.baseline_unchanged == true
+  and .current_set.replay.post_clean_baselines_valid == true
   and .current_set.replay.retention_sources_valid == true
-  and .current_set.replay.all_logical_core_within_bound == true
   and .current_set.replay.all_prune_contracts_valid == true
-  and .current_set.replay.positive_prune_generations == 1
-  and .current_set.replay.positive_prune_observed == true
+  and .current_set.replay.scaffold_prune_generations == 11
+  and .current_set.replay.scaffold_prune_observed == true
   and .current_set.replay.minimum_cached_steps == 68
   and .current_set.replay.restored_successors_measured == 10
   and .current_set.replay.all_restored_successors_hit_contract == true
   and .current_set.replay.minimum_observed_successor_cached_steps == 68
   and .current_set.replay.ready_for_graduation == true
-  and .current_set.replay.working_set_scorecard.target_min_bytes == 6442450944
-  and .current_set.replay.working_set_scorecard.target_max_bytes == 8589934592
-  and .current_set.replay.working_set_scorecard.final_logical_core_bytes == 111000
-  and .current_set.replay.working_set_scorecard.final_within_target_band == false
+  and .current_set.replay.growth_observation.first_logical_core_bytes == 101000
+  and .current_set.replay.growth_observation.final_logical_core_bytes == 111000
+  and .current_set.replay.growth_observation.delta_bytes == 10000
   and .current_set.replay.all_successors_within_tolerance == true
   and (.current_set.replay.generations | length) == 11
   and .current_set.replay.generations[0].continuity == true
-  and .current_set.replay.generations[0].prune.retention_source == "fresh-measured"
-  and .current_set.replay.generations[0].prune.triggered == false
-  and .current_set.replay.generations[0].prune.pruned_records == 0
-  and .current_set.replay.generations[5].prune.retention_source == "restored-marker"
+  and .current_set.replay.generations[0].prune.retention_source == "post-clean-measured"
+  and .current_set.replay.generations[0].prune.triggered == true
+  and .current_set.replay.generations[0].prune.pruned_records == 3
+  and .current_set.replay.generations[5].prune.retention_source == "post-clean-measured"
   and .current_set.replay.generations[5].prune.triggered == true
-  and .current_set.replay.generations[5].prune.target_reason == "pruned-to-effective-keep"
-  and .current_set.replay.generations[5].prune.pruned_records == 2
-  and .current_set.replay.generations[5].prune.records_before == 7
+  and .current_set.replay.generations[5].prune.target_reason == "scaffold-clean"
+  and .current_set.replay.generations[5].prune.pruned_records == 3
+  and .current_set.replay.generations[5].prune.records_before == 8
   and .current_set.replay.generations[5].prune.records_after == 5
   and .current_set.replay.generations[1].logical_set.blob_delta_from_previous == 1
   and .current_set.replay.generations[1].transport_delta.blobs == 1
@@ -1298,66 +1282,56 @@ command jq -e '
   and .backend_current_set.valid == false
 ' "$backend_tail_dir/canary-result.json" >/dev/null
 
-no_positive_prune_dir="$test_root/replay-no-positive-prune"
-if MOCK_DISABLE_REPLAY_POSITIVE_PRUNE=1 \
-  run_mock replay-full "$no_positive_prune_dir" >/dev/null 2>&1; then
-  echo "Expected a replay without a triggered positive prune to fail graduation" >&2
+missing_scaffold_prune_dir="$test_root/replay-missing-scaffold-prune"
+if MOCK_DISABLE_REPLAY_SCAFFOLD_PRUNE=1 \
+  run_mock replay-full "$missing_scaffold_prune_dir" >/dev/null 2>&1; then
+  echo "Expected a replay without per-build scaffold cleanup to fail graduation" >&2
   exit 1
 fi
 command jq -e '
   .success == false
   and .current_set.replay.clean_start_free == true
-  and .current_set.replay.baseline_unchanged == true
-  and .current_set.replay.all_logical_core_within_bound == true
+  and .current_set.replay.post_clean_baselines_valid == true
   and .current_set.replay.all_prune_contracts_valid == true
-  and .current_set.replay.positive_prune_generations == 0
-  and .current_set.replay.positive_prune_observed == false
+  and .current_set.replay.scaffold_prune_generations == 10
+  and .current_set.replay.scaffold_prune_observed == true
   and .current_set.replay.ready_for_graduation == false
-' "$no_positive_prune_dir/canary-result.json" >/dev/null
+' "$missing_scaffold_prune_dir/canary-result.json" >/dev/null
 
-changed_baseline_dir="$test_root/replay-changed-signed-baseline"
-if MOCK_CHANGED_REPLAY_BASELINE_INDEX=8 \
-  run_mock replay-full "$changed_baseline_dir" >/dev/null 2>&1; then
-  echo "Expected a replay that changed its signed working-set baseline to fail graduation" >&2
-  exit 1
-fi
+changed_baseline_dir="$test_root/replay-changed-post-clean-baseline"
+MOCK_CHANGED_REPLAY_BASELINE_INDEX=8 \
+  run_mock replay-full "$changed_baseline_dir" >/dev/null
 command jq -e '
-  .success == false
+  .success == true
   and all(.phases[]; .checks.summary_valid == true and .success == true)
   and .current_set.replay.clean_start_free == true
   and .current_set.replay.retention_sources_valid == true
-  and .current_set.replay.baseline_unchanged == false
-  and .current_set.replay.positive_prune_observed == true
-  and .current_set.replay.ready_for_graduation == false
+  and .current_set.replay.post_clean_baselines_valid == true
+  and .current_set.replay.scaffold_prune_observed == true
+  and .current_set.replay.generations[7].prune.baseline_bytes == 100001
+  and .current_set.replay.ready_for_graduation == true
 ' "$changed_baseline_dir/canary-result.json" >/dev/null
 
 oversized_replay_dir="$test_root/replay-oversized-logical-core"
-if MOCK_OVERSIZED_REPLAY_INDEX=7 \
-  run_mock replay-full "$oversized_replay_dir" >/dev/null 2>&1; then
-  echo "Expected a replay above the 16 GiB logical-core ceiling to fail graduation" >&2
-  exit 1
-fi
+MOCK_OVERSIZED_REPLAY_INDEX=7 \
+  run_mock replay-full "$oversized_replay_dir" >/dev/null
 command jq -e '
-  .success == false
+  .success == true
   and .current_set.replay.clean_start_free == true
-  and .current_set.replay.positive_prune_observed == true
-  and .current_set.replay.all_logical_core_within_bound == false
-  and .current_set.replay.ready_for_graduation == false
+  and .current_set.replay.scaffold_prune_observed == true
+  and .current_set.replay.ready_for_graduation == true
   and .current_set.replay.generations[6].logical_set.bytes == 17179869185
 ' "$oversized_replay_dir/canary-result.json" >/dev/null
 
 clean_start_dir="$test_root/replay-clean-start"
-if MOCK_CLEAN_START_REPLAY_INDEX=6 run_mock replay-full "$clean_start_dir" >/dev/null 2>&1; then
-  echo "Expected a fresh -10 replay with a clean-start boundary to fail graduation" >&2
-  exit 1
-fi
+MOCK_CLEAN_START_REPLAY_INDEX=6 run_mock replay-full "$clean_start_dir" >/dev/null
 command jq -e '
-  .success == false
+  .success == true
   and .current_set.current_set_replacement == true
   and .current_set.clean_start_boundaries == 1
   and .current_set.clean_start_followup_proven == true
   and .current_set.replay.clean_start_free == false
-  and .current_set.replay.ready_for_graduation == false
+  and .current_set.replay.ready_for_graduation == true
   and .current_set.replay.plateau_window_start_sequence == 6
   and .current_set.replay.active_successors_measured == 5
   and .current_set.replay.all_successors_within_tolerance == true
@@ -1391,18 +1365,15 @@ command jq -e '
 ' "$clean_start_dir/canary-result.json" >/dev/null
 
 restore_bytes_clean_start_dir="$test_root/replay-clean-start-restore-bytes"
-if MOCK_CLEAN_START_REPLAY_INDEX=6 \
+MOCK_CLEAN_START_REPLAY_INDEX=6 \
   MOCK_CLEAN_START_REASON=restore_bytes \
-  run_mock replay-full "$restore_bytes_clean_start_dir" >/dev/null 2>&1; then
-  echo "Expected a restore-byte clean-start boundary to fail fresh -10 graduation" >&2
-  exit 1
-fi
+  run_mock replay-full "$restore_bytes_clean_start_dir" >/dev/null
 command jq -e '
-  .success == false
+  .success == true
   and .current_set.clean_start_boundaries == 1
   and .current_set.clean_start_followup_proven == true
   and .current_set.replay.clean_start_free == false
-  and .current_set.replay.ready_for_graduation == false
+  and .current_set.replay.ready_for_graduation == true
   and .phases[5].state.state_window.rebase_reason == "restore_bytes"
   and .phases[5].state.restore.candidate_bytes == 21474836480
   and .phases[5].state.state_window.max_restore_bytes == 17179869184
@@ -1510,7 +1481,7 @@ for prune_failure in \
   not-applied \
   wrong-source \
   changed-baseline \
-  unsafe-all \
+  unsafe-scope \
   filtered \
   aged \
   cutoff \
@@ -1520,11 +1491,11 @@ for prune_failure in \
   disk \
   min-free \
   effective-keep \
-  no-op-mutated; do
+  triggered-mismatch; do
   prune_failure_dir="$test_root/retention-${prune_failure}"
   if MOCK_PRUNE_FAILURE="$prune_failure" \
     run_mock fresh "$prune_failure_dir" >/dev/null 2>&1; then
-    echo "Expected an unsafe signed working-set retention report to fail closed (${prune_failure})" >&2
+    echo "Expected an unsafe scaffold-clean retention report to fail closed (${prune_failure})" >&2
     exit 1
   fi
   command jq -e '

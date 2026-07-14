@@ -146,10 +146,13 @@ The canary requires explicit `save.logical_generation_blobs` and
 absent. CAS upload bytes/counts remain explicitly labeled as transport delta;
 they are not presented as an exact parent-set difference. The artifact also
 records parent/restored/current generation lineage, the
-`complete-main-cache-v1` retention policy, terminal content-GC application and
-timing, and unchanged before/after main-cache record counts. A phase is invalid
-unless GC leaves the complete main record set intact and that set still covers
-every eligible finalizer record.
+`state-window-scaffold-clean-v1` policy, its `post-clean-measured` baseline,
+two scoped local-source selectors, terminal content-GC application and timing,
+and before/after scaffold-removal counts. A phase is invalid if a size or age
+policy appears, the post-clean baseline disagrees with measured BuildKit DU, or
+GC changes the remaining non-scaffold record set. Changed-source growth is
+reported rather than disguised as a fixed backend size bound; signed restore
+window rebases are accepted only when a following phase restores the new root.
 The reported 0/1 head-fetch count is derived from the state summary's single
 exact restored-generation field; it is not a packet counter. Fresh canaries
 only pass when the final same-ref warm pair plateaus within the selected

@@ -8,6 +8,20 @@ image_index_verifier="$repo_root/scripts/verify-buildkit-image-index.sh"
 test_root="$(mktemp -d "${TMPDIR:-/tmp}/buildkit-state-canary-test.XXXXXX")"
 trap 'rm -rf "$test_root"' EXIT
 
+mock_source_dockerfile="$test_root/source.Dockerfile"
+cat > "$mock_source_dockerfile" <<'EOF'
+FROM node:24-bookworm AS frontend-build
+RUN bin/turbo --filter=@posthog/frontend build
+
+FROM node:24-bookworm AS node-scripts-build
+RUN NODE_OPTIONS="--max-old-space-size=4096" CI=1 pnpm --filter=@posthog/plugin-transpiler... deploy --prod /tmp/prod && \
+    NODE_OPTIONS="--max-old-space-size=4096" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24 && \
+    NODE_OPTIONS="--max-old-space-size=4096" bin/turbo --filter=@posthog/plugin-transpiler build
+
+FROM unit:1.34.2-python3.13
+RUN true
+EOF
+
 source_sha="$(printf '1%.0s' {1..40})"
 image_digest="sha256:$(printf 'a%.0s' {1..64})"
 cold_generation="sha256:$(printf 'b%.0s' {1..64})"
@@ -934,6 +948,7 @@ run_mock() {
     write_mock_replay_plan "$lane" "$artifact_dir"
   fi
   MOCK_CURRENT_SHA="$source_sha"
+  POSTHOG_SOURCE_DOCKERFILE="$mock_source_dockerfile" \
   BORINGCACHE_STATE_CANARY_LANE="$lane" \
     BORINGCACHE_STATE_CANARY_WORKSPACE=boringcache/benchmark-posthog \
     BORINGCACHE_STATE_CANARY_TAG="mock-${lane}" \

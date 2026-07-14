@@ -163,8 +163,13 @@ resources behind, and show more cached steps plus fewer executed steps than the
 cold build. The result records lineage, solver reuse, logical deltas,
 percentages, and tolerance status for every transition so 4- and 8-warm runs
 can show whether convergence is monotonic, oscillating, or still moving. The
-core canary forces BuildKit mountcache off so archive growth cannot be mistaken
-for state-generation growth.
+backend audit fails closed unless the tag resolves to the exact just-published
+generation and size. Superseded untagged versions are recorded separately as
+asynchronous retention telemetry: they do not affect restore correctness or
+stop later generations, but they must converge through server compaction and a
+post-settle storage audit before release. The core canary forces BuildKit
+mountcache off so archive growth cannot be mistaken for state-generation
+growth.
 
 Replay artifacts add the exact source plan and, for every measured generation,
 the committed/restored/parent lineage, logical current-set bytes and blobs,

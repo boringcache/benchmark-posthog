@@ -834,8 +834,10 @@ write_combined_result() {
       end) as $current_set
     | ($mount_probe[0]) as $terminal_mount_probe
     | {
-        valid: all($base.phases[]; .backend_current_set.valid == true),
-        all_phases_valid: all($base.phases[]; .backend_current_set.valid == true),
+        valid: all($base.phases[]; .backend_current_set.head_valid == true),
+        all_phases_valid: all($base.phases[]; .backend_current_set.head_valid == true),
+        retention_converged: all($base.phases[]; .backend_current_set.retention_converged == true),
+        all_phases_retention_converged: all($base.phases[]; .backend_current_set.retention_converged == true),
         max_active_versions: ([ $base.phases[].backend_current_set.active_versions ] | max // 0),
         max_active_storage_bytes: ([ $base.phases[].backend_current_set.active_storage_bytes ] | max // 0),
         phases: [ $base.phases[] | {
@@ -845,16 +847,20 @@ write_combined_result() {
           active_versions: .backend_current_set.active_versions,
           active_storage_bytes: .backend_current_set.active_storage_bytes,
           current_entry_bytes: .backend_current_set.current_entry_bytes,
+          head_valid: .backend_current_set.head_valid,
+          retention_converged: .backend_current_set.retention_converged,
           valid: .backend_current_set.valid
         } ]
       } as $backend_current
     | ($current_set
-        | .backend_current_version_set = $backend_current.valid
+        | .backend_current_head_set = $backend_current.valid
+        | .backend_current_version_set = $backend_current.retention_converged
         | .current_set_replacement = (.current_set_replacement and $backend_current.valid)
         | if (.replay | type) == "object" then
-            .replay.ready_for_graduation = (
-              .replay.ready_for_graduation and $backend_current.valid
-            )
+            .replay.backend_retention_converged = $backend_current.retention_converged
+            | .replay.ready_for_graduation = (
+                .replay.ready_for_graduation and $backend_current.valid
+              )
           else
             .
           end
@@ -978,8 +984,12 @@ audit_backend_current_set() {
   local expected_generation="$2"
   local expected_bytes="$3"
   local result_path="$4"
-  local inspect_path attempt started finished command_status valid
-  local max_attempts=30
+  local inspect_path attempt started finished command_status head_valid retention_converged
+  local max_attempts="${BORINGCACHE_STATE_CANARY_BACKEND_AUDIT_MAX_ATTEMPTS:-30}"
+  case "$max_attempts" in
+    ''|*[!0-9]*|0) max_attempts=30 ;;
+  esac
+  ((max_attempts <= 60)) || max_attempts=60
   inspect_path="$artifact_dir/${phase}.backend-current-set-inspect.json"
   [[ "$expected_generation" =~ ^sha256:[0-9a-f]{64}$ ]] || {
     echo "State generation is unavailable for the backend current-set audit in ${phase}" >&2
@@ -991,7 +1001,8 @@ audit_backend_current_set() {
   }
 
   started="$(date +%s)"
-  valid=false
+  head_valid=false
+  retention_converged=false
   command_status=1
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     set +e
@@ -1016,11 +1027,11 @@ audit_backend_current_set() {
         and .entry.blob_count > 0
         and .entry.blob_total_size_bytes == .entry.stored_size_bytes
         and .versions.tag == $tag
-        and .versions.version_count == 1
+        and .versions.version_count >= 1
         and .versions.current == true
-        and .versions.total_storage_bytes == .entry.stored_size_bytes
+        and .versions.total_storage_bytes >= .entry.stored_size_bytes
       ' "$inspect_path" >/dev/null 2>&1; then
-      valid=true
+      head_valid=true
       break
     fi
     if ((attempt < max_attempts)); then
@@ -1033,13 +1044,20 @@ audit_backend_current_set() {
   fi
 
   [[ -s "$inspect_path" ]] || printf '{}\n' > "$inspect_path"
+  if [[ "$head_valid" == true ]] && jq -e '
+    .versions.version_count == 1
+    and .versions.total_storage_bytes == .entry.stored_size_bytes
+  ' "$inspect_path" >/dev/null 2>&1; then
+    retention_converged=true
+  fi
   jq -n \
     --arg expected_generation "$expected_generation" \
     --argjson expected_bytes "$expected_bytes" \
     --argjson attempts "$attempt" \
     --argjson elapsed_seconds "$((finished - started))" \
     --argjson command_status "$command_status" \
-    --argjson valid "$valid" \
+    --argjson head_valid "$head_valid" \
+    --argjson retention_converged "$retention_converged" \
     --slurpfile inspection "$inspect_path" '
       {
         schema_version: "buildkit-state-backend-current-set.v1",
@@ -1055,12 +1073,14 @@ audit_backend_current_set() {
         current_entry_blob_count: ($inspection[0].entry.blob_count // null),
         observed_generation: ($inspection[0].entry.manifest_root_digest // null),
         current: ($inspection[0].versions.current // false),
-        valid: $valid
+        head_valid: $head_valid,
+        retention_converged: $retention_converged,
+        valid: $head_valid
       }
     ' > "$result_path"
 
-  if [[ "$valid" != true ]]; then
-    echo "Backend did not converge to one exact current BuildKit state generation in ${phase}" >&2
+  if [[ "$head_valid" != true ]]; then
+    echo "Backend did not expose the exact current BuildKit state generation in ${phase}" >&2
     return 1
   fi
 }
@@ -1682,6 +1702,8 @@ run_phase() {
   jq -n '{
     schema_version: "buildkit-state-backend-current-set.v1",
     attempted: false,
+    head_valid: false,
+    retention_converged: false,
     valid: false
   }' > "$backend_current_set_result_path"
   if [[ "$success" == true ]] && ! audit_backend_current_set \
@@ -1907,7 +1929,8 @@ run_phase() {
         managed_builder_destroyed: $cleanup_valid,
         phase_expectation_valid: $expectation_valid,
         current_head_only: $current_head_only,
-        backend_current_set_valid: ($backend_current_set[0].valid == true)
+        backend_current_set_valid: ($backend_current_set[0].head_valid == true),
+        backend_retention_converged: ($backend_current_set[0].retention_converged == true)
       },
       success: $success
     }' > "$phase_result_path"

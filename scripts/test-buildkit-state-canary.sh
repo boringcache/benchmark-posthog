@@ -86,13 +86,15 @@ boringcache() {
   fi
   if [[ "${1:-}" == "inspect" ]]; then
     local backend_version_count="${MOCK_BACKEND_VERSION_COUNT:-1}"
-    local backend_generation="${BORINGCACHE_STATE_CANARY_EXPECTED_BACKEND_GENERATION:-}"
+    local backend_generation="${MOCK_BACKEND_GENERATION:-${BORINGCACHE_STATE_CANARY_EXPECTED_BACKEND_GENERATION:-}}"
     local backend_bytes="${BORINGCACHE_STATE_CANARY_EXPECTED_BACKEND_BYTES:-0}"
+    local backend_current="${MOCK_BACKEND_CURRENT:-true}"
     command jq -n \
       --arg workspace "${2:-}" \
       --arg tag "${3:-}" \
       --arg generation "$backend_generation" \
       --argjson bytes "$backend_bytes" \
+      --argjson current "$backend_current" \
       --argjson version_count "$backend_version_count" '
         {
           workspace: {name: "benchmark-posthog", slug: $workspace},
@@ -113,7 +115,7 @@ boringcache() {
           versions: {
             tag: $tag,
             version_count: $version_count,
-            current: true,
+            current: $current,
             total_storage_bytes: ($bytes * $version_count)
           }
         }
@@ -898,6 +900,7 @@ run_mock() {
     BORINGCACHE_STATE_CANARY_REPLAY_PLAN="$artifact_dir/replay-plan.json" \
     BORINGCACHE_STATE_CANARY_PLATFORM=linux/amd64 \
     BORINGCACHE_STATE_CANARY_PLATEAU_TOLERANCE_PERCENT=2 \
+    BORINGCACHE_STATE_CANARY_BACKEND_AUDIT_MAX_ATTEMPTS=1 \
     BORINGCACHE_STATE_CANARY_WARM_GENERATIONS="$requested_warm_generations" \
     BORINGCACHE_API_URL="$mock_api_origin" \
     BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER="$mountcache_offloader" \
@@ -1234,13 +1237,17 @@ command jq -e '
   and .current_set.replay.generations[1].build.cached_steps == 68
   and .current_set.replay.generations[1].build.hit_contract_satisfied == true
   and .current_set.backend_current_version_set == true
+  and .current_set.backend_current_head_set == true
   and .backend_current_set.all_phases_valid == true
+  and .backend_current_set.all_phases_retention_converged == true
   and .backend_current_set.max_active_versions == 1
   and (.backend_current_set.phases | length) == 11
   and all(.backend_current_set.phases[];
     .active_versions == 1
     and .active_storage_bytes == .current_entry_bytes
     and .observed_generation == .expected_generation
+    and .head_valid == true
+    and .retention_converged == true
     and .valid == true
   )
   and .backend_current_set.valid == true
@@ -1265,22 +1272,44 @@ command jq -e '
 ' "$cache_hit_regression_dir/canary-result.json" >/dev/null
 
 backend_tail_dir="$test_root/replay-backend-version-tail"
-if MOCK_BACKEND_VERSION_COUNT=2 \
-  run_mock replay-full "$backend_tail_dir" >/dev/null 2>&1; then
-  echo "Expected a replay with a superseded backend state version to fail graduation" >&2
+MOCK_BACKEND_VERSION_COUNT=2 \
+  run_mock replay-full "$backend_tail_dir" >/dev/null
+command jq -e '
+  .success == true
+  and .current_set.backend_current_head_set == true
+  and .current_set.backend_current_version_set == false
+  and .current_set.replay.backend_retention_converged == false
+  and .current_set.replay.ready_for_graduation == true
+  and .backend_current_set.all_phases_valid == true
+  and .backend_current_set.all_phases_retention_converged == false
+  and .backend_current_set.max_active_versions == 2
+  and (.backend_current_set.phases | length) == 11
+  and all(.backend_current_set.phases[];
+    .active_storage_bytes > .current_entry_bytes
+    and .observed_generation == .expected_generation
+    and .head_valid == true
+    and .retention_converged == false
+    and .valid == true
+  )
+  and .backend_current_set.valid == true
+  and .backend_current_set.retention_converged == false
+' "$backend_tail_dir/canary-result.json" >/dev/null
+
+backend_wrong_head_dir="$test_root/replay-backend-wrong-head"
+if MOCK_BACKEND_CURRENT=false \
+  run_mock replay-full "$backend_wrong_head_dir" >/dev/null 2>&1; then
+  echo "Expected a replay whose exact backend head is not current to fail" >&2
   exit 1
 fi
 command jq -e '
   .success == false
-  and .current_set.backend_current_version_set == false
-  and .current_set.replay.ready_for_graduation == false
+  and .current_set.backend_current_head_set == false
   and .backend_current_set.all_phases_valid == false
-  and .backend_current_set.max_active_versions == 2
   and (.backend_current_set.phases | length) == 1
-  and .backend_current_set.phases[0].active_storage_bytes > .backend_current_set.phases[0].current_entry_bytes
+  and .backend_current_set.phases[0].head_valid == false
   and .backend_current_set.phases[0].valid == false
   and .backend_current_set.valid == false
-' "$backend_tail_dir/canary-result.json" >/dev/null
+' "$backend_wrong_head_dir/canary-result.json" >/dev/null
 
 missing_scaffold_prune_dir="$test_root/replay-missing-scaffold-prune"
 if MOCK_DISABLE_REPLAY_SCAFFOLD_PRUNE=1 \

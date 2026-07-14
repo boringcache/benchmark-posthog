@@ -150,6 +150,8 @@ require_text "$runner" 'buildkit-state-backend-current-set.v1'
 require_text "$runner" 'boringcache inspect "$workspace" "$cache_tag" --json'
 require_text "$runner" '.versions.version_count == 1'
 require_text "$runner" '.versions.total_storage_bytes == .entry.stored_size_bytes'
+require_text "$runner" 'backend_current_head_set'
+require_text "$runner" 'retention_converged'
 require_text "$runner" '.finalize.content_gc_applied == true'
 require_text "$runner" '.finalize.records_after_prune == .finalize.records_before_gc'
 require_text "$runner" '.finalize.records_before_gc == .finalize.records_after_gc'
@@ -170,7 +172,7 @@ require_text "$test_runner" "Expected a replay without per-build scaffold cleanu
 require_text "$test_runner" "replay-oversized-logical-core"
 require_text "$test_runner" "Expected an unsafe scaffold-clean retention report to fail closed"
 require_text "$test_runner" "Expected a replay successor below the PostHog cache-hit floor to fail graduation"
-require_text "$test_runner" "Expected a replay with a superseded backend state version to fail graduation"
+require_text "$test_runner" "Expected a replay whose exact backend head is not current to fail"
 require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode == 'fixture' && '1' || '0' }}"
 require_text "$workflow" "Observed BuildKit state record flow"
 

@@ -466,14 +466,17 @@ boringcache() {
     --argjson mountcache_enabled "$(if [[ "${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}" == fixture ]]; then echo true; else echo false; fi)" \
     --argjson is_probe "$(if [[ "$is_probe" == 1 ]]; then echo true; else echo false; fi)" \
     --argjson mountcache_hydrate_errors "$(if [[ "$is_probe" == 1 ]]; then echo "${MOCK_MOUNTCACHE_PROBE_HYDRATE_ERRORS:-0}"; else echo "${MOCK_MOUNTCACHE_HYDRATE_ERRORS:-0}"; fi)" \
+    --argjson lazy_content_hydration_failures "${MOCK_LAZY_CONTENT_HYDRATION_FAILURES:-0}" \
     --argjson composition_short_circuit "$(if [[ "${MOCK_COMPOSITION_SHORT_CIRCUIT:-0}" == 1 ]]; then echo true; else echo false; fi)" \
     '{
-      schema_version: "buildkit-state-summary.v2",
+      schema_version: "buildkit-state-summary.v3",
       restore: {
         status: $restore_status,
         generation: (if $restored_generation == "" then null else $restored_generation end),
         bytes: (if $restore_status == "restored" then $logical_bytes else 0 end),
-        files: (if $restore_status == "restored" then $logical_blobs else 0 end)
+        files: (if $restore_status == "restored" then $logical_blobs else 0 end),
+        lazy_content_blobs: (if $restore_status == "restored" then 10 else 0 end),
+        lazy_content_bytes: (if $restore_status == "restored" then 10000 else 0 end)
       },
       daemon_ready_seconds: 0.1,
       finalize: {
@@ -564,10 +567,18 @@ boringcache() {
         status: $save_status,
         generation: (if $generation == "" then null else $generation end),
         parent: (if $parent == "" then null else $parent end),
-        reused_blobs: $logical_blobs,
-        reused_bytes: $logical_bytes,
+        reused_blobs: ($logical_blobs - $transport_blobs),
+        reused_bytes: ($logical_bytes - $transport_bytes),
         uploaded_blobs: $transport_blobs,
         uploaded_bytes: $transport_bytes,
+        lazy_content_runtime_status: (if $restore_status == "restored" then "recorded" else "not_applicable" end),
+        lazy_content_available_blobs: (if $restore_status == "restored" then 10 else 0 end),
+        lazy_content_available_bytes: (if $restore_status == "restored" then 10000 else 0 end),
+        lazy_content_hydrated_blobs: (if $restore_status == "restored" and ($is_probe | not) then 8 else 0 end),
+        lazy_content_hydrated_bytes: (if $restore_status == "restored" and ($is_probe | not) then 8000 else 0 end),
+        lazy_content_hydration_attempts: (if $restore_status == "restored" and ($is_probe | not) then 8 else 0 end),
+        lazy_content_hydration_failures: $lazy_content_hydration_failures,
+        lazy_content_hydration_milliseconds: (if $restore_status == "restored" and ($is_probe | not) then 10 else 0 end),
         publish_status: $publish_status
       },
       compatibility: {
@@ -1772,6 +1783,20 @@ command jq -e '
     and .state.mount_cache.aborted_archives == 0
   )
   and all(.phases[]; .checks.tool_cache_valid == true)
+  and all(.phases[];
+    .state.logical_generation_blobs == (.state.save.reused_blobs + .state.save.uploaded_blobs)
+    and .state.logical_generation_bytes == (.state.save.reused_bytes + .state.save.uploaded_bytes)
+    and .state.save.lazy_content_hydration_failures == 0
+  )
+  and all(.phases[1:];
+    .state.restore.lazy_content_blobs == 10
+    and .state.restore.lazy_content_bytes == 10000
+    and .state.save.lazy_content_runtime_status == "recorded"
+    and .state.save.lazy_content_available_blobs == .state.restore.lazy_content_blobs
+    and .state.save.lazy_content_available_bytes == .state.restore.lazy_content_bytes
+  )
+  and .terminal_mount_probe.lazy_content.signed_blobs == 10
+  and .terminal_mount_probe.lazy_content.hydration_failures == 0
 ' "$composition_dir/canary-result.json" >/dev/null
 
 composition_short_circuit_dir="$test_root/composition-short-circuit"
@@ -1813,6 +1838,12 @@ command jq -e '
   and .terminal_mount_probe.hydrate_errors == 1
   and .terminal_mount_probe.valid == false
 ' "$composition_mount_error_dir/canary-result.json" >/dev/null
+
+lazy_content_error_dir="$test_root/lazy-content-error"
+if MOCK_LAZY_CONTENT_HYDRATION_FAILURES=1 run_mock fresh "$lazy_content_error_dir" 2 fixture >/dev/null 2>&1; then
+  echo "Expected immutable-content hydration errors to fail the composition canary" >&2
+  exit 1
+fi
 
 mountcache_dir="$test_root/mountcache-failure"
 write_mock_preflight "$mountcache_dir"

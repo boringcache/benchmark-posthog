@@ -133,7 +133,11 @@ require_text "$runner" "replay-repeat-"
 require_text "$runner" "preflight-checklist.json"
 require_text "$runner" ".save.logical_generation_blobs"
 require_text "$runner" ".save.logical_generation_bytes"
-require_text "$runner" 'buildkit-state-summary.v2'
+require_text "$runner" 'buildkit-state-summary.v3'
+require_text "$runner" '.restore.lazy_content_blobs'
+require_text "$runner" '.save.lazy_content_runtime_status == "recorded"'
+require_text "$runner" '.save.lazy_content_hydration_failures == 0'
+require_text "$runner" '.save.logical_generation_blobs == (.save.reused_blobs + .save.uploaded_blobs)'
 require_text "$runner" 'state-window-scaffold-clean-v1'
 require_text "$runner" '.finalize.retention_source == "post-clean-measured"'
 require_text "$runner" '.finalize.retention_disk_usage_baseline_bytes > 0'
@@ -182,6 +186,7 @@ require_text "$test_runner" "Expected same-source replay required-body growth to
 require_text "$test_runner" "Expected a replay whose exact backend head is not current to fail"
 require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode == 'fixture' && '1' || '0' }}"
 require_text "$workflow" "Observed BuildKit state record flow"
+require_text "$workflow" "Lazy immutable content"
 require_text "$workflow" "changed-source solver floor"
 
 for file in "$workflow" "$runner" "$preflight_runner"; do
@@ -193,9 +198,8 @@ for file in "$workflow" "$runner" "$preflight_runner"; do
 done
 reject_text "$workflow" "--tool-cache"
 reject_text "$preflight_runner" "--tool-cache"
-reject_text "$runner" ".save.reused_blobs"
-reject_text "$runner" ".save.reused_bytes"
 reject_text "$runner" 'buildkit-state-summary.v1'
+reject_text "$runner" 'buildkit-state-summary.v2'
 reject_text "$runner" '36507222016'
 reject_text "$runner" 'max-used-space-main-cache-v1'
 

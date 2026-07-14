@@ -602,7 +602,11 @@ jobs:
               jq -r '.phases[] | [
                 .phase,
                 (if .success then "pass" else "fail" end),
-                .state.restore_status,
+                (if .state.restore_status == "clean_start" then
+                  "clean_start (" + (.state.state_window.rebase_reason // "unknown")
+                  + "; candidate=" + ((.state.restore.candidate_bytes // 0) / 1048576 | floor | tostring)
+                  + " MiB; root window=" + ((.state.state_window.published_generation_count // 0) | tostring) + ")"
+                else .state.restore_status end),
                 (.state.head_generations_fetched | tostring),
                 (.phase_seconds | tostring) + "s",
                 (if .state.overhead_seconds == null then "n/a" else ((.state.overhead_seconds | tostring) + "s") end),
@@ -614,29 +618,42 @@ jobs:
                 (if .checks.managed_builder_destroyed then "yes" else "no" end)
               ] | "| " + join(" | ") + " |"' "$result"
               echo
+              echo "#### Observed BuildKit state record flow"
+              echo
+              echo "Record IDs stay opaque in the uploaded JSON; this table shows the observed descriptions and grouped counts without pinning their text as a contract."
+              echo
+              echo "| Phase | Valid | Total / eligible / created | Local total / created | Groups (total/created) | Created descriptions |"
+              echo "|---|---:|---:|---:|---|---|"
+              bash scripts/render-buildkit-state-record-flow-summary.sh "$result"
+              echo
               if jq -e '.current_set.transitions | type == "array" and length > 0' "$result" >/dev/null; then
-                echo "| Transition | Kind | Lineage | Head only | Solver reuse | Logical/required delta | Record delta | Replacement upload | Count plateau | Final pair |"
-                echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"
+                echo "| Transition | Kind | Lineage | Rebase follow-up | Head only | Solver reuse | Logical/required delta | Record delta | Replacement upload | Count plateau | Final pair |"
+                echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
                 jq -r '.current_set.transitions[] | [
                   ((.from_phase | tostring) + " → " + (.to_phase | tostring)),
                   .kind,
                   (if .lineage.valid then "yes" else "no" end),
+                  (if .clean_start_boundary then (if .next_phase_restores_root then "yes" else "no" end) else "n/a" end),
                   (if .current_head_only then "yes" else "no" end),
-                  (if .solver_reuse then "yes" else "no" end),
+                  (if .solver_reuse == null then "reset" elif .solver_reuse then "yes" else "no" end),
                   ((.logical_set.blob_delta | tostring) + " logical blobs / " + (.logical_set.required_blob_delta | tostring) + " required bodies / " + (.logical_set.byte_delta | tostring) + " bytes"),
                   ((.record_set.eligible_delta | tostring) + " eligible / " + (.record_set.records_after_gc_delta | tostring) + " after GC"),
                   ((.replacement_transport.uploaded_blobs | tostring) + " blobs / " + (.replacement_transport.uploaded_bytes | tostring) + " bytes"),
-                  (if .logical_set.within_tolerance then "yes" else "no" end),
+                  (if .logical_set.within_tolerance == null then "reset" elif .logical_set.within_tolerance then "yes" else "no" end),
                   (if .final_convergence_pair then "yes" else "no" end)
                 ] | "| " + join(" | ") + " |"' "$result"
                 echo
               fi
+              if jq -e '.current_set.clean_start_followup_pending == true' "$result" >/dev/null; then
+                echo "> **NOT READY:** this rolling phase published a clean-start root, but no later product phase has restored it yet. Rerun the same rolling tag before treating the state window as proven."
+                echo
+              fi
               jq -r 'if .current_set.replay != null then
-                "Replay continuity: \(.current_set.current_set_replacement); exact source sequence: \(.current_set.exact_source_sequence); current head only: \(.current_set.only_current_head_fetched); logical successors within \(.current_set.replay.tolerance_percent)%: \(.current_set.replay.all_successors_within_tolerance) (telemetry, not a cross-commit correctness gate)."
+                "Replay continuity: \(.current_set.current_set_replacement); exact source sequence: \(.current_set.exact_source_sequence); current head only: \(.current_set.only_current_head_fetched); clean-start boundaries/follow-up: \(.current_set.clean_start_boundaries // 0)/\(.current_set.clean_start_followup_proven); active window starts at sequence \(.current_set.replay.plateau_window_start_sequence); logical successors within \(.current_set.replay.tolerance_percent)%: \(.current_set.replay.all_successors_within_tolerance) (telemetry, not a cross-commit correctness gate)."
               elif .current_set.growth == null then
                 "Current-set replacement: \(.current_set.current_set_replacement); current head only: \(.current_set.only_current_head_fetched)."
               else
-                "Current-set replacement: \(.current_set.current_set_replacement); warm generations: \(.current_set.warm_generations_measured)/\(.current_set.warm_generations_planned); bootstrap delta: \(.current_set.growth.bootstrap_logical_blob_delta) logical blobs / \(.current_set.growth.bootstrap_required_blob_delta) required bodies / \(.current_set.growth.bootstrap_logical_byte_delta) bytes (stable content counts: \(.current_set.growth.bootstrap_blob_growth_within_tolerance); metadata bytes bounded: \(.current_set.growth.bootstrap_bytes_growth_within_tolerance)); all-warm stable content counts: \(.current_set.all_warm_content_counts_stable); record counts stable: \(.current_set.all_warm_record_counts_stable); replacement uploads: \(.current_set.same_ref_replacement_uploaded_blobs) blobs / \(.current_set.same_ref_replacement_uploaded_bytes) bytes; final warm-pair count plateau: \(.current_set.same_ref_count_plateau) (stable logical/required counts: \(.current_set.growth.blob_count_within_tolerance)/\(.current_set.growth.required_blob_count_stable); \(.current_set.growth.tolerance_percent)% metadata-byte tolerance, \(.current_set.growth.logical_byte_delta) bytes); all-warm solver reuse: \(.current_set.same_ref_solver_reuse)."
+                "Current-set replacement: \(.current_set.current_set_replacement); warm generations: \(.current_set.warm_generations_measured)/\(.current_set.warm_generations_planned); clean-start boundaries/follow-up: \(.current_set.clean_start_boundaries // 0)/\(.current_set.clean_start_followup_proven); plateau window starts at transition \(.current_set.plateau_window_start_transition // 1); bootstrap delta: \(.current_set.growth.bootstrap_logical_blob_delta) logical blobs / \(.current_set.growth.bootstrap_required_blob_delta) required bodies / \(.current_set.growth.bootstrap_logical_byte_delta) bytes (stable content counts: \(.current_set.growth.bootstrap_blob_growth_within_tolerance); metadata bytes bounded: \(.current_set.growth.bootstrap_bytes_growth_within_tolerance)); active-window stable content counts: \(.current_set.all_warm_content_counts_stable); record counts stable: \(.current_set.all_warm_record_counts_stable); replacement uploads: \(.current_set.same_ref_replacement_uploaded_blobs) blobs / \(.current_set.same_ref_replacement_uploaded_bytes) bytes; final warm-pair count plateau: \(.current_set.same_ref_count_plateau) (stable logical/required counts: \(.current_set.growth.blob_count_within_tolerance)/\(.current_set.growth.required_blob_count_stable); \(.current_set.growth.tolerance_percent)% metadata-byte tolerance, \(.current_set.growth.logical_byte_delta) bytes); active-window solver reuse: \(.current_set.same_ref_solver_reuse)."
               end' "$result"
             else
               echo "The runner stopped before it could write a phase result. Inspect the uploaded diagnostics."

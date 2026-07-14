@@ -291,6 +291,13 @@ boringcache() {
       required_blobs=2
       transport_blobs=4
       transport_bytes=4000
+      if [[ "${MOCK_ROLLING_BOOTSTRAP:-0}" == 1 ]]; then
+        restore_status=miss
+        restored_generation=""
+        parent=""
+        transport_blobs="$logical_blobs"
+        transport_bytes="$logical_bytes"
+      fi
       if [[ "${MOCK_CLEAN_START_ROLLING:-0}" == 1 ]]; then
         clean_start=1
         candidate_generation="$restored_generation"
@@ -798,16 +805,14 @@ boringcache() {
     tool_hits=1
     tool_misses=0
     tool_writes=1
-    if [[ "${MOCK_COMPOSITION_SHORT_CIRCUIT:-0}" == 1 ]]; then
-      if [[ "$restore_status" == miss ]]; then
-        tool_hits=0
-        tool_misses=1
-        tool_writes=1
-      else
-        tool_hits=0
-        tool_misses=0
-        tool_writes=0
-      fi
+    if [[ "$restore_status" == miss ]]; then
+      tool_hits=0
+      tool_misses=1
+      tool_writes=1
+    elif [[ "${MOCK_COMPOSITION_SHORT_CIRCUIT:-0}" == 1 ]]; then
+      tool_hits=0
+      tool_misses=0
+      tool_writes=0
     fi
     command jq -cn \
       --arg phase "$phase" \
@@ -1253,6 +1258,26 @@ command jq -e '
   and (.phases[0].state.state_record_flow.created_local_sources | length) == 3
   and .phases[0].state.content_gc_seconds == 0.1
 ' "$rolling_dir/canary-result.json" >/dev/null
+
+rolling_bootstrap_composition_dir="$test_root/rolling-bootstrap-composition"
+MOCK_ROLLING_BOOTSTRAP=1 \
+  run_mock rolling "$rolling_bootstrap_composition_dir" 2 fixture >/dev/null
+command jq -e '
+  .success == true
+  and (.phases | length) == 1
+  and .phases[0].state.restore_status == "miss"
+  and .phases[0].state.publish_status == "published"
+  and .phases[0].tool_cache.hits == 0
+  and .phases[0].tool_cache.misses == 1
+  and .phases[0].tool_cache.writes == 1
+  and .composition.valid == true
+  and .composition.bootstrap_only == true
+  and .composition.mountcache_published == true
+  and .composition.signed_refs_available == true
+  and .composition.mountcache_hydrated == true
+  and .composition.toolcache_exercised == true
+  and .composition.toolcache_hits == false
+' "$rolling_bootstrap_composition_dir/canary-result.json" >/dev/null
 
 rolling_clean_start_dir="$test_root/rolling-clean-start-pending"
 if MOCK_CLEAN_START_ROLLING=1 run_mock rolling "$rolling_clean_start_dir" >/dev/null 2>&1; then

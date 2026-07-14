@@ -126,6 +126,7 @@ require_text "$workflow" "active-window stable content counts"
 require_text "$workflow" "> **NOT READY:** this rolling phase published a clean-start root"
 require_text "$runner" "same_ref_replacement_uploaded_bytes"
 require_text "$runner" "fully_state_cached_short_circuit"
+require_text "$runner" "bootstrap_only"
 require_text "$runner" "run_terminal_mount_probe"
 require_text "$runner" "--read-only"
 require_text "$runner" "--no-cache-filter boringcache-state-mount-probe"
@@ -141,6 +142,7 @@ require_text "$runner" 'render-posthog-toolcache-dockerfile.sh" "$dockerfile_pat
 require_text "$workflow" 'posthog-toolcache.Dockerfile'
 require_text "$runner" 'product_target_args+=(--target posthog-runtime)'
 require_text "$test_runner" "composition-short-circuit"
+require_text "$test_runner" "rolling-bootstrap-composition"
 require_text "$runner" "exact_source_sequence"
 require_text "$runner" "all_successors_within_tolerance"
 require_text "$runner" 'restore_status == "clean_start"'

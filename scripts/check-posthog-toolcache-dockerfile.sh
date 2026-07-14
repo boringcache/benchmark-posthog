@@ -9,6 +9,10 @@ trap 'rm -f "$expected_dockerfile"' EXIT
 
 awk '
   BEGIN { replacements = 0; in_node_scripts = 0 }
+  $0 == "FROM unit:1.34.2-python3.13" {
+    print $0 " AS posthog-runtime"
+    next
+  }
   /^FROM .* AS node-scripts-build$/ { in_node_scripts = 1 }
   $0 == "RUN bin/turbo --filter=@posthog/frontend build" {
     print "RUN --mount=type=secret,id=boringcache-tool-cache-env \\"

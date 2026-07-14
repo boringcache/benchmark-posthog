@@ -105,6 +105,8 @@ require_text "$runner" 'deferred_publish_lifecycle'
 require_text "$runner" 'and $all_warm_record_counts_stable'
 require_text "$workflow" 'turbo-rolling-${rolling_slug}'
 require_text "$fixture_checker" 'AS boringcache-state-mount-probe'
+require_text "$fixture_checker" 'AS posthog-runtime'
+require_text "$runner" 'product_target_args+=(--target posthog-runtime)'
 require_text "$test_runner" "composition-short-circuit"
 require_text "$runner" "exact_source_sequence"
 require_text "$runner" "all_successors_within_tolerance"

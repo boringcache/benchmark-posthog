@@ -757,8 +757,10 @@ run_phase() {
 
   local phase_started phase_finished command_status tee_status
   local composition_args=(--metadata-hint "composition=${composition_mode}")
+  local product_target_args=(--progress plain)
   if [[ "$composition_mode" == fixture ]]; then
     composition_args=(--tool-cache "turbo:${tool_cache_tag}" "${composition_args[@]}")
+    product_target_args+=(--target posthog-runtime)
   fi
   phase_started="$(date +%s)"
   local command_statuses=()
@@ -783,8 +785,8 @@ run_phase() {
       -- \
       docker buildx build \
         --file "$dockerfile_path" \
+        "${product_target_args[@]}" \
         --platform "$docker_platform" \
-        --progress plain \
         --output type=cacheonly \
         "$docker_context" 2>&1 | tee "$log_path"
   command_statuses=("${PIPESTATUS[@]}")

@@ -6,11 +6,13 @@ workflow="$repo_root/.github/workflows/state-sync-v13-cas.yml"
 runner="$repo_root/scripts/run-buildkit-state-canary.sh"
 preflight_runner="$repo_root/scripts/preflight-buildkit-state-canary.sh"
 test_runner="$repo_root/scripts/test-buildkit-state-canary.sh"
+fixture_checker="$repo_root/scripts/check-posthog-toolcache-dockerfile.sh"
 image_index_verifier="$repo_root/scripts/verify-buildkit-image-index.sh"
 
 bash -n "$runner"
 bash -n "$preflight_runner"
 bash -n "$test_runner"
+bash -n "$fixture_checker"
 bash -n "$image_index_verifier"
 
 require_text() {
@@ -88,10 +90,21 @@ require_text "$test_runner" "Expected one new logical blob on the final warm gen
 require_text "$test_runner" "Expected one new required BuildKit body on the final warm generation to fail the canary"
 require_text "$test_runner" "Expected one new logical blob on an intermediate warm generation to fail the canary"
 require_text "$test_runner" "Expected one new required BuildKit body on an intermediate warm generation to fail the canary"
-require_text "$test_runner" "Expected mount-cache hydration errors to fail the composition canary"
+require_text "$test_runner" "Expected terminal mount-cache hydration errors to fail the composition canary"
+require_text "$test_runner" "Expected same-ref BuildKit record growth to block graduation"
 require_text "$workflow" "all-warm stable content counts"
 require_text "$runner" "same_ref_replacement_uploaded_bytes"
 require_text "$runner" "fully_state_cached_short_circuit"
+require_text "$runner" "run_terminal_mount_probe"
+require_text "$runner" "--read-only"
+require_text "$runner" "--no-cache-filter boringcache-state-mount-probe"
+require_text "$runner" '.mount_cache.hydrate_hits == 1'
+require_text "$runner" '.mount_cache.hydrate_skips == 0'
+require_text "$runner" 'zero_eager_mount_restore'
+require_text "$runner" 'deferred_publish_lifecycle'
+require_text "$runner" 'and $all_warm_record_counts_stable'
+require_text "$workflow" 'turbo-rolling-${rolling_slug}'
+require_text "$fixture_checker" 'AS boringcache-state-mount-probe'
 require_text "$test_runner" "composition-short-circuit"
 require_text "$runner" "exact_source_sequence"
 require_text "$runner" "all_successors_within_tolerance"

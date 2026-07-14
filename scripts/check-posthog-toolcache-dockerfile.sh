@@ -41,8 +41,22 @@ awk '
   }
 ' "$upstream_dockerfile" > "$expected_dockerfile"
 
+cat >> "$expected_dockerfile" <<'EOF'
+
+
+# Canary-only target: force one bounded pnpm cache mount to execute after the
+# product phases. The state harness invokes this target read-only and records
+# its timing separately, so it proves lazy archive hydration without changing
+# the measured BuildKit generation.
+FROM node:24.13.0-bookworm-slim AS boringcache-state-mount-probe
+ARG BORINGCACHE_STATE_MOUNT_PROBE
+RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \
+    test -n "$BORINGCACHE_STATE_MOUNT_PROBE" && \
+    test -n "$(find /tmp/pnpm-store-v24 -mindepth 1 -print -quit)"
+EOF
+
 if ! diff -u "$expected_dockerfile" "$fixture_dockerfile"; then
-  echo "scenarios/posthog-toolcache/Dockerfile is out of sync with upstream/Dockerfile plus the static tool-cache hook." >&2
-  echo "Regenerate the fixture from the pinned upstream Dockerfile and keep only the boringcache-tool-cache-env hook delta." >&2
+  echo "scenarios/posthog-toolcache/Dockerfile is out of sync with upstream/Dockerfile plus its benchmark-only hooks." >&2
+  echo "Regenerate the fixture from the pinned upstream Dockerfile and keep only the tool-cache environment and state mount-probe deltas." >&2
   exit 1
 fi

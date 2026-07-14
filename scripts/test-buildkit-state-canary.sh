@@ -87,8 +87,28 @@ boringcache() {
 
   local phase restore_status restored_generation parent generation logical_blobs logical_bytes
   local bootstrap_delta steady_delta blob_delta required_blob_delta required_blobs warm_index warm_count summary_name
-  local transport_blobs transport_bytes saw_cacheonly arg
+  local transport_blobs transport_bytes saw_cacheonly saw_read_only saw_probe_target arg
+  local is_probe save_status publish_status record_count
+  is_probe=0
+  save_status=uploaded
+  publish_status=published
+  record_count=2
   case "$BORINGCACHE_STATE_SUMMARY_PATH" in
+    *mount-probe.state-summary.json)
+      phase=mount-probe
+      is_probe=1
+      restore_status=restored
+      restored_generation="$BORINGCACHE_STATE_CANARY_PROBE_EXPECTED_GENERATION"
+      parent=""
+      generation=""
+      logical_blobs=0
+      logical_bytes=0
+      required_blobs=0
+      transport_blobs=0
+      transport_bytes=0
+      save_status=read_only
+      publish_status=read_only
+      ;;
     *cold.state-summary.json)
       phase=cold
       restore_status=miss
@@ -143,6 +163,7 @@ boringcache() {
       fi
       transport_blobs=1
       transport_bytes=1000
+      record_count="$((2 + ${MOCK_WARM_RECORD_DELTA:-0}))"
       ;;
     *rolling.state-summary.json)
       phase=rolling
@@ -199,10 +220,14 @@ boringcache() {
     --argjson include_logical_generation "$(if [[ "${MOCK_OMIT_LOGICAL_GENERATION:-0}" == 1 ]]; then echo false; else echo true; fi)" \
     --arg retention_policy "${MOCK_RETENTION_POLICY:-complete-main-cache-v1}" \
     --argjson content_gc_applied "$(if [[ "${MOCK_CONTENT_GC_APPLIED:-1}" == 1 ]]; then echo true; else echo false; fi)" \
-    --argjson records_after_gc "${MOCK_RECORDS_AFTER_GC:-2}" \
+    --arg save_status "$save_status" \
+    --arg publish_status "$publish_status" \
+    --argjson record_count "$record_count" \
+    --argjson records_after_gc "${MOCK_RECORDS_AFTER_GC:-$record_count}" \
     --argjson include_content_gc_seconds "$(if [[ "${MOCK_OMIT_CONTENT_GC_SECONDS:-0}" == 1 ]]; then echo false; else echo true; fi)" \
     --argjson mountcache_enabled "$(if [[ "${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}" == fixture ]]; then echo true; else echo false; fi)" \
-    --argjson mountcache_hydrate_errors "${MOCK_MOUNTCACHE_HYDRATE_ERRORS:-0}" \
+    --argjson is_probe "$(if [[ "$is_probe" == 1 ]]; then echo true; else echo false; fi)" \
+    --argjson mountcache_hydrate_errors "$(if [[ "$is_probe" == 1 ]]; then echo "${MOCK_MOUNTCACHE_PROBE_HYDRATE_ERRORS:-0}"; else echo "${MOCK_MOUNTCACHE_HYDRATE_ERRORS:-0}"; fi)" \
     --argjson composition_short_circuit "$(if [[ "${MOCK_COMPOSITION_SHORT_CIRCUIT:-0}" == 1 ]]; then echo true; else echo false; fi)" \
     '{
       schema_version: "buildkit-state-summary.v2",
@@ -223,20 +248,20 @@ boringcache() {
         retention_policy: $retention_policy,
         content_gc_applied: $content_gc_applied,
         content_gc_duration_ms: 100,
-        records_before_gc: 2,
+        records_before_gc: $record_count,
         records_after_gc: $records_after_gc,
         seconds: 0.2
       },
       quiesce_seconds: 0.1,
       save: {
-        status: "uploaded",
-        generation: $generation,
+        status: $save_status,
+        generation: (if $generation == "" then null else $generation end),
         parent: (if $parent == "" then null else $parent end),
         reused_blobs: $logical_blobs,
         reused_bytes: $logical_bytes,
         uploaded_blobs: $transport_blobs,
         uploaded_bytes: $transport_bytes,
-        publish_status: "published"
+        publish_status: $publish_status
       },
       compatibility: {
         image_digest: $image_digest,
@@ -248,37 +273,68 @@ boringcache() {
         enabled: $mountcache_enabled,
         available_archives: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
         available_bytes: (if $mountcache_enabled and $restore_status == "restored" then 100 else 0 end),
-        restored_blobs: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
-        restored_archives: (if $mountcache_enabled and $restore_status == "restored" then 1 else 0 end),
-        restored_bytes: (if $mountcache_enabled and $restore_status == "restored" then 100 else 0 end),
-        generation_archives: (if $mountcache_enabled then 1 else 0 end),
-        generation_bytes: (if $mountcache_enabled then 100 else 0 end),
+        restored_blobs: 0,
+        restored_archives: 0,
+        restored_bytes: 0,
+        generation_archives: (if $mountcache_enabled and ($is_probe | not) then 1 else 0 end),
+        generation_bytes: (if $mountcache_enabled and ($is_probe | not) then 100 else 0 end),
+        staged_archives: (
+          if $mountcache_enabled and ($is_probe | not)
+             and (($composition_short_circuit and $restore_status == "restored") | not)
+          then 1 else 0 end
+        ),
+        released_archives: (
+          if $mountcache_enabled and ($is_probe | not)
+             and (($composition_short_circuit and $restore_status == "restored") | not)
+          then 1 else 0 end
+        ),
+        aborted_archives: 0,
         selected_archives: (if $mountcache_enabled then 1 else 0 end),
         hydrate_hits: (
-          if $mountcache_enabled and $restore_status == "restored" and ($composition_short_circuit | not)
+          if $mountcache_enabled and $restore_status == "restored"
+             and ($is_probe or ($composition_short_circuit | not))
           then 1 else 0 end
         ),
         hydrate_misses: 0,
         hydrate_errors: $mountcache_hydrate_errors,
         hydrate_skips: 0,
         hydrated_files: (
-          if $mountcache_enabled and $restore_status == "restored" and ($composition_short_circuit | not)
+          if $mountcache_enabled and $restore_status == "restored"
+             and ($is_probe or ($composition_short_circuit | not))
           then 1 else 0 end
         ),
         hydrated_compressed_bytes: (
-          if $mountcache_enabled and $restore_status == "restored" and ($composition_short_circuit | not)
+          if $mountcache_enabled and $restore_status == "restored"
+             and ($is_probe or ($composition_short_circuit | not))
           then 100 else 0 end
         ),
         hydrated_uncompressed_bytes: (
-          if $mountcache_enabled and $restore_status == "restored" and ($composition_short_circuit | not)
+          if $mountcache_enabled and $restore_status == "restored"
+             and ($is_probe or ($composition_short_circuit | not))
           then 200 else 0 end
         ),
         hydrate_milliseconds: 1,
-        published_archives: (if $mountcache_enabled then 1 else 0 end),
+        published_archives: (
+          if $mountcache_enabled and ($is_probe | not)
+             and (($composition_short_circuit and $restore_status == "restored") | not)
+          then 1 else 0 end
+        ),
         publish_errors: 0,
-        published_files: (if $mountcache_enabled then 1 else 0 end),
-        published_compressed_bytes: (if $mountcache_enabled then 100 else 0 end),
-        published_uncompressed_bytes: (if $mountcache_enabled then 200 else 0 end),
+        published_files: (
+          if $mountcache_enabled and ($is_probe | not)
+             and (($composition_short_circuit and $restore_status == "restored") | not)
+          then 1 else 0 end
+        ),
+        published_compressed_bytes: (
+          if $mountcache_enabled and ($is_probe | not)
+             and (($composition_short_circuit and $restore_status == "restored") | not)
+          then 100 else 0 end
+        ),
+        published_uncompressed_bytes: (
+          if $mountcache_enabled and ($is_probe | not)
+             and (($composition_short_circuit and $restore_status == "restored") | not)
+          then 200 else 0 end
+        ),
         publish_milliseconds: 1,
         runtime_status: (if $mountcache_enabled then "recorded" else "disabled" end)
       },
@@ -292,9 +348,13 @@ boringcache() {
 
   saw_cacheonly=0
   saw_tool_cache=0
+  saw_read_only=0
+  saw_probe_target=0
   for arg in "$@"; do
     [[ "$arg" == type=cacheonly ]] && saw_cacheonly=1
     [[ "$arg" == turbo:* ]] && saw_tool_cache=1
+    [[ "$arg" == --read-only ]] && saw_read_only=1
+    [[ "$arg" == boringcache-state-mount-probe ]] && saw_probe_target=1
   done
   [[ "$saw_cacheonly" -eq 1 ]] || {
     echo "Mock canary command omitted its cache-only product output" >&2
@@ -306,8 +366,13 @@ boringcache() {
     return 1
   fi
 
+  if [[ "$is_probe" -eq 1 && ("$saw_read_only" -ne 1 || "$saw_probe_target" -ne 1) ]]; then
+    echo "Mock terminal mount probe was not read-only or did not select its fixture target" >&2
+    return 1
+  fi
+
   printf 'mock daemon %s\n' "$phase" > "$BORINGCACHE_MANAGED_BUILDKIT_LOG_PATH"
-  if [[ "${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}" == fixture ]]; then
+  if [[ "${BORINGCACHE_STATE_CANARY_COMPOSITION_MODE:-off}" == fixture && "$is_probe" -eq 0 ]]; then
     local tool_hits tool_misses tool_writes
     tool_hits=1
     tool_misses=0
@@ -735,6 +800,24 @@ if MOCK_OMIT_CONTENT_GC_SECONDS=1 run_mock rolling "$content_gc_seconds_dir" >/d
 fi
 command jq -e '.success == false and .phases[0].checks.summary_valid == false' "$content_gc_seconds_dir/canary-result.json" >/dev/null
 
+record_growth_dir="$test_root/record-growth-failure"
+if MOCK_WARM_RECORD_DELTA=3 run_mock fresh "$record_growth_dir" 2 fixture >/dev/null 2>&1; then
+  echo "Expected same-ref BuildKit record growth to block graduation" >&2
+  exit 1
+fi
+command jq -e '
+  .success == false
+  and .current_set.current_set_replacement == false
+  and .current_set.all_warm_record_counts_stable == false
+  and .current_set.same_ref_record_growth_observed == true
+  and .current_set.same_ref_count_plateau == false
+  and .current_set.transitions[0].record_set.eligible_delta == 0
+  and .current_set.transitions[0].record_set.records_after_gc_delta == 3
+  and .composition.valid == true
+  and .terminal_mount_probe.attempted == true
+  and .terminal_mount_probe.valid == true
+' "$record_growth_dir/canary-result.json" >/dev/null
+
 composition_dir="$test_root/composition-fixture"
 run_mock replay-full "$composition_dir" 2 fixture >/dev/null
 command jq -e '
@@ -744,10 +827,39 @@ command jq -e '
   and .inputs.tool_env_delivery == "static-secret-fixture"
   and .composition.valid == true
   and .composition.mountcache_published == true
-  and .composition.mountcache_restored == true
+  and .composition.signed_refs_available == true
+  and .composition.zero_eager_mount_restore == true
+  and .composition.generation_refs_bounded == true
+  and .composition.deferred_publish_lifecycle == true
   and .composition.mountcache_hydrated == true
   and .composition.toolcache_exercised == true
   and .composition.toolcache_hits == true
+  and .terminal_mount_probe.enabled == true
+  and .terminal_mount_probe.attempted == true
+  and .terminal_mount_probe.read_only == true
+  and .terminal_mount_probe.timing_included_in_product_phases == false
+  and .terminal_mount_probe.expected_generation == .terminal_mount_probe.restored_generation
+  and .terminal_mount_probe.signed_ref_archives == 1
+  and .terminal_mount_probe.selected_archives == 1
+  and .terminal_mount_probe.eager_restored_blobs == 0
+  and .terminal_mount_probe.eager_restored_archives == 0
+  and .terminal_mount_probe.eager_restored_bytes == 0
+  and .terminal_mount_probe.hydrate_hits == 1
+  and .terminal_mount_probe.hydrate_misses == 0
+  and .terminal_mount_probe.hydrate_errors == 0
+  and .terminal_mount_probe.hydrate_skips == 0
+  and .terminal_mount_probe.staged_archives == 0
+  and .terminal_mount_probe.released_archives == 0
+  and .terminal_mount_probe.aborted_archives == 0
+  and .terminal_mount_probe.published_archives == 0
+  and .terminal_mount_probe.valid == true
+  and all(.phases[];
+    .state.mount_cache.restored_blobs == 0
+    and .state.mount_cache.restored_archives == 0
+    and .state.mount_cache.restored_bytes == 0
+    and .state.mount_cache.staged_archives == .state.mount_cache.released_archives
+    and .state.mount_cache.aborted_archives == 0
+  )
   and all(.phases[]; .checks.tool_cache_valid == true)
 ' "$composition_dir/canary-result.json" >/dev/null
 
@@ -758,11 +870,15 @@ command jq -e '
   | .success == true
   and .composition.valid == true
   and .composition.mountcache_published == true
-  and .composition.mountcache_restored == true
-  and .composition.mountcache_hydrated == false
+  and .composition.signed_refs_available == true
+  and .composition.zero_eager_mount_restore == true
+  and .composition.deferred_publish_lifecycle == true
+  and .composition.mountcache_hydrated == true
   and .composition.toolcache_exercised == true
   and .composition.toolcache_hits == false
   and .composition.fully_state_cached_short_circuit == true
+  and .terminal_mount_probe.hydrate_hits == 1
+  and .terminal_mount_probe.valid == true
   and all(.phases[1:][];
     .cached_steps > $result.phases[0].cached_steps
     and .state.mount_cache.hydrate_hits == 0
@@ -773,18 +889,18 @@ command jq -e '
 ' "$composition_short_circuit_dir/canary-result.json" >/dev/null
 
 composition_mount_error_dir="$test_root/composition-mount-error"
-if MOCK_MOUNTCACHE_HYDRATE_ERRORS=1 run_mock fresh "$composition_mount_error_dir" 2 fixture >/dev/null 2>&1; then
-  echo "Expected mount-cache hydration errors to fail the composition canary" >&2
+if MOCK_MOUNTCACHE_PROBE_HYDRATE_ERRORS=1 run_mock fresh "$composition_mount_error_dir" 2 fixture >/dev/null 2>&1; then
+  echo "Expected terminal mount-cache hydration errors to fail the composition canary" >&2
   exit 1
 fi
 command jq -e '
   .success == false
-  and (.phases | length) == 1
-  and .phases[0].checks.summary_valid == true
-  and .phases[0].checks.mount_cache_valid == false
-  and .phases[0].state.logical_generation_blobs > 0
-  and .phases[0].state.logical_generation_bytes > 0
-  and .phases[0].state.mount_cache.hydrate_errors == 1
+  and (.phases | length) == 3
+  and all(.phases[]; .success == true)
+  and .terminal_mount_probe.enabled == true
+  and .terminal_mount_probe.attempted == true
+  and .terminal_mount_probe.hydrate_errors == 1
+  and .terminal_mount_probe.valid == false
 ' "$composition_mount_error_dir/canary-result.json" >/dev/null
 
 mountcache_dir="$test_root/mountcache-failure"

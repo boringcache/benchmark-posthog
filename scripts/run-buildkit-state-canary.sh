@@ -1259,7 +1259,8 @@ run_phase() {
   local restored_blobs restored_bytes restored_files logical_bytes logical_blobs transport_delta_bytes transport_delta_blobs
   local restored_generation candidate_generation generation parent_generation head_generations_fetched
   local candidate_blobs candidate_bytes candidate_files restore_core_blobs restore_core_bytes restore_core_files
-  local restore_mount_blobs restore_mount_bytes restore_mount_files restore_manifest_seconds restore_verify_seconds
+  local restore_mount_blobs restore_mount_bytes restore_mount_files restore_lazy_content_blobs restore_lazy_content_bytes
+  local restore_manifest_seconds restore_verify_seconds
   local restore_url_plan_seconds restore_helper_seconds
   local restore_download_sequential_blobs restore_download_parallel_blobs restore_download_range_parts
   local restore_download_request_retries restore_download_origin_fallbacks
@@ -1276,6 +1277,9 @@ run_phase() {
   local prune_reserved_space_bytes prune_min_free_space_bytes prune_effective_keep_bytes
   local content_gc_applied content_gc_duration_ms
   local records_before_gc records_after_gc content_gc_seconds
+  local save_reused_blobs save_reused_bytes lazy_content_runtime_status
+  local lazy_content_available_blobs lazy_content_available_bytes lazy_content_hydrated_blobs lazy_content_hydrated_bytes
+  local lazy_content_hydration_attempts lazy_content_hydration_failures lazy_content_hydration_milliseconds
   local state_record_flow_json mount_cache_json tool_cache_json
   local summary_valid state_record_flow_valid clean_start_valid mount_cache_valid tool_cache_valid cleanup_valid expectation_valid current_head_only success
   cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$log_path" || true)"
@@ -1301,6 +1305,8 @@ run_phase() {
   restore_mount_blobs="0"
   restore_mount_bytes="0"
   restore_mount_files="0"
+  restore_lazy_content_blobs="0"
+  restore_lazy_content_bytes="0"
   restore_manifest_seconds="0"
   restore_verify_seconds="0"
   restore_url_plan_seconds="0"
@@ -1357,6 +1363,16 @@ run_phase() {
   records_before_gc="0"
   records_after_gc="0"
   content_gc_seconds=""
+  save_reused_blobs="0"
+  save_reused_bytes="0"
+  lazy_content_runtime_status="not_applicable"
+  lazy_content_available_blobs="0"
+  lazy_content_available_bytes="0"
+  lazy_content_hydrated_blobs="0"
+  lazy_content_hydrated_bytes="0"
+  lazy_content_hydration_attempts="0"
+  lazy_content_hydration_failures="0"
+  lazy_content_hydration_milliseconds="0"
   state_record_flow_json=null
   mount_cache_json=null
   tool_cache_json=null
@@ -1373,7 +1389,7 @@ run_phase() {
   if [[ -s "$state_summary_path" ]] && jq -e \
     --arg digest "$buildkit_digest" \
     --arg platform "$docker_platform" \
-    '.schema_version == "buildkit-state-summary.v2"
+    '.schema_version == "buildkit-state-summary.v3"
       and .compatibility.image_digest == $digest
       and .compatibility.platform == $platform
       and .compatibility.state_format == "buildkit-state-v1"
@@ -1473,10 +1489,50 @@ run_phase() {
       and .save.logical_generation_blobs > 0
       and (.save.logical_generation_bytes | type == "number")
       and .save.logical_generation_bytes > 0
+      and (.restore.lazy_content_blobs | type == "number")
+      and .restore.lazy_content_blobs >= 0
+      and (.restore.lazy_content_bytes | type == "number")
+      and .restore.lazy_content_bytes >= 0
+      and (.save.reused_blobs | type == "number")
+      and .save.reused_blobs >= 0
+      and (.save.reused_bytes | type == "number")
+      and .save.reused_bytes >= 0
       and (.save.uploaded_blobs | type == "number")
       and .save.uploaded_blobs >= 0
       and (.save.uploaded_bytes | type == "number")
       and .save.uploaded_bytes >= 0
+      and .save.logical_generation_blobs == (.save.reused_blobs + .save.uploaded_blobs)
+      and .save.logical_generation_bytes == (.save.reused_bytes + .save.uploaded_bytes)
+      and (.save.lazy_content_runtime_status | type == "string")
+      and (.save.lazy_content_available_blobs | type == "number")
+      and .save.lazy_content_available_blobs >= 0
+      and (.save.lazy_content_available_bytes | type == "number")
+      and .save.lazy_content_available_bytes >= 0
+      and (.save.lazy_content_hydrated_blobs | type == "number")
+      and .save.lazy_content_hydrated_blobs >= 0
+      and (.save.lazy_content_hydrated_bytes | type == "number")
+      and .save.lazy_content_hydrated_bytes >= 0
+      and (.save.lazy_content_hydration_attempts | type == "number")
+      and .save.lazy_content_hydration_attempts >= 0
+      and (.save.lazy_content_hydration_failures | type == "number")
+      and .save.lazy_content_hydration_failures == 0
+      and (.save.lazy_content_hydration_milliseconds | type == "number")
+      and .save.lazy_content_hydration_milliseconds >= 0
+      and .save.lazy_content_hydrated_blobs <= .save.lazy_content_available_blobs
+      and .save.lazy_content_hydrated_bytes <= .save.lazy_content_available_bytes
+      and .save.lazy_content_hydration_attempts >= .save.lazy_content_hydrated_blobs
+      and (if .restore.status == "restored" then
+             .save.lazy_content_runtime_status == "recorded"
+             and .save.lazy_content_available_blobs == .restore.lazy_content_blobs
+             and .save.lazy_content_available_bytes == .restore.lazy_content_bytes
+           else
+             .save.lazy_content_runtime_status == "not_applicable"
+             and .save.lazy_content_available_blobs == 0
+             and .save.lazy_content_available_bytes == 0
+             and .save.lazy_content_hydrated_blobs == 0
+             and .save.lazy_content_hydrated_bytes == 0
+             and .save.lazy_content_hydration_attempts == 0
+           end)
       and (.total_state_overhead_seconds | type == "number")
       and .total_state_overhead_seconds >= 0' \
     "$state_summary_path" >/dev/null; then
@@ -1502,6 +1558,8 @@ run_phase() {
     restore_mount_blobs="$(jq -r '.restore.mount_cache_blobs // 0' "$state_summary_path")"
     restore_mount_bytes="$(jq -r '.restore.mount_cache_bytes // 0' "$state_summary_path")"
     restore_mount_files="$(jq -r '.restore.mount_cache_files // 0' "$state_summary_path")"
+    restore_lazy_content_blobs="$(jq -r '.restore.lazy_content_blobs' "$state_summary_path")"
+    restore_lazy_content_bytes="$(jq -r '.restore.lazy_content_bytes' "$state_summary_path")"
     restore_manifest_seconds="$(jq -r '.restore.manifest_seconds // 0' "$state_summary_path")"
     restore_verify_seconds="$(jq -r '.restore.verify_seconds // 0' "$state_summary_path")"
     restore_url_plan_seconds="$(jq -r '.restore.url_plan_seconds // 0' "$state_summary_path")"
@@ -1558,6 +1616,16 @@ run_phase() {
     records_before_gc="$(jq -r '.finalize.records_before_gc' "$state_summary_path")"
     records_after_gc="$(jq -r '.finalize.records_after_gc' "$state_summary_path")"
     content_gc_seconds="$(jq -r '.content_gc_seconds' "$state_summary_path")"
+    save_reused_blobs="$(jq -r '.save.reused_blobs' "$state_summary_path")"
+    save_reused_bytes="$(jq -r '.save.reused_bytes' "$state_summary_path")"
+    lazy_content_runtime_status="$(jq -r '.save.lazy_content_runtime_status' "$state_summary_path")"
+    lazy_content_available_blobs="$(jq -r '.save.lazy_content_available_blobs' "$state_summary_path")"
+    lazy_content_available_bytes="$(jq -r '.save.lazy_content_available_bytes' "$state_summary_path")"
+    lazy_content_hydrated_blobs="$(jq -r '.save.lazy_content_hydrated_blobs' "$state_summary_path")"
+    lazy_content_hydrated_bytes="$(jq -r '.save.lazy_content_hydrated_bytes' "$state_summary_path")"
+    lazy_content_hydration_attempts="$(jq -r '.save.lazy_content_hydration_attempts' "$state_summary_path")"
+    lazy_content_hydration_failures="$(jq -r '.save.lazy_content_hydration_failures' "$state_summary_path")"
+    lazy_content_hydration_milliseconds="$(jq -r '.save.lazy_content_hydration_milliseconds' "$state_summary_path")"
     state_record_flow_json="$(jq -c '.state_record_flow // null' "$state_summary_path")"
     mount_cache_json="$(jq -c '.mount_cache' "$state_summary_path")"
     if jq -e --arg phase "$phase" '
@@ -1833,6 +1901,8 @@ run_phase() {
     --argjson restore_mount_blobs "$restore_mount_blobs" \
     --argjson restore_mount_bytes "$restore_mount_bytes" \
     --argjson restore_mount_files "$restore_mount_files" \
+    --argjson restore_lazy_content_blobs "$restore_lazy_content_blobs" \
+    --argjson restore_lazy_content_bytes "$restore_lazy_content_bytes" \
     --arg restore_manifest_seconds "$restore_manifest_seconds" \
     --arg restore_verify_seconds "$restore_verify_seconds" \
     --arg restore_url_plan_seconds "$restore_url_plan_seconds" \
@@ -1855,6 +1925,16 @@ run_phase() {
     --argjson logical_blobs "$logical_blobs" \
     --argjson transport_delta_bytes "$transport_delta_bytes" \
     --argjson transport_delta_blobs "$transport_delta_blobs" \
+    --argjson save_reused_blobs "$save_reused_blobs" \
+    --argjson save_reused_bytes "$save_reused_bytes" \
+    --arg lazy_content_runtime_status "$lazy_content_runtime_status" \
+    --argjson lazy_content_available_blobs "$lazy_content_available_blobs" \
+    --argjson lazy_content_available_bytes "$lazy_content_available_bytes" \
+    --argjson lazy_content_hydrated_blobs "$lazy_content_hydrated_blobs" \
+    --argjson lazy_content_hydrated_bytes "$lazy_content_hydrated_bytes" \
+    --argjson lazy_content_hydration_attempts "$lazy_content_hydration_attempts" \
+    --argjson lazy_content_hydration_failures "$lazy_content_hydration_failures" \
+    --argjson lazy_content_hydration_milliseconds "$lazy_content_hydration_milliseconds" \
     --argjson finalize_eligible "$finalize_eligible" \
     --argjson finalize_already_ready "$finalize_already_ready" \
     --argjson finalize_materialized "$finalize_materialized" \
@@ -1940,6 +2020,8 @@ run_phase() {
           mount_cache_blobs: $restore_mount_blobs,
           mount_cache_bytes: $restore_mount_bytes,
           mount_cache_files: $restore_mount_files,
+          lazy_content_blobs: $restore_lazy_content_blobs,
+          lazy_content_bytes: $restore_lazy_content_bytes,
           manifest_seconds: ($restore_manifest_seconds | tonumber),
           verify_seconds: ($restore_verify_seconds | tonumber),
           url_plan_seconds: ($restore_url_plan_seconds | tonumber),
@@ -1966,6 +2048,20 @@ run_phase() {
         logical_generation_blobs: $logical_blobs,
         transport_delta_bytes: $transport_delta_bytes,
         transport_delta_blobs: $transport_delta_blobs,
+        save: {
+          reused_blobs: $save_reused_blobs,
+          reused_bytes: $save_reused_bytes,
+          uploaded_blobs: $transport_delta_blobs,
+          uploaded_bytes: $transport_delta_bytes,
+          lazy_content_runtime_status: $lazy_content_runtime_status,
+          lazy_content_available_blobs: $lazy_content_available_blobs,
+          lazy_content_available_bytes: $lazy_content_available_bytes,
+          lazy_content_hydrated_blobs: $lazy_content_hydrated_blobs,
+          lazy_content_hydrated_bytes: $lazy_content_hydrated_bytes,
+          lazy_content_hydration_attempts: $lazy_content_hydration_attempts,
+          lazy_content_hydration_failures: $lazy_content_hydration_failures,
+          lazy_content_hydration_milliseconds: $lazy_content_hydration_milliseconds
+        },
         finalize: {
           eligible: $finalize_eligible,
           already_ready: $finalize_already_ready,
@@ -2119,7 +2215,7 @@ run_terminal_mount_probe() {
     --arg digest "$buildkit_digest" \
     --arg platform "$docker_platform" \
     --arg expected_generation "$expected_generation" \
-    '.schema_version == "buildkit-state-summary.v2"
+    '.schema_version == "buildkit-state-summary.v3"
       and .compatibility.image_digest == $digest
       and .compatibility.platform == $platform
       and .compatibility.state_format == "buildkit-state-v1"
@@ -2129,6 +2225,19 @@ run_terminal_mount_probe() {
       and .save.status == "read_only"
       and .save.publish_status == "read_only"
       and .save.generation == null
+      and (.restore.lazy_content_blobs | type == "number")
+      and .restore.lazy_content_blobs >= 0
+      and (.restore.lazy_content_bytes | type == "number")
+      and .restore.lazy_content_bytes >= 0
+      and .save.lazy_content_runtime_status == "recorded"
+      and .save.lazy_content_available_blobs == .restore.lazy_content_blobs
+      and .save.lazy_content_available_bytes == .restore.lazy_content_bytes
+      and .save.lazy_content_hydrated_blobs <= .save.lazy_content_available_blobs
+      and .save.lazy_content_hydrated_bytes <= .save.lazy_content_available_bytes
+      and .save.lazy_content_hydration_attempts >= .save.lazy_content_hydrated_blobs
+      and .save.lazy_content_hydration_failures == 0
+      and (.save.lazy_content_hydration_milliseconds | type == "number")
+      and .save.lazy_content_hydration_milliseconds >= 0
       and .mount_cache.enabled == true
       and .mount_cache.runtime_status == "recorded"
       and .mount_cache.available_archives > 0
@@ -2197,6 +2306,15 @@ run_terminal_mount_probe() {
       hydrate_skips: ($summary[0].mount_cache.hydrate_skips // 0),
       hydrated_compressed_bytes: ($summary[0].mount_cache.hydrated_compressed_bytes // 0),
       hydrated_uncompressed_bytes: ($summary[0].mount_cache.hydrated_uncompressed_bytes // 0),
+      lazy_content: {
+        signed_blobs: ($summary[0].restore.lazy_content_blobs // 0),
+        signed_bytes: ($summary[0].restore.lazy_content_bytes // 0),
+        hydrated_blobs: ($summary[0].save.lazy_content_hydrated_blobs // 0),
+        hydrated_bytes: ($summary[0].save.lazy_content_hydrated_bytes // 0),
+        hydration_attempts: ($summary[0].save.lazy_content_hydration_attempts // 0),
+        hydration_failures: ($summary[0].save.lazy_content_hydration_failures // 0),
+        hydration_milliseconds: ($summary[0].save.lazy_content_hydration_milliseconds // 0)
+      },
       staged_archives: ($summary[0].mount_cache.staged_archives // 0),
       released_archives: ($summary[0].mount_cache.released_archives // 0),
       aborted_archives: ($summary[0].mount_cache.aborted_archives // 0),

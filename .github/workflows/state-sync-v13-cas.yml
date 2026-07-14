@@ -618,6 +618,21 @@ jobs:
                 (if .checks.managed_builder_destroyed then "yes" else "no" end)
               ] | "| " + join(" | ") + " |"' "$result"
               echo
+              echo "#### Lazy immutable content"
+              echo
+              echo "Signed immutable bodies stay remote until BuildKit reads them. Thin-save reuse is the exact body set retained without another upload."
+              echo
+              echo "| Phase | Signed lazy set | Hydrated on demand | Attempts / failures / time | Thin save reused | Uploaded |"
+              echo "|---|---:|---:|---:|---:|---:|"
+              jq -r '.phases[] | [
+                .phase,
+                ((.state.restore.lazy_content_blobs | tostring) + " / " + (.state.restore.lazy_content_bytes / 1048576 | floor | tostring) + " MiB"),
+                ((.state.save.lazy_content_hydrated_blobs | tostring) + " / " + (.state.save.lazy_content_hydrated_bytes / 1048576 | floor | tostring) + " MiB"),
+                ((.state.save.lazy_content_hydration_attempts | tostring) + " / " + (.state.save.lazy_content_hydration_failures | tostring) + " / " + (.state.save.lazy_content_hydration_milliseconds | tostring) + " ms"),
+                ((.state.save.reused_blobs | tostring) + " / " + (.state.save.reused_bytes / 1048576 | floor | tostring) + " MiB"),
+                ((.state.save.uploaded_blobs | tostring) + " / " + (.state.save.uploaded_bytes / 1048576 | floor | tostring) + " MiB")
+              ] | "| " + join(" | ") + " |"' "$result"
+              echo
               echo "#### Observed BuildKit state record flow"
               echo
               echo "Record IDs stay opaque in the uploaded JSON; this table shows the observed descriptions and grouped counts without pinning their text as a contract."

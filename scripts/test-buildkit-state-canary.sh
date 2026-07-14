@@ -1788,7 +1788,7 @@ command jq -e '
     and .state.logical_generation_bytes == (.state.save.reused_bytes + .state.save.uploaded_bytes)
     and .state.save.lazy_content_hydration_failures == 0
   )
-  and all(.phases[1:];
+  and all(.phases[1:][];
     .state.restore.lazy_content_blobs == 10
     and .state.restore.lazy_content_bytes == 10000
     and .state.save.lazy_content_runtime_status == "recorded"

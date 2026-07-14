@@ -236,6 +236,17 @@ jq -n \
     mountcache_enabled: ($composition_mode == "fixture")
   }' > "$artifact_dir/inputs.json"
 
+mount_probe_result_path="$artifact_dir/mount-probe.result.json"
+jq -n \
+  --argjson enabled "$(if [[ "$composition_mode" == fixture ]]; then echo true; else echo false; fi)" \
+  '{
+    schema_version: "buildkit-state-mount-probe.v1",
+    enabled: $enabled,
+    attempted: false,
+    timing_included_in_product_phases: false,
+    valid: ($enabled | not)
+  }' > "$mount_probe_result_path"
+
 snapshot_managed_resources() {
   {
     docker ps -a --format 'container {{.Names}}' 2>/dev/null || true
@@ -287,6 +298,7 @@ write_combined_result() {
 
   jq -s \
     --slurpfile inputs "$artifact_dir/inputs.json" \
+    --slurpfile mount_probe "$mount_probe_result_path" \
     --arg lane "$lane" \
     --argjson tolerance "$plateau_tolerance_percent" \
     --argjson warm_generations "$warm_generations" \
@@ -428,6 +440,7 @@ write_combined_result() {
               )
               and $bootstrap.logical_set.positive_growth_within_tolerance
               and $all_warm_content_counts_stable
+              and $all_warm_record_counts_stable
               and $final_transition.final_convergence_pair
               and $final_transition.logical_set.within_tolerance
             ),
@@ -448,10 +461,12 @@ write_combined_result() {
             same_ref_replacement_uploaded_bytes: $warm_uploaded_bytes,
             same_ref_count_plateau: (
               $all_warm_content_counts_stable
+              and $all_warm_record_counts_stable
               and ($final_transition.logical_set.within_tolerance // false)
             ),
             same_ref_plateau: (
               $all_warm_content_counts_stable
+              and $all_warm_record_counts_stable
               and ($final_transition.logical_set.within_tolerance // false)
             ),
             same_ref_solver_reuse: $all_warm_solver_reuse,
@@ -599,6 +614,7 @@ write_combined_result() {
             }
           }
       end) as $current_set
+    | ($mount_probe[0]) as $terminal_mount_probe
     | (if $inputs[0].composition_mode == "fixture" then
         {
           mode: "fixture",
@@ -607,14 +623,33 @@ write_combined_result() {
             $base.phases[];
             ((.state.mount_cache.published_archives // 0) > 0)
           ),
-          mountcache_restored: any(
+          signed_refs_available: any(
             $base.phases[];
-            ((.state.mount_cache.restored_archives // 0) > 0)
+            .state.restore_status == "restored"
+            and ((.state.mount_cache.available_archives // 0) > 0)
+            and ((.state.mount_cache.available_bytes // 0) > 0)
           ),
-          mountcache_hydrated: any(
+          zero_eager_mount_restore: all(
             $base.phases[];
-            ((.state.mount_cache.hydrate_hits // 0) > 0)
+            (.state.mount_cache.restored_blobs // 0) == 0
+            and (.state.mount_cache.restored_archives // 0) == 0
+            and (.state.mount_cache.restored_bytes // 0) == 0
           ),
+          generation_refs_bounded: all(
+            $base.phases[];
+            (.state.mount_cache.generation_archives // -1)
+              == (.state.mount_cache.selected_archives // -2)
+            and (.state.mount_cache.generation_archives // 0) > 0
+          ),
+          deferred_publish_lifecycle: all(
+            $base.phases[];
+            (.state.mount_cache.aborted_archives // -1) == 0
+            and (.state.mount_cache.staged_archives // -1)
+              == (.state.mount_cache.released_archives // -2)
+            and (.state.mount_cache.staged_archives // -1)
+              == (.state.mount_cache.published_archives // -2)
+          ),
+          mountcache_hydrated: (($terminal_mount_probe.hydrate_hits // 0) > 0),
           toolcache_exercised: any(
             $base.phases[];
             (((.tool_cache.hits // 0) + (.tool_cache.misses // 0) + (.tool_cache.writes // 0)) > 0)
@@ -641,7 +676,11 @@ write_combined_result() {
         }
         | .valid = (
             .mountcache_published
-            and .mountcache_restored
+            and .signed_refs_available
+            and .zero_eager_mount_restore
+            and .generation_refs_bounded
+            and .deferred_publish_lifecycle
+            and $terminal_mount_probe.valid
             and .toolcache_exercised
             and (
               .fully_state_cached_short_circuit
@@ -653,7 +692,10 @@ write_combined_result() {
           mode: "off",
           tool_env_delivery: "none",
           mountcache_published: false,
-          mountcache_restored: false,
+          signed_refs_available: false,
+          zero_eager_mount_restore: true,
+          generation_refs_bounded: true,
+          deferred_publish_lifecycle: true,
           mountcache_hydrated: false,
           toolcache_exercised: false,
           toolcache_hits: false,
@@ -674,6 +716,7 @@ write_combined_result() {
         ),
         current_set: $current_set,
         composition: $composition,
+        terminal_mount_probe: $terminal_mount_probe,
         phases: $base.phases
       }' "${phase_files[@]}" > "$result"
 }
@@ -875,11 +918,28 @@ run_phase() {
          and .mount_cache.runtime_status == "recorded"
          and .mount_cache.hydrate_errors == 0
          and .mount_cache.publish_errors == 0
+         and .mount_cache.restored_blobs == 0
+         and .mount_cache.restored_archives == 0
+         and .mount_cache.restored_bytes == 0
+         and .mount_cache.aborted_archives == 0
+         and .mount_cache.staged_archives == .mount_cache.released_archives
+         and .mount_cache.staged_archives == .mount_cache.published_archives
          and .mount_cache.generation_archives == .mount_cache.selected_archives
+         and .mount_cache.generation_archives > 0
+         and (if .restore.status == "restored" then
+                .mount_cache.available_archives > 0
+                and .mount_cache.available_bytes > 0
+              else
+                .mount_cache.available_archives == 0
+                and .mount_cache.available_bytes == 0
+              end)
        else
          .mount_cache.enabled == false
          and .mount_cache.runtime_status == "disabled"
          and .mount_cache.generation_archives == 0
+         and .mount_cache.staged_archives == 0
+         and .mount_cache.released_archives == 0
+         and .mount_cache.aborted_archives == 0
        end' \
       "$state_summary_path" >/dev/null; then
       mount_cache_valid=true
@@ -1057,6 +1117,185 @@ run_phase() {
   fi
 }
 
+run_terminal_mount_probe() {
+  local log_path="$artifact_dir/mount-probe.build.log"
+  local daemon_log_path="$artifact_dir/mount-probe.buildkitd.log"
+  local observability_path="$artifact_dir/mount-probe.observability.jsonl"
+  local state_summary_path="$artifact_dir/mount-probe.state-summary.json"
+  local resources_after="$artifact_dir/mount-probe.managed-resources.after.txt"
+  local resources_leaked="$artifact_dir/mount-probe.managed-resources.leaked.txt"
+  local phase_started phase_finished command_status tee_status summary_valid cleanup_valid success
+  local last_product_phase_path expected_generation result_summary_path
+  local command_statuses=()
+
+  if [[ "$lane" == fresh ]]; then
+    last_product_phase_path="$artifact_dir/$(fresh_warm_phase_name "$warm_generations").phase.json"
+  elif [[ "$lane" == rolling ]]; then
+    last_product_phase_path="$artifact_dir/rolling.phase.json"
+  else
+    last_product_phase_path="$(find "$artifact_dir" -maxdepth 1 -name 'replay-*.phase.json' -type f | LC_ALL=C sort | tail -n1)"
+  fi
+  [[ -s "$last_product_phase_path" ]] || {
+    echo "Terminal mount probe cannot find the last product phase" >&2
+    return 1
+  }
+  expected_generation="$(jq -r '.state.generation // ""' "$last_product_phase_path")"
+  [[ "$expected_generation" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "Terminal mount probe has no exact product generation to restore" >&2
+    return 1
+  }
+
+  rm -f \
+    "$log_path" \
+    "$daemon_log_path" \
+    "$observability_path" \
+    "$state_summary_path" \
+    "$resources_after" \
+    "$resources_leaked"
+
+  phase_started="$(date +%s)"
+  set +e
+  BORINGCACHE_STATE_SUMMARY_PATH="$state_summary_path" \
+    BORINGCACHE_STATE_CANARY_PROBE_EXPECTED_GENERATION="$expected_generation" \
+    BORINGCACHE_MANAGED_BUILDKIT_LOG_PATH="$daemon_log_path" \
+    BORINGCACHE_OBSERVABILITY_JSONL_PATH="$observability_path" \
+    BORINGCACHE_MANAGED_BUILDKIT_IMAGE="$buildkit_image" \
+    DOCKER_BUILDKIT=1 \
+    boringcache docker \
+      --backend state \
+      --workspace "$workspace" \
+      --tag "$cache_tag" \
+      --tool-cache "turbo:${tool_cache_tag}" \
+      --read-only \
+      --no-platform \
+      --no-git \
+      --fail-on-cache-error \
+      --metadata-hint "benchmark=posthog" \
+      --metadata-hint "lane=${lane}" \
+      --metadata-hint "phase=terminal-mount-probe" \
+      --metadata-hint "source_sha=${source_sha}" \
+      -- \
+      docker buildx build \
+        --file "$repo_root/scenarios/posthog-toolcache/Dockerfile" \
+        --target boringcache-state-mount-probe \
+        --no-cache-filter boringcache-state-mount-probe \
+        --build-arg BORINGCACHE_STATE_MOUNT_PROBE=read-only \
+        --platform "$docker_platform" \
+        --progress plain \
+        --output type=cacheonly \
+        "$docker_context" 2>&1 | tee "$log_path"
+  command_statuses=("${PIPESTATUS[@]}")
+  set -e
+  command_status="${command_statuses[0]}"
+  tee_status="${command_statuses[1]}"
+  phase_finished="$(date +%s)"
+
+  snapshot_managed_resources > "$resources_after"
+  comm -13 "$baseline_resources" "$resources_after" > "$resources_leaked"
+  cleanup_valid=false
+  [[ -s "$resources_leaked" ]] || cleanup_valid=true
+
+  summary_valid=false
+  if [[ -s "$state_summary_path" ]] && jq -e \
+    --arg digest "$buildkit_digest" \
+    --arg platform "$docker_platform" \
+    --arg expected_generation "$expected_generation" \
+    '.schema_version == "buildkit-state-summary.v2"
+      and .compatibility.image_digest == $digest
+      and .compatibility.platform == $platform
+      and .compatibility.state_format == "buildkit-state-v1"
+      and .compatibility.rootless == false
+      and .restore.status == "restored"
+      and .restore.generation == $expected_generation
+      and .save.status == "read_only"
+      and .save.publish_status == "read_only"
+      and .save.generation == null
+      and .mount_cache.enabled == true
+      and .mount_cache.runtime_status == "recorded"
+      and .mount_cache.available_archives > 0
+      and .mount_cache.available_bytes > 0
+      and .mount_cache.restored_blobs == 0
+      and .mount_cache.restored_archives == 0
+      and .mount_cache.restored_bytes == 0
+      and .mount_cache.generation_archives == 0
+      and .mount_cache.staged_archives == 0
+      and .mount_cache.released_archives == 0
+      and .mount_cache.aborted_archives == 0
+      and .mount_cache.selected_archives > 0
+      and .mount_cache.selected_archives <= .mount_cache.available_archives
+      and .mount_cache.hydrate_hits == 1
+      and .mount_cache.hydrate_misses == 0
+      and .mount_cache.hydrate_errors == 0
+      and .mount_cache.hydrate_skips == 0
+      and .mount_cache.hydrated_files > 0
+      and .mount_cache.hydrated_compressed_bytes > 0
+      and .mount_cache.hydrated_uncompressed_bytes > 0
+      and .mount_cache.published_archives == 0
+      and .mount_cache.publish_errors == 0' \
+    "$state_summary_path" >/dev/null; then
+    summary_valid=true
+  fi
+
+  success=false
+  if [[ "$command_status" -eq 0 && "$tee_status" -eq 0 && "$summary_valid" == true && "$cleanup_valid" == true ]]; then
+    success=true
+  fi
+
+  result_summary_path="$state_summary_path"
+  if [[ ! -s "$result_summary_path" ]] || ! jq -e . "$result_summary_path" >/dev/null 2>&1; then
+    result_summary_path="$artifact_dir/mount-probe.empty-summary.json"
+    jq -n '{}' > "$result_summary_path"
+  fi
+
+  jq -n \
+    --argjson phase_seconds "$((phase_finished - phase_started))" \
+    --argjson command_status "$command_status" \
+    --argjson tee_status "$tee_status" \
+    --argjson summary_valid "$summary_valid" \
+    --argjson cleanup_valid "$cleanup_valid" \
+    --argjson success "$success" \
+    --arg expected_generation "$expected_generation" \
+    --slurpfile summary "$result_summary_path" \
+    '{
+      schema_version: "buildkit-state-mount-probe.v1",
+      enabled: true,
+      attempted: true,
+      read_only: true,
+      timing_included_in_product_phases: false,
+      expected_generation: $expected_generation,
+      restored_generation: ($summary[0].restore.generation // null),
+      phase_seconds: $phase_seconds,
+      command_status: $command_status,
+      tee_status: $tee_status,
+      signed_ref_archives: ($summary[0].mount_cache.available_archives // 0),
+      selected_archives: ($summary[0].mount_cache.selected_archives // 0),
+      eager_restored_blobs: ($summary[0].mount_cache.restored_blobs // 0),
+      eager_restored_archives: ($summary[0].mount_cache.restored_archives // 0),
+      eager_restored_bytes: ($summary[0].mount_cache.restored_bytes // 0),
+      hydrate_hits: ($summary[0].mount_cache.hydrate_hits // 0),
+      hydrate_misses: ($summary[0].mount_cache.hydrate_misses // 0),
+      hydrate_errors: ($summary[0].mount_cache.hydrate_errors // 0),
+      hydrate_skips: ($summary[0].mount_cache.hydrate_skips // 0),
+      hydrated_compressed_bytes: ($summary[0].mount_cache.hydrated_compressed_bytes // 0),
+      hydrated_uncompressed_bytes: ($summary[0].mount_cache.hydrated_uncompressed_bytes // 0),
+      staged_archives: ($summary[0].mount_cache.staged_archives // 0),
+      released_archives: ($summary[0].mount_cache.released_archives // 0),
+      aborted_archives: ($summary[0].mount_cache.aborted_archives // 0),
+      published_archives: ($summary[0].mount_cache.published_archives // 0),
+      checks: {
+        summary_valid: $summary_valid,
+        managed_builder_destroyed: $cleanup_valid
+      },
+      valid: $success
+    }' > "$mount_probe_result_path"
+  [[ "$result_summary_path" == "$state_summary_path" ]] || rm -f "$result_summary_path"
+
+  if [[ "$success" != true ]]; then
+    echo "BuildKit state terminal mount-cache probe failed validation" >&2
+    return 1
+  fi
+}
+
 if [[ "$lane" == "fresh" ]]; then
   run_phase cold cold base "$source_sha" cold
   # Each state invocation owns and removes its builder, daemon, network, and
@@ -1084,6 +1323,10 @@ else
     fi
     run_phase "$phase" "generation-$((index + 1))" base "$commit" "$expectation"
   done
+fi
+
+if [[ "$composition_mode" == fixture ]]; then
+  run_terminal_mount_probe
 fi
 
 write_combined_result

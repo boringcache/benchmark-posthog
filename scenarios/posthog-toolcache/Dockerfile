@@ -416,3 +416,14 @@ COPY unit.json.tpl /docker-entrypoint.d/unit.json.tpl
 # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root
 CMD ["./bin/docker"]
+
+
+# Canary-only target: force one bounded pnpm cache mount to execute after the
+# product phases. The state harness invokes this target read-only and records
+# its timing separately, so it proves lazy archive hydration without changing
+# the measured BuildKit generation.
+FROM node:24.13.0-bookworm-slim AS boringcache-state-mount-probe
+ARG BORINGCACHE_STATE_MOUNT_PROBE
+RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \
+    test -n "$BORINGCACHE_STATE_MOUNT_PROBE" && \
+    test -n "$(find /tmp/pnpm-store-v24 -mindepth 1 -print -quit)"

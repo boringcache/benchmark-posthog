@@ -223,7 +223,11 @@ jobs:
               exit 1
               ;;
           esac
-          tool_cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-${composition_slug}-turbo-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          if [[ "$CACHE_LANE" == rolling ]]; then
+            tool_cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-${composition_slug}-turbo-rolling-${rolling_slug}"
+          else
+            tool_cache_tag="posthog-buildkit-state-${image_key}-${platform_key}-${composition_slug}-turbo-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          fi
 
           {
             echo "cli_asset=${cli_asset}"

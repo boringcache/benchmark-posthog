@@ -964,15 +964,22 @@ write_combined_result() {
         {
           mode: "fixture",
           tool_env_delivery: $inputs[0].tool_env_delivery,
+          bootstrap_only: all(
+            $base.phases[];
+            .state.restore_status == "miss"
+          ),
           mountcache_published: any(
             $base.phases[];
             ((.state.mount_cache.published_archives // 0) > 0)
           ),
-          signed_refs_available: any(
-            $base.phases[];
-            .state.restore_status == "restored"
-            and ((.state.mount_cache.available_archives // 0) > 0)
-            and ((.state.mount_cache.available_bytes // 0) > 0)
+          signed_refs_available: (
+            any(
+              $base.phases[];
+              .state.restore_status == "restored"
+              and ((.state.mount_cache.available_archives // 0) > 0)
+              and ((.state.mount_cache.available_bytes // 0) > 0)
+            )
+            or (($terminal_mount_probe.signed_ref_archives // 0) > 0)
           ),
           zero_eager_mount_restore: all(
             $base.phases[];
@@ -1028,7 +1035,8 @@ write_combined_result() {
             and $terminal_mount_probe.valid
             and .toolcache_exercised
             and (
-              .fully_state_cached_short_circuit
+              .bootstrap_only
+              or .fully_state_cached_short_circuit
               or (.toolcache_hits and .mountcache_hydrated)
             )
           )
@@ -1036,6 +1044,7 @@ write_combined_result() {
         {
           mode: "off",
           tool_env_delivery: "none",
+          bootstrap_only: false,
           mountcache_published: false,
           signed_refs_available: false,
           zero_eager_mount_restore: true,

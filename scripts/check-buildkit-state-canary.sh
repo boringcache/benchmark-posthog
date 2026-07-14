@@ -133,17 +133,16 @@ require_text "$runner" "preflight-checklist.json"
 require_text "$runner" ".save.logical_generation_blobs"
 require_text "$runner" ".save.logical_generation_bytes"
 require_text "$runner" 'buildkit-state-summary.v2'
-require_text "$runner" 'signed-working-set-main-cache-v1'
-require_text "$runner" '.finalize.retention_source == "restored-marker"'
+require_text "$runner" 'state-window-scaffold-clean-v1'
+require_text "$runner" '.finalize.retention_source == "post-clean-measured"'
 require_text "$runner" '.finalize.retention_disk_usage_baseline_bytes > 0'
 require_text "$runner" '.finalize.prune_applied == true'
 require_text "$runner" '.finalize.prune_target_satisfied == true'
-require_text "$runner" '.finalize.prune_all == false'
-require_text "$runner" '.finalize.prune_filter_count == 0'
-require_text "$runner" 'upstream_percent_bytes'
-require_text "$runner" 'positive_prune_observed'
-require_text "$runner" 'all_logical_core_within_bound'
-require_text "$runner" 'working_set_scorecard'
+require_text "$runner" '.finalize.prune_all == true'
+require_text "$runner" '.finalize.prune_filter_count == 2'
+require_text "$runner" 'post_clean_baselines_valid'
+require_text "$runner" 'scaffold_prune_observed'
+require_text "$runner" 'growth_observation'
 require_text "$runner" 'clean_start_free'
 require_text "$runner" 'replay_min_cached_steps=68'
 require_text "$runner" 'all_restored_successors_hit_contract'
@@ -167,9 +166,9 @@ require_text "$runner" "buildkit-state-canary-phase.v2"
 require_text "$test_runner" "Expected a single-manifest document to fail the image-index gate"
 require_text "$test_runner" "Expected invalid BuildKit state record flow"
 require_text "$test_runner" "Expected extra same-ref records created during the user build to fail closed"
-require_text "$test_runner" "Expected a replay without a triggered positive prune to fail graduation"
-require_text "$test_runner" "Expected a replay above the 16 GiB logical-core ceiling to fail graduation"
-require_text "$test_runner" "Expected an unsafe signed working-set retention report to fail closed"
+require_text "$test_runner" "Expected a replay without per-build scaffold cleanup to fail graduation"
+require_text "$test_runner" "replay-oversized-logical-core"
+require_text "$test_runner" "Expected an unsafe scaffold-clean retention report to fail closed"
 require_text "$test_runner" "Expected a replay successor below the PostHog cache-hit floor to fail graduation"
 require_text "$test_runner" "Expected a replay with a superseded backend state version to fail graduation"
 require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode == 'fixture' && '1' || '0' }}"

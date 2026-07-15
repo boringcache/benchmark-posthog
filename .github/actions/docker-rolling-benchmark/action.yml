@@ -21,6 +21,10 @@ inputs:
     default: "metadata-only"
   benchmark_id:
     required: true
+  cache_scope_override:
+    description: "Optional exact BoringCache cache tag. Empty keeps the normal rolling scope derivation."
+    required: false
+    default: ""
   project_repo:
     required: true
   project_ref:
@@ -254,6 +258,7 @@ runs:
       env:
         STRATEGY: ${{ inputs.strategy }}
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
+        CACHE_SCOPE_OVERRIDE: ${{ inputs.cache_scope_override }}
         CACHE_SCOPE_REF_SLUG: ${{ inputs.cache_scope_ref_slug }}
         DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
       run: |
@@ -288,7 +293,7 @@ runs:
         echo "scope_started_at=${scope_started_at}" >> "$GITHUB_OUTPUT"
 
         if [[ "$STRATEGY" == "boringcache" ]]; then
-          cache_scope="${BENCHMARK_ID}-run-rolling-${ref_slug}"
+          cache_scope="${CACHE_SCOPE_OVERRIDE:-${BENCHMARK_ID}-run-rolling-${ref_slug}}"
           tool_cache_tags="$(tool_cache_tags_csv "$cache_scope" "$DOCKER_TOOL_CACHE")"
           tags_csv="${cache_scope}"
           if [[ -n "$tool_cache_tags" ]]; then

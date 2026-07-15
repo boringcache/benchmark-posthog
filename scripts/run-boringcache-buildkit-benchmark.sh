@@ -11,7 +11,7 @@ cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob
 mode="${1:-full}"
 backend="${BUILDKIT_BACKEND:-registry}"
 case "$backend" in
-  registry|boringcache)
+  registry|boringcache|state)
     ;;
   *)
     echo "Unsupported BUILDKIT_BACKEND: ${backend}" >&2

@@ -568,6 +568,25 @@ require_readable_cache_import() {
 }
 
 build_import_status() {
+  if [[ "$backend" == "state" && -s "${BORINGCACHE_STATE_SUMMARY_PATH:-}" ]]; then
+    local state_restore_status=""
+    state_restore_status="$(jq -r '.restore.status // empty' "$BORINGCACHE_STATE_SUMMARY_PATH" 2>/dev/null || true)"
+    case "$state_restore_status" in
+      restored)
+        echo "ok"
+        return
+        ;;
+      miss)
+        echo "bootstrap_miss"
+        return
+        ;;
+      discarded)
+        echo "proxy_unreadable"
+        return
+        ;;
+    esac
+  fi
+
   if grep -Eq 'failed to configure .*cache importer|cache manifest.*(manifest unknown|not found)|importing cache manifest.*(manifest unknown|not found)' "$build_log"; then
     echo "not_found"
   elif grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then

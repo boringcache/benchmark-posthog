@@ -11,6 +11,7 @@ preflight_runner="$repo_root/scripts/preflight-buildkit-state-canary.sh"
 test_runner="$repo_root/scripts/test-buildkit-state-canary.sh"
 rolling_dispatcher="$repo_root/scripts/dispatch-buildkit-state-rolling-canary.sh"
 rolling_dispatcher_test="$repo_root/scripts/test-dispatch-buildkit-state-rolling-canary.sh"
+rolling_benchmark_runner="$repo_root/scripts/run-boringcache-buildkit-benchmark.sh"
 record_flow_summary_renderer="$repo_root/scripts/render-buildkit-state-record-flow-summary.sh"
 fixture_renderer="$repo_root/scripts/render-posthog-toolcache-dockerfile.sh"
 fixture_renderer_test="$repo_root/scripts/test-render-posthog-toolcache-dockerfile.sh"
@@ -21,6 +22,7 @@ bash -n "$preflight_runner"
 bash -n "$test_runner"
 bash -n "$rolling_dispatcher"
 bash -n "$rolling_dispatcher_test"
+bash -n "$rolling_benchmark_runner"
 bash -n "$record_flow_summary_renderer"
 bash -n "$fixture_renderer"
 bash -n "$fixture_renderer_test"
@@ -140,6 +142,8 @@ require_text "$workflow" 'turbo-rolling-${rolling_slug}'
 require_text "$workflow" 'docker_platform: ${{ steps.state.outputs.docker_platform }}'
 require_text "$workflow" 'platform_key=arm64'
 require_text "$workflow" 'expected_runner_arch=ARM64'
+require_text "$rolling_benchmark_runner" 'state_restore_status="$(jq -r '\''.restore.status // empty'\'' "$BORINGCACHE_STATE_SUMMARY_PATH" 2>/dev/null || true)"'
+require_text "$rolling_benchmark_runner" 'echo "bootstrap_miss"'
 require_text "$fixture_renderer" 'AS boringcache-state-mount-probe'
 require_text "$fixture_renderer" 'AS posthog-runtime'
 require_text "$runner" 'render-posthog-toolcache-dockerfile.sh" "$dockerfile_path"'

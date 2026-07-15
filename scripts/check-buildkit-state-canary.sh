@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workflow="$repo_root/.github/workflows/state-sync-v13-cas.yml"
+rolling_action="$repo_root/.github/actions/docker-rolling-benchmark/action.yml"
 rolling_dispatch_workflow="$repo_root/.github/workflows/rolling-dispatch.yml"
 sync_workflow="$repo_root/.github/workflows/sync.yml"
 runner="$repo_root/scripts/run-buildkit-state-canary.sh"
@@ -215,6 +216,7 @@ require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs
 require_text "$workflow" "Observed BuildKit state record flow"
 require_text "$workflow" "Lazy immutable content"
 require_text "$workflow" "changed-source solver floor"
+require_text "$rolling_action" "inputs.buildkit_backend == 'state' && 'always'"
 
 for file in "$workflow" "$runner" "$preflight_runner"; do
   reject_text "$file" "boringcache/one"

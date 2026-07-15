@@ -744,7 +744,11 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$CACHE_LANE" == rolling ]] || { echo "build-only requires cache_lane=rolling" >&2; exit 1; }
-          [[ "$COMPOSITION_MODE" == off ]] || { echo "build-only currently measures the core state path only" >&2; exit 1; }
+          case "$COMPOSITION_MODE" in
+            off) composition_slug=core ;;
+            fixture) composition_slug=fixture ;;
+            *) echo "build-only composition_mode must be off or fixture" >&2; exit 1 ;;
+          esac
           [[ "$CLI_PLATFORM" == linux-amd64 ]] || { echo "build-only currently measures linux-amd64 only" >&2; exit 1; }
           [[ "$POSTHOG_SOURCE" =~ ^[0-9a-f]{40}$ ]] || { echo "build-only requires an exact PostHog commit" >&2; exit 1; }
           [[ "$BUILDKIT_IMAGE" =~ ^ghcr\.io/boringcache/buildkit@sha256:([0-9a-f]{64})$ ]] || {
@@ -756,7 +760,8 @@ jobs:
           rolling_slug="${rolling_slug#-}"
           rolling_slug="${rolling_slug%-}"
           [[ -n "$rolling_slug" ]] || { echo "rolling_scope must contain a tag-safe character" >&2; exit 1; }
-          echo "cache_tag=posthog-buildkit-state-${image_digest}-amd64-core-rolling-${rolling_slug}" >> "$GITHUB_OUTPUT"
+          echo "cache_tag=posthog-buildkit-state-${image_digest}-amd64-${composition_slug}-rolling-${rolling_slug}" >> "$GITHUB_OUTPUT"
+          echo "tool_cache_tag=posthog-buildkit-state-${image_digest}-amd64-${composition_slug}-turbo-rolling-${rolling_slug}" >> "$GITHUB_OUTPUT"
 
       - name: Free disk space
         shell: bash
@@ -767,12 +772,18 @@ jobs:
         with:
           strategy: boringcache
           buildkit_backend: state
-          benchmark_id: posthog-state
+          benchmark_id: ${{ inputs.composition_mode == 'fixture' && 'posthog-state-composed' || 'posthog-state' }}
           cache_scope_override: ${{ steps.state.outputs.cache_tag }}
           project_repo: PostHog/posthog
           project_ref: ${{ inputs.posthog_source }}
-          dockerfile_path: upstream/Dockerfile
+          prepare_command: ${{ inputs.composition_mode == 'fixture' && '../scripts/render-posthog-toolcache-dockerfile.sh posthog-toolcache.Dockerfile' || '' }}
+          dockerfile_path: ${{ inputs.composition_mode == 'fixture' && 'upstream/posthog-toolcache.Dockerfile' || 'upstream/Dockerfile' }}
           docker_context: upstream
+          docker_tool_cache: ${{ inputs.composition_mode == 'fixture' && format('turbo:{0}', steps.state.outputs.tool_cache_tag) || '' }}
+          buildkit_mountcache_offloader: ${{ inputs.composition_mode == 'fixture' && 'true' || 'false' }}
+          docker_build_args: |-
+            ${{ inputs.composition_mode == 'fixture' && '--target' || '' }}
+            ${{ inputs.composition_mode == 'fixture' && 'posthog-runtime' || '' }}
           docker_platform: linux/amd64
           image_tag: posthog-benchmark:latest
           cli_version: ${{ inputs.cli_release_tag }}

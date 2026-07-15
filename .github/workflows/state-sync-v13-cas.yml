@@ -749,7 +749,26 @@ jobs:
             fixture) composition_slug=fixture ;;
             *) echo "build-only composition_mode must be off or fixture" >&2; exit 1 ;;
           esac
-          [[ "$CLI_PLATFORM" == linux-amd64 ]] || { echo "build-only currently measures linux-amd64 only" >&2; exit 1; }
+          case "$CLI_PLATFORM" in
+            linux-amd64)
+              docker_platform=linux/amd64
+              platform_key=amd64
+              expected_runner_arch=X64
+              ;;
+            linux-arm64)
+              docker_platform=linux/arm64
+              platform_key=arm64
+              expected_runner_arch=ARM64
+              ;;
+            *)
+              echo "build-only cli_platform must be linux-amd64 or linux-arm64" >&2
+              exit 1
+              ;;
+          esac
+          [[ "${RUNNER_ARCH^^}" == "$expected_runner_arch" ]] || {
+            echo "cli_platform ${CLI_PLATFORM} does not match native runner architecture ${RUNNER_ARCH}" >&2
+            exit 1
+          }
           [[ "$POSTHOG_SOURCE" =~ ^[0-9a-f]{40}$ ]] || { echo "build-only requires an exact PostHog commit" >&2; exit 1; }
           [[ "$BUILDKIT_IMAGE" =~ ^ghcr\.io/boringcache/buildkit@sha256:([0-9a-f]{64})$ ]] || {
             echo "build-only requires an exact managed BuildKit image digest" >&2
@@ -760,8 +779,9 @@ jobs:
           rolling_slug="${rolling_slug#-}"
           rolling_slug="${rolling_slug%-}"
           [[ -n "$rolling_slug" ]] || { echo "rolling_scope must contain a tag-safe character" >&2; exit 1; }
-          echo "cache_tag=posthog-buildkit-state-${image_digest}-amd64-${composition_slug}-rolling-${rolling_slug}" >> "$GITHUB_OUTPUT"
-          echo "tool_cache_tag=posthog-buildkit-state-${image_digest}-amd64-${composition_slug}-turbo-rolling-${rolling_slug}" >> "$GITHUB_OUTPUT"
+          echo "docker_platform=${docker_platform}" >> "$GITHUB_OUTPUT"
+          echo "cache_tag=posthog-buildkit-state-${image_digest}-${platform_key}-${composition_slug}-rolling-${rolling_slug}" >> "$GITHUB_OUTPUT"
+          echo "tool_cache_tag=posthog-buildkit-state-${image_digest}-${platform_key}-${composition_slug}-turbo-rolling-${rolling_slug}" >> "$GITHUB_OUTPUT"
 
       - name: Free disk space
         shell: bash
@@ -784,10 +804,10 @@ jobs:
           docker_build_args: |-
             ${{ inputs.composition_mode == 'fixture' && '--target' || '' }}
             ${{ inputs.composition_mode == 'fixture' && 'posthog-runtime' || '' }}
-          docker_platform: linux/amd64
+          docker_platform: ${{ steps.state.outputs.docker_platform }}
           image_tag: posthog-benchmark:latest
           cli_version: ${{ inputs.cli_release_tag }}
-          cli_platform: linux-amd64
+          cli_platform: ${{ inputs.cli_platform }}
           buildkit_image: ${{ inputs.buildkit_image }}
           benchmark_workspace: ${{ github.repository }}
           build_mode: full

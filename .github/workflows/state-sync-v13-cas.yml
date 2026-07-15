@@ -722,6 +722,7 @@ jobs:
       BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
       BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
       BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
+      BORINGCACHE_BUILD_MAX_ATTEMPTS: "1"
       BORINGCACHE_STATE_SUMMARY_PATH: benchmark-diagnostics/posthog-state-summary.json
       BORINGCACHE_MANAGED_BUILDKIT_LOG_PATH: benchmark-diagnostics/posthog-state-buildkitd.log
     steps:

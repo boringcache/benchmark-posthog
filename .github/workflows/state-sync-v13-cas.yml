@@ -815,7 +815,7 @@ jobs:
 
       - name: State rolling build
         id: state_build
-        uses: boringcache/one@one-canary-4a8b54452cfb
+        uses: boringcache/one@one-canary-6a178eda8764
         env:
           BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.composition_mode != 'off' && '1' || '' }}
           BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"
@@ -831,7 +831,7 @@ jobs:
           cache-tag: ${{ steps.state.outputs.cache_tag }}
           working-directory: .
           context: upstream
-          dockerfile: Dockerfile
+          dockerfile: upstream/Dockerfile
           image: posthog-benchmark
           tags: latest
           platforms: ${{ steps.state.outputs.docker_platform }}

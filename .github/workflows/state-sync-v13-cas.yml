@@ -794,27 +794,56 @@ jobs:
         shell: bash
         run: ./scripts/free-runner-disk.sh
 
+      - name: Checkout exact PostHog source
+        shell: bash
+        env:
+          POSTHOG_SOURCE: ${{ inputs.posthog_source }}
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+          if git -C upstream fetch --depth 1 origin "$POSTHOG_SOURCE"; then
+            git -C upstream checkout --detach FETCH_HEAD
+          else
+            git -C upstream fetch --depth 64 origin master || true
+            git -C upstream fetch --depth 64 origin main || true
+            git -C upstream checkout --detach "$POSTHOG_SOURCE"
+          fi
+          test "$(git -C upstream rev-parse HEAD)" = "$POSTHOG_SOURCE"
+
+      - name: Prepare behavior-safe PostHog source
+        shell: bash
+        run: ./scripts/prepare-source.sh base
+
       - name: State rolling build
-        uses: ./.github/actions/docker-rolling-benchmark
+        id: state_build
+        uses: boringcache/one@one-canary-1caad6933f3d
+        env:
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.composition_mode != 'off' && '1' || '' }}
+          BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"
         with:
-          strategy: boringcache
-          buildkit_backend: state
-          benchmark_id: ${{ inputs.composition_mode == 'fixture' && 'posthog-state-composed' || (inputs.composition_mode == 'mount' && 'posthog-state-mount' || 'posthog-state') }}
-          cache_scope_override: ${{ steps.state.outputs.cache_tag }}
-          project_repo: PostHog/posthog
-          project_ref: ${{ inputs.posthog_source }}
-          prepare_command: ${{ inputs.composition_mode == 'fixture' && '../scripts/render-posthog-toolcache-dockerfile.sh posthog-toolcache.Dockerfile' || '' }}
-          dockerfile_path: ${{ inputs.composition_mode == 'fixture' && 'upstream/posthog-toolcache.Dockerfile' || 'upstream/Dockerfile' }}
-          docker_context: upstream
-          docker_tool_cache: ${{ inputs.composition_mode == 'fixture' && format('turbo:{0}', steps.state.outputs.tool_cache_tag) || '' }}
-          buildkit_mountcache_offloader: ${{ inputs.composition_mode != 'off' && 'true' || 'false' }}
-          docker_build_args: |-
-            ${{ inputs.composition_mode == 'fixture' && '--target' || '' }}
-            ${{ inputs.composition_mode == 'fixture' && 'posthog-runtime' || '' }}
-          docker_platform: ${{ steps.state.outputs.docker_platform }}
-          image_tag: posthog-benchmark:latest
-          cli_version: ${{ inputs.cli_release_tag }}
-          cli_platform: ${{ inputs.cli_platform }}
-          buildkit_image: ${{ inputs.buildkit_image }}
-          benchmark_workspace: ${{ github.repository }}
-          build_mode: full
+          setup: none
+          mode: docker
+          workspace: ${{ github.repository }}
+          cli-version: ${{ inputs.cli_release_tag }}
+          cli-platform: ${{ inputs.cli_platform }}
+          cache-runtime: "false"
+          cache-backend: state
+          managed-buildkit-image: ${{ inputs.buildkit_image }}
+          cache-tag: ${{ steps.state.outputs.cache_tag }}
+          working-directory: .
+          context: upstream
+          dockerfile: Dockerfile
+          image: posthog-benchmark
+          tags: latest
+          platforms: ${{ steps.state.outputs.docker_platform }}
+          load: "false"
+          push: "false"
+          proxy-no-git: "true"
+          proxy-no-platform: "true"
+          no-platform: "true"
+          save-policy: auto
+          verify: wait
+          verify-require-server-signature: "true"
+          diagnostics: summary
+          metadata-hints: benchmark=posthog-state,phase=commit

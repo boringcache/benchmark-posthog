@@ -140,7 +140,7 @@ require_text "$runner" 'zero_eager_mount_restore'
 require_text "$runner" 'deferred_publish_lifecycle'
 require_text "$runner" 'and $all_warm_record_counts_stable'
 require_text "$workflow" 'turbo-rolling-${rolling_slug}'
-require_text "$workflow" 'docker_platform: ${{ steps.state.outputs.docker_platform }}'
+require_text "$workflow" 'platforms: ${{ steps.state.outputs.docker_platform }}'
 require_text "$workflow" 'platform_key=arm64'
 require_text "$workflow" 'expected_runner_arch=ARM64'
 require_text "$rolling_benchmark_runner" 'state_restore_status="$(jq -r '\''.restore.status // empty'\'' "$BORINGCACHE_STATE_SUMMARY_PATH" 2>/dev/null || true)"'
@@ -221,19 +221,24 @@ require_text "$test_runner" "Expected same-source replay state growth to fail th
 require_text "$test_runner" "Expected same-source replay required-body growth to fail the correctness contract"
 require_text "$test_runner" "Expected a replay whose exact backend head is not current to fail"
 require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode == 'fixture' && '1' || '0' }}"
-require_text "$workflow" "buildkit_mountcache_offloader: \${{ inputs.composition_mode != 'off' && 'true' || 'false' }}"
+require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode != 'off' && '1' || '' }}"
+require_text "$workflow" "uses: boringcache/one@one-canary-1caad6933f3d"
+require_text "$workflow" "cache-backend: state"
+require_text "$workflow" "managed-buildkit-image: \${{ inputs.buildkit_image }}"
+require_text "$workflow" "cache-tag: \${{ steps.state.outputs.cache_tag }}"
 require_text "$workflow" "Observed BuildKit state record flow"
 require_text "$workflow" "Lazy immutable content"
 require_text "$workflow" "changed-source solver floor"
 require_text "$rolling_action" "inputs.buildkit_backend == 'state' && 'always'"
 
-for file in "$workflow" "$runner" "$preflight_runner"; do
+for file in "$runner" "$preflight_runner"; do
   reject_text "$file" "boringcache/one"
   reject_text "$file" "docker/setup-buildx"
   reject_text "$file" "--cache-from"
   reject_text "$file" "--cache-to"
   reject_text "$file" "rewrite-timestamp"
 done
+reject_text "$workflow" "boringcache/one@v1"
 reject_text "$workflow" "--tool-cache"
 reject_text "$preflight_runner" "--tool-cache"
 reject_text "$runner" 'buildkit-state-summary.v1'

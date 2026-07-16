@@ -815,7 +815,7 @@ jobs:
 
       - name: State rolling build
         id: state_build
-        uses: boringcache/one@one-canary-79d8c06a6370
+        uses: boringcache/one@one-canary-87a8bad1796d
         env:
           BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.composition_mode != 'off' && '1' || '' }}
           BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"

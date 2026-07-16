@@ -24,12 +24,13 @@ on:
           - replay-full
           - replay-endpoints
       composition_mode:
-        description: "Core state only, or the explicit PostHog mountcache + Turbo fixture composition proof."
+        description: "Core state, behavior-safe mountcache, or the explicit mountcache + Turbo fixture proof."
         required: true
         type: choice
         default: "off"
         options:
           - "off"
+          - mount
           - fixture
       cli_release_tag:
         description: "Exact unique release tag in boringcache/cli."
@@ -211,6 +212,10 @@ jobs:
           platform_key="${CLI_PLATFORM#linux-}"
           case "$COMPOSITION_MODE" in
             off) composition_slug=core ;;
+            mount)
+              echo "composition_mode=mount is build-only; the full proof uses the explicit fixture probe" >&2
+              exit 1
+              ;;
             fixture) composition_slug=compose-fixture ;;
             *)
               echo "Unsupported composition mode: ${COMPOSITION_MODE}" >&2
@@ -747,8 +752,9 @@ jobs:
           [[ "$CACHE_LANE" == rolling ]] || { echo "build-only requires cache_lane=rolling" >&2; exit 1; }
           case "$COMPOSITION_MODE" in
             off) composition_slug=core ;;
+            mount) composition_slug=mount ;;
             fixture) composition_slug=fixture ;;
-            *) echo "build-only composition_mode must be off or fixture" >&2; exit 1 ;;
+            *) echo "build-only composition_mode must be off, mount, or fixture" >&2; exit 1 ;;
           esac
           case "$CLI_PLATFORM" in
             linux-amd64)
@@ -793,7 +799,7 @@ jobs:
         with:
           strategy: boringcache
           buildkit_backend: state
-          benchmark_id: ${{ inputs.composition_mode == 'fixture' && 'posthog-state-composed' || 'posthog-state' }}
+          benchmark_id: ${{ inputs.composition_mode == 'fixture' && 'posthog-state-composed' || (inputs.composition_mode == 'mount' && 'posthog-state-mount' || 'posthog-state') }}
           cache_scope_override: ${{ steps.state.outputs.cache_tag }}
           project_repo: PostHog/posthog
           project_ref: ${{ inputs.posthog_source }}
@@ -801,7 +807,7 @@ jobs:
           dockerfile_path: ${{ inputs.composition_mode == 'fixture' && 'upstream/posthog-toolcache.Dockerfile' || 'upstream/Dockerfile' }}
           docker_context: upstream
           docker_tool_cache: ${{ inputs.composition_mode == 'fixture' && format('turbo:{0}', steps.state.outputs.tool_cache_tag) || '' }}
-          buildkit_mountcache_offloader: ${{ inputs.composition_mode == 'fixture' && 'true' || 'false' }}
+          buildkit_mountcache_offloader: ${{ inputs.composition_mode != 'off' && 'true' || 'false' }}
           docker_build_args: |-
             ${{ inputs.composition_mode == 'fixture' && '--target' || '' }}
             ${{ inputs.composition_mode == 'fixture' && 'posthog-runtime' || '' }}

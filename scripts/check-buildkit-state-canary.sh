@@ -81,7 +81,8 @@ require_text "$sync_workflow" 'cron: "*/30 * * * *"'
 require_text "$rolling_dispatcher" "git ls-tree HEAD upstream"
 require_text "$rolling_dispatcher" "STATE_CANARY_BUILDKIT_IMAGE must be an exact managed image digest"
 require_text "$rolling_dispatcher" "-f cache_lane=rolling"
-require_text "$rolling_dispatcher" "-f composition_mode=fixture"
+require_text "$rolling_dispatcher" "-f composition_mode=mount"
+require_text "$rolling_dispatcher" "-f run_mode=build-only"
 require_text "$rolling_dispatcher" '-f "posthog_source=${source_sha}"'
 require_text "$rolling_dispatcher" '-f "rolling_scope=${rolling_scope}"'
 require_text "$preflight_runner" "expected_tag_head_v1"
@@ -220,6 +221,7 @@ require_text "$test_runner" "Expected same-source replay state growth to fail th
 require_text "$test_runner" "Expected same-source replay required-body growth to fail the correctness contract"
 require_text "$test_runner" "Expected a replay whose exact backend head is not current to fail"
 require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode == 'fixture' && '1' || '0' }}"
+require_text "$workflow" "buildkit_mountcache_offloader: \${{ inputs.composition_mode != 'off' && 'true' || 'false' }}"
 require_text "$workflow" "Observed BuildKit state record flow"
 require_text "$workflow" "Lazy immutable content"
 require_text "$workflow" "changed-source solver floor"

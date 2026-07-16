@@ -815,7 +815,7 @@ jobs:
 
       - name: State rolling build
         id: state_build
-        uses: boringcache/one@one-canary-2640d8698695
+        uses: boringcache/one@one-canary-a9c73302d8be
         env:
           BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.composition_mode != 'off' && '1' || '' }}
           BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"
@@ -844,6 +844,4 @@ jobs:
           verify: wait
           verify-require-server-signature: "true"
           diagnostics: summary
-          diagnostics-artifact-name: ${{ format('posthog-state-{0}-{1}-{2}-r{3}-a{4}', inputs.cli_platform, inputs.rolling_scope, inputs.composition_mode, github.run_id, github.run_attempt) }}
-          diagnostics-artifact-retention-days: "14"
           metadata-hints: benchmark=posthog-state,phase=commit

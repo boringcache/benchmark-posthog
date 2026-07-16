@@ -728,8 +728,6 @@ jobs:
       BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
       BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
       BORINGCACHE_BUILD_MAX_ATTEMPTS: "1"
-      BORINGCACHE_STATE_SUMMARY_PATH: benchmark-diagnostics/posthog-state-summary.json
-      BORINGCACHE_MANAGED_BUILDKIT_LOG_PATH: benchmark-diagnostics/posthog-state-buildkitd.log
     steps:
       - name: Checkout benchmark repo
         uses: actions/checkout@v6
@@ -817,7 +815,7 @@ jobs:
 
       - name: State rolling build
         id: state_build
-        uses: boringcache/one@one-canary-1caad6933f3d
+        uses: boringcache/one@one-canary-4356dd03cac6
         env:
           BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.composition_mode != 'off' && '1' || '' }}
           BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"
@@ -846,4 +844,6 @@ jobs:
           verify: wait
           verify-require-server-signature: "true"
           diagnostics: summary
+          diagnostics-artifact-name: ${{ format('posthog-state-{0}-{1}-{2}-r{3}-a{4}', inputs.cli_platform, inputs.rolling_scope, inputs.composition_mode, github.run_id, github.run_attempt) }}
+          diagnostics-artifact-retention-days: "14"
           metadata-hints: benchmark=posthog-state,phase=commit

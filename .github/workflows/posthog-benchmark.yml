@@ -146,7 +146,10 @@ jobs:
             buildkit_cache_backend: boringcache
             benchmark_id: posthog-bc-buildkit-mountcache
             dockerfile_path: upstream/Dockerfile
-            docker_tool_cache: turbo
+            # PostHog's Turbo build inputs omit frontend/public, so remote hits
+            # can restore stale static assets. Keep this lane behavior-safe;
+            # mount-cache offload remains enabled independently.
+            docker_tool_cache: ""
             buildkit_mountcache_offloader: true
             turbo_cache_mounts: false
             lane_filter: buildkit
@@ -168,7 +171,8 @@ jobs:
               buildkit_cache_backend: boringcache
               benchmark_id: posthog-bc-buildkit-mountcache
               dockerfile_path: upstream/Dockerfile
-              docker_tool_cache: turbo
+              # Keep ARM behavior-identical to AMD; see the lane above.
+              docker_tool_cache: ""
               buildkit_mountcache_offloader: true
               turbo_cache_mounts: false
               lane_filter: buildkit

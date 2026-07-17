@@ -1,0 +1,186 @@
+name: PostHog Push Timing
+run-name: ${{ format('Push timing | {0} | {1}', inputs.upstream_ref, inputs.runner_label) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: Exact PostHog commit to build
+        required: true
+        type: string
+      runner_label:
+        description: Native AMD64 runner label
+        required: true
+        type: string
+        default: ubuntu-latest-l
+      cli_version:
+        description: Exact immutable CLI release tag
+        required: true
+        type: string
+        default: vcli-canary-accad696b8c0
+      managed_buildkit_image:
+        description: Exact managed BuildKit digest ref
+        required: true
+        type: string
+        default: ghcr.io/boringcache/buildkit@sha256:cfcc50779c981fa63ef4818e6744adfa642cc5fd00b60539def3458862739510
+      state_cache_tag:
+        description: Existing rolling state tag for this runner class
+        required: true
+        type: string
+        default: posthog-buildkit-state-cfcc50779c981fa63ef4818e6744adfa642cc5fd00b60539def3458862739510-amd64-mount-rolling-main-16c
+      ordinary_cache_tag:
+        description: Existing rolling type=boringcache tag
+        required: true
+        type: string
+        default: posthog-bc-buildkit-mountcache-run-rolling-main
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ format('posthog-push-timing-{0}-{1}', inputs.upstream_ref, inputs.runner_label) }}
+  cancel-in-progress: false
+
+jobs:
+  push:
+    name: ${{ format('{0} push', matrix.backend) }}
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        backend:
+          - state
+          - boringcache
+    env:
+      BORINGCACHE_API_URL: https://api.boringcache.com
+      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+      BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
+      BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
+      BORINGCACHE_BUILD_MAX_ATTEMPTS: "1"
+      IMAGE_REPOSITORY: ghcr.io/boringcache/benchmark-posthog-push-timing
+    steps:
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Free disk space
+        shell: bash
+        run: ./scripts/free-runner-disk.sh
+
+      - name: Checkout exact PostHog source
+        shell: bash
+        env:
+          POSTHOG_SOURCE: ${{ inputs.upstream_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$POSTHOG_SOURCE" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "upstream_ref must be an exact lowercase PostHog commit" >&2
+            exit 1
+          }
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+          git -C upstream fetch --depth 1 origin "$POSTHOG_SOURCE"
+          git -C upstream checkout --detach FETCH_HEAD
+          test "$(git -C upstream rev-parse HEAD)" = "$POSTHOG_SOURCE"
+
+      - name: Prepare behavior-safe PostHog source
+        shell: bash
+        run: ./scripts/prepare-source.sh base
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Resolve timing inputs
+        id: timing
+        shell: bash
+        env:
+          BACKEND: ${{ matrix.backend }}
+          STATE_CACHE_TAG: ${{ inputs.state_cache_tag }}
+          ORDINARY_CACHE_TAG: ${{ inputs.ordinary_cache_tag }}
+        run: |
+          set -euo pipefail
+          case "$BACKEND" in
+            state) cache_tag="$STATE_CACHE_TAG" ;;
+            boringcache) cache_tag="$ORDINARY_CACHE_TAG" ;;
+            *) echo "unsupported backend: $BACKEND" >&2; exit 1 ;;
+          esac
+          {
+            echo "cache_tag=$cache_tag"
+            echo "image_tag=${BACKEND}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+            echo "started_ms=$(date +%s%3N)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: boringcache/one@one-canary-a2a1e9c7f82d
+        env:
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: "1"
+          BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"
+        with:
+          setup: none
+          mode: docker
+          workspace: boringcache/benchmark-posthog
+          cli-version: ${{ inputs.cli_version }}
+          cli-platform: linux-amd64
+          cache-runtime: "false"
+          cache-backend: ${{ matrix.backend }}
+          managed-buildkit-image: ${{ inputs.managed_buildkit_image }}
+          cache-tag: ${{ steps.timing.outputs.cache_tag }}
+          registry-tag: ${{ steps.timing.outputs.cache_tag }}
+          working-directory: .
+          context: upstream
+          dockerfile: upstream/Dockerfile
+          image: ${{ env.IMAGE_REPOSITORY }}
+          tags: ${{ steps.timing.outputs.image_tag }}
+          platforms: linux/amd64
+          load: "false"
+          push: "true"
+          provenance: "false"
+          proxy-no-git: "true"
+          proxy-no-platform: "true"
+          no-platform: "true"
+          save-policy: auto
+          fail-on-cache-error: "true"
+          verify: wait
+          verify-require-server-signature: "true"
+          diagnostics: summary
+          metadata-hints: ${{ format('benchmark=posthog-push-timing,backend={0}', matrix.backend) }}
+
+      - name: Verify pushed image before Action post
+        id: verify
+        shell: bash
+        env:
+          STARTED_MS: ${{ steps.timing.outputs.started_ms }}
+          IMAGE_TAG: ${{ steps.timing.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          image_ref="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          docker buildx imagetools inspect "$image_ref"
+          ready_ms="$(date +%s%3N)"
+          elapsed_ms=$((ready_ms - STARTED_MS))
+          {
+            echo "image_ref=$image_ref"
+            echo "image_ready_ms=$ready_ms"
+            echo "image_ready_elapsed_ms=$elapsed_ms"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### ${{ matrix.backend }} push timing"
+            echo
+            echo "- Source: \`${{ inputs.upstream_ref }}\`"
+            echo "- Image: \`$image_ref\`"
+            echo "- Registry verified before Action post: yes"
+            echo "- Build start to registry verification: $((elapsed_ms / 1000))s"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Exercise downstream work while state finalizes
+        shell: bash
+        run: sleep 30

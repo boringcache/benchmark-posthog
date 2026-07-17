@@ -66,6 +66,15 @@ on:
         required: false
         type: string
         default: ""
+      platform_filter:
+        description: "Optional manual-dispatch platform filter."
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - amd64
+          - arm64
   schedule:
     - cron: "0 3 * * 3"
   pull_request:
@@ -194,31 +203,31 @@ jobs:
       BORINGCACHE_CLI_VERSION: ${{ inputs.cli_version || vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION }}
     steps:
       - name: Skip disabled lane
-        if: ${{ (github.event_name == 'pull_request' && !matrix.lane.run_on_pull_request) || (matrix.lane.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE == '') || (github.event_name == 'workflow_dispatch' && inputs.lane_filter != 'all' && inputs.lane_filter != matrix.lane.lane_filter) }}
+        if: ${{ (github.event_name == 'pull_request' && !matrix.lane.run_on_pull_request) || (matrix.lane.requires_buildkit_image && env.PREWARM_BUILDKIT_IMAGE == '') || (github.event_name == 'workflow_dispatch' && inputs.lane_filter != 'all' && inputs.lane_filter != matrix.lane.lane_filter) || (github.event_name == 'workflow_dispatch' && inputs.platform_filter != 'all' && inputs.platform_filter != matrix.platform.label) }}
         shell: bash
         run: |
           echo "Skipping ${{ matrix.lane.label }} ${{ matrix.platform.label }} for this event/configuration."
 
       - name: Checkout benchmark repo
-        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
           submodules: false
 
       - name: Free disk space
-        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
         shell: bash
         run: ./scripts/free-runner-disk.sh
 
       - name: Set up QEMU for arm64 Docker builds
-        if: ${{ matrix.platform.setup_qemu && (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) }}
+        if: ${{ matrix.platform.setup_qemu && (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
       - name: ${{ format('{0} {1}', matrix.lane.label, matrix.platform.label) }}
-        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
         uses: ./.github/actions/docker-rolling-benchmark
         env:
           BORINGCACHE_OCI_DEMAND_PREFETCH: ${{ matrix.lane.buildkit_cache_backend == 'boringcache' && 'false' || '' }}

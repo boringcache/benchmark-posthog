@@ -19,7 +19,7 @@ on:
         description: Exact immutable CLI release tag
         required: true
         type: string
-        default: v1.13.92
+        default: vcli-canary-538e6473ac9f
 
 permissions:
   contents: read

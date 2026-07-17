@@ -6,7 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       prewarm_buildkit_image:
-        description: "Optional experimental BuildKit image. When set, the rolling matrix includes BC BuildKit backend lanes."
+        description: "Optional amd64 or multi-platform experimental BuildKit image. When set, the rolling matrix includes BC BuildKit backend lanes."
+        required: false
+        type: string
+        default: ""
+      prewarm_buildkit_image_arm64:
+        description: "Optional arm64 BuildKit image override when the primary image is an amd64-only digest."
         required: false
         type: string
         default: ""
@@ -146,7 +151,10 @@ jobs:
             buildkit_cache_backend: boringcache
             benchmark_id: posthog-bc-buildkit-mountcache
             dockerfile_path: upstream/Dockerfile
-            docker_tool_cache: turbo
+            # PostHog's Turbo build inputs omit frontend/public, so remote hits
+            # can restore stale static assets. Keep this lane behavior-safe;
+            # mount-cache offload remains enabled independently.
+            docker_tool_cache: ""
             buildkit_mountcache_offloader: true
             turbo_cache_mounts: false
             lane_filter: buildkit
@@ -168,7 +176,8 @@ jobs:
               buildkit_cache_backend: boringcache
               benchmark_id: posthog-bc-buildkit-mountcache
               dockerfile_path: upstream/Dockerfile
-              docker_tool_cache: turbo
+              # Keep ARM behavior-identical to AMD; see the lane above.
+              docker_tool_cache: ""
               buildkit_mountcache_offloader: true
               turbo_cache_mounts: false
               lane_filter: buildkit
@@ -181,7 +190,7 @@ jobs:
       BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
       BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
       BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
-      PREWARM_BUILDKIT_IMAGE: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
+      PREWARM_BUILDKIT_IMAGE: ${{ matrix.platform.cli_platform == 'linux-arm64' && (inputs.prewarm_buildkit_image_arm64 || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE_ARM64 || inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE) || (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE) }}
       BORINGCACHE_CLI_VERSION: ${{ inputs.cli_version || vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION }}
     steps:
       - name: Skip disabled lane

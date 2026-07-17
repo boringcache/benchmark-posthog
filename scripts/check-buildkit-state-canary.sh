@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workflow="$repo_root/.github/workflows/state-sync-v13-cas.yml"
+rolling_action="$repo_root/.github/actions/docker-rolling-benchmark/action.yml"
 rolling_dispatch_workflow="$repo_root/.github/workflows/rolling-dispatch.yml"
 sync_workflow="$repo_root/.github/workflows/sync.yml"
 runner="$repo_root/scripts/run-buildkit-state-canary.sh"
@@ -10,6 +11,7 @@ preflight_runner="$repo_root/scripts/preflight-buildkit-state-canary.sh"
 test_runner="$repo_root/scripts/test-buildkit-state-canary.sh"
 rolling_dispatcher="$repo_root/scripts/dispatch-buildkit-state-rolling-canary.sh"
 rolling_dispatcher_test="$repo_root/scripts/test-dispatch-buildkit-state-rolling-canary.sh"
+rolling_benchmark_runner="$repo_root/scripts/run-boringcache-buildkit-benchmark.sh"
 record_flow_summary_renderer="$repo_root/scripts/render-buildkit-state-record-flow-summary.sh"
 fixture_renderer="$repo_root/scripts/render-posthog-toolcache-dockerfile.sh"
 fixture_renderer_test="$repo_root/scripts/test-render-posthog-toolcache-dockerfile.sh"
@@ -20,6 +22,7 @@ bash -n "$preflight_runner"
 bash -n "$test_runner"
 bash -n "$rolling_dispatcher"
 bash -n "$rolling_dispatcher_test"
+bash -n "$rolling_benchmark_runner"
 bash -n "$record_flow_summary_renderer"
 bash -n "$fixture_renderer"
 bash -n "$fixture_renderer_test"
@@ -78,7 +81,8 @@ require_text "$sync_workflow" 'cron: "*/30 * * * *"'
 require_text "$rolling_dispatcher" "git ls-tree HEAD upstream"
 require_text "$rolling_dispatcher" "STATE_CANARY_BUILDKIT_IMAGE must be an exact managed image digest"
 require_text "$rolling_dispatcher" "-f cache_lane=rolling"
-require_text "$rolling_dispatcher" "-f composition_mode=fixture"
+require_text "$rolling_dispatcher" "-f composition_mode=mount"
+require_text "$rolling_dispatcher" "-f run_mode=build-only"
 require_text "$rolling_dispatcher" '-f "posthog_source=${source_sha}"'
 require_text "$rolling_dispatcher" '-f "rolling_scope=${rolling_scope}"'
 require_text "$preflight_runner" "expected_tag_head_v1"
@@ -136,6 +140,11 @@ require_text "$runner" 'zero_eager_mount_restore'
 require_text "$runner" 'deferred_publish_lifecycle'
 require_text "$runner" 'and $all_warm_record_counts_stable'
 require_text "$workflow" 'turbo-rolling-${rolling_slug}'
+require_text "$workflow" 'platforms: ${{ steps.state.outputs.docker_platform }}'
+require_text "$workflow" 'platform_key=arm64'
+require_text "$workflow" 'expected_runner_arch=ARM64'
+require_text "$rolling_benchmark_runner" 'state_restore_status="$(jq -r '\''.restore.status // empty'\'' "$BORINGCACHE_STATE_SUMMARY_PATH" 2>/dev/null || true)"'
+require_text "$rolling_benchmark_runner" 'echo "bootstrap_miss"'
 require_text "$fixture_renderer" 'AS boringcache-state-mount-probe'
 require_text "$fixture_renderer" 'AS posthog-runtime'
 require_text "$runner" 'render-posthog-toolcache-dockerfile.sh" "$dockerfile_path"'
@@ -212,17 +221,27 @@ require_text "$test_runner" "Expected same-source replay state growth to fail th
 require_text "$test_runner" "Expected same-source replay required-body growth to fail the correctness contract"
 require_text "$test_runner" "Expected a replay whose exact backend head is not current to fail"
 require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode == 'fixture' && '1' || '0' }}"
+require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode != 'off' && '1' || '' }}"
+require_text "$workflow" "uses: boringcache/one@one-canary-a2a1e9c7f82d"
+require_text "$workflow" "diagnostics-artifact-name:"
+require_text "$workflow" "diagnostics-artifact-retention-days: \"14\""
+require_text "$workflow" "cache-backend: state"
+require_text "$workflow" "managed-buildkit-image: \${{ inputs.buildkit_image }}"
+require_text "$workflow" "cache-tag: \${{ steps.state.outputs.cache_tag }}"
+require_text "$workflow" "fail-on-cache-error: \"true\""
 require_text "$workflow" "Observed BuildKit state record flow"
 require_text "$workflow" "Lazy immutable content"
 require_text "$workflow" "changed-source solver floor"
+require_text "$rolling_action" "inputs.buildkit_backend == 'state' && 'always'"
 
-for file in "$workflow" "$runner" "$preflight_runner"; do
+for file in "$runner" "$preflight_runner"; do
   reject_text "$file" "boringcache/one"
   reject_text "$file" "docker/setup-buildx"
   reject_text "$file" "--cache-from"
   reject_text "$file" "--cache-to"
   reject_text "$file" "rewrite-timestamp"
 done
+reject_text "$workflow" "boringcache/one@v1"
 reject_text "$workflow" "--tool-cache"
 reject_text "$preflight_runner" "--tool-cache"
 reject_text "$runner" 'buildkit-state-summary.v1'

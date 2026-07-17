@@ -68,8 +68,9 @@ fi
   fail "could not resolve an exact upstream source SHA"
 
 args=(
+  -f run_mode=build-only
   -f cache_lane=rolling
-  -f composition_mode=fixture
+  -f composition_mode=mount
   -f "cli_release_tag=${STATE_CANARY_CLI_RELEASE_TAG}"
   -f "cli_asset_sha256=${STATE_CANARY_CLI_ASSET_SHA256}"
   -f "cli_platform=${STATE_CANARY_PLATFORM}"

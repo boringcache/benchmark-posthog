@@ -35,9 +35,10 @@ run_dispatch() {
 
 run_dispatch "$dispatcher" >/dev/null
 grep -Fq -- "workflow run state-sync-v13-cas.yml" "$calls"
+grep -Fq -- "-f run_mode=build-only" "$calls"
 grep -Fq -- "--repo boringcache/benchmark-posthog --ref main" "$calls"
 grep -Fq -- "-f cache_lane=rolling" "$calls"
-grep -Fq -- "-f composition_mode=fixture" "$calls"
+grep -Fq -- "-f composition_mode=mount" "$calls"
 grep -Fq -- "-f posthog_source=${source_sha}" "$calls"
 grep -Fq -- "-f rolling_scope=main" "$calls"
 grep -Fq -- "-f runner_label=ubuntu-latest" "$calls"

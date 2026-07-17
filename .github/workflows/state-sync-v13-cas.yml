@@ -1,10 +1,18 @@
 name: "Maintainer BuildKit State Replay Canary"
 run-name: >-
-  ${{ format('BuildKit state canary | {0} | {1} | {2} | {3}', inputs.cache_lane, inputs.composition_mode, inputs.cli_release_tag, inputs.runner_label) }}
+  ${{ format('BuildKit state {0} | {1} | {2} | {3} | {4}', inputs.run_mode, inputs.cache_lane, inputs.composition_mode, inputs.cli_release_tag, inputs.runner_label) }}
 
 on:
   workflow_dispatch:
     inputs:
+      run_mode:
+        description: "Full correctness proof, or the main-lane-shaped build timer only."
+        required: true
+        type: choice
+        default: proof
+        options:
+          - proof
+          - build-only
       cache_lane:
         description: "Fresh, rolling, or immutable 11-generation replay (all commits or endpoints only)."
         required: true
@@ -16,12 +24,13 @@ on:
           - replay-full
           - replay-endpoints
       composition_mode:
-        description: "Core state only, or the explicit PostHog mountcache + Turbo fixture composition proof."
+        description: "Core state, behavior-safe mountcache, or the explicit mountcache + Turbo fixture proof."
         required: true
         type: choice
         default: "off"
         options:
           - "off"
+          - mount
           - fixture
       cli_release_tag:
         description: "Exact unique release tag in boringcache/cli."
@@ -83,7 +92,7 @@ on:
         default: ubuntu-latest
 
 concurrency:
-  group: ${{ format('buildkit-state-canary-{0}-{1}-{2}-{3}', inputs.cache_lane, inputs.composition_mode, inputs.rolling_scope, inputs.cli_platform) }}
+  group: ${{ format('buildkit-state-canary-{0}-{1}-{2}-{3}-{4}', inputs.run_mode, inputs.cache_lane, inputs.composition_mode, inputs.rolling_scope, inputs.cli_platform) }}
   cancel-in-progress: false
 
 permissions:
@@ -92,6 +101,7 @@ permissions:
 
 jobs:
   canary:
+    if: ${{ inputs.run_mode == 'proof' }}
     name: ${{ format('{0} {1}', inputs.cache_lane, inputs.cli_platform) }}
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 240
@@ -202,6 +212,10 @@ jobs:
           platform_key="${CLI_PLATFORM#linux-}"
           case "$COMPOSITION_MODE" in
             off) composition_slug=core ;;
+            mount)
+              echo "composition_mode=mount is build-only; the full proof uses the explicit fixture probe" >&2
+              exit 1
+              ;;
             fixture) composition_slug=compose-fixture ;;
             *)
               echo "Unsupported composition mode: ${COMPOSITION_MODE}" >&2
@@ -700,3 +714,137 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+  build-only:
+    if: ${{ inputs.run_mode == 'build-only' }}
+    name: ${{ format('State rolling build {0}', inputs.cli_platform) }}
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 120
+    env:
+      BORINGCACHE_API_URL: ${{ inputs.api_origin }}
+      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+      BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+      BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
+      BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
+      BORINGCACHE_BUILD_MAX_ATTEMPTS: "1"
+    steps:
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Resolve rolling state tag
+        id: state
+        shell: bash
+        env:
+          BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+          CACHE_LANE: ${{ inputs.cache_lane }}
+          COMPOSITION_MODE: ${{ inputs.composition_mode }}
+          CLI_PLATFORM: ${{ inputs.cli_platform }}
+          POSTHOG_SOURCE: ${{ inputs.posthog_source }}
+          ROLLING_SCOPE: ${{ inputs.rolling_scope }}
+        run: |
+          set -euo pipefail
+          [[ "$CACHE_LANE" == rolling ]] || { echo "build-only requires cache_lane=rolling" >&2; exit 1; }
+          case "$COMPOSITION_MODE" in
+            off) composition_slug=core ;;
+            mount) composition_slug=mount ;;
+            fixture) composition_slug=fixture ;;
+            *) echo "build-only composition_mode must be off, mount, or fixture" >&2; exit 1 ;;
+          esac
+          case "$CLI_PLATFORM" in
+            linux-amd64)
+              docker_platform=linux/amd64
+              platform_key=amd64
+              expected_runner_arch=X64
+              ;;
+            linux-arm64)
+              docker_platform=linux/arm64
+              platform_key=arm64
+              expected_runner_arch=ARM64
+              ;;
+            *)
+              echo "build-only cli_platform must be linux-amd64 or linux-arm64" >&2
+              exit 1
+              ;;
+          esac
+          [[ "${RUNNER_ARCH^^}" == "$expected_runner_arch" ]] || {
+            echo "cli_platform ${CLI_PLATFORM} does not match native runner architecture ${RUNNER_ARCH}" >&2
+            exit 1
+          }
+          [[ "$POSTHOG_SOURCE" =~ ^[0-9a-f]{40}$ ]] || { echo "build-only requires an exact PostHog commit" >&2; exit 1; }
+          [[ "$BUILDKIT_IMAGE" =~ ^ghcr\.io/boringcache/buildkit@sha256:([0-9a-f]{64})$ ]] || {
+            echo "build-only requires an exact managed BuildKit image digest" >&2
+            exit 1
+          }
+          image_digest="${BASH_REMATCH[1]}"
+          rolling_slug="$(printf '%s' "$ROLLING_SCOPE" | tr -c 'A-Za-z0-9._-' '-')"
+          rolling_slug="${rolling_slug#-}"
+          rolling_slug="${rolling_slug%-}"
+          [[ -n "$rolling_slug" ]] || { echo "rolling_scope must contain a tag-safe character" >&2; exit 1; }
+          echo "docker_platform=${docker_platform}" >> "$GITHUB_OUTPUT"
+          echo "cache_tag=posthog-buildkit-state-${image_digest}-${platform_key}-${composition_slug}-rolling-${rolling_slug}" >> "$GITHUB_OUTPUT"
+          echo "tool_cache_tag=posthog-buildkit-state-${image_digest}-${platform_key}-${composition_slug}-turbo-rolling-${rolling_slug}" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        shell: bash
+        run: ./scripts/free-runner-disk.sh
+
+      - name: Checkout exact PostHog source
+        shell: bash
+        env:
+          POSTHOG_SOURCE: ${{ inputs.posthog_source }}
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+          if git -C upstream fetch --depth 1 origin "$POSTHOG_SOURCE"; then
+            git -C upstream checkout --detach FETCH_HEAD
+          else
+            git -C upstream fetch --depth 64 origin master || true
+            git -C upstream fetch --depth 64 origin main || true
+            git -C upstream checkout --detach "$POSTHOG_SOURCE"
+          fi
+          test "$(git -C upstream rev-parse HEAD)" = "$POSTHOG_SOURCE"
+
+      - name: Prepare behavior-safe PostHog source
+        shell: bash
+        run: ./scripts/prepare-source.sh base
+
+      - name: State rolling build
+        id: state_build
+        uses: boringcache/one@one-canary-a2a1e9c7f82d
+        env:
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.composition_mode != 'off' && '1' || '' }}
+          BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"
+        with:
+          setup: none
+          mode: docker
+          workspace: ${{ github.repository }}
+          cli-version: ${{ inputs.cli_release_tag }}
+          cli-platform: ${{ inputs.cli_platform }}
+          cache-runtime: "false"
+          cache-backend: state
+          managed-buildkit-image: ${{ inputs.buildkit_image }}
+          cache-tag: ${{ steps.state.outputs.cache_tag }}
+          working-directory: .
+          context: upstream
+          dockerfile: upstream/Dockerfile
+          image: posthog-benchmark
+          tags: latest
+          platforms: ${{ steps.state.outputs.docker_platform }}
+          load: "false"
+          push: "false"
+          proxy-no-git: "true"
+          proxy-no-platform: "true"
+          no-platform: "true"
+          save-policy: auto
+          fail-on-cache-error: "true"
+          verify: wait
+          verify-require-server-signature: "true"
+          diagnostics: summary
+          diagnostics-artifact-name: ${{ format('posthog-state-{0}-{1}-r{2}', inputs.cli_platform, inputs.rolling_scope, github.run_id) }}
+          diagnostics-artifact-retention-days: "14"
+          metadata-hints: benchmark=posthog-state,phase=commit

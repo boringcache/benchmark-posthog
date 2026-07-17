@@ -841,6 +841,7 @@ jobs:
           proxy-no-platform: "true"
           no-platform: "true"
           save-policy: auto
+          fail-on-cache-error: "true"
           verify: wait
           verify-require-server-signature: "true"
           diagnostics: summary

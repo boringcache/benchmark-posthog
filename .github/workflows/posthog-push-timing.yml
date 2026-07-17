@@ -12,7 +12,7 @@ on:
         description: Exact immutable CLI release tag
         required: true
         type: string
-        default: vcli-canary-accad696b8c0
+        default: vcli-canary-538e6473ac9f
 
 permissions:
   contents: read
@@ -122,7 +122,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and push
-        uses: boringcache/one@one-canary-a2a1e9c7f82d
+        uses: boringcache/one@one-canary-538e6473ac9f
         env:
           BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: "1"
           BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"

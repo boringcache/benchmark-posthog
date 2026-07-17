@@ -1,5 +1,5 @@
 name: PostHog Push Timing
-run-name: ${{ format('Push timing | {0} | {1}', inputs.upstream_ref, inputs.runner_label) }}
+run-name: ${{ format('Push timing | {0} | 16c AMD64 + ARM64', inputs.upstream_ref) }}
 
 on:
   workflow_dispatch:
@@ -8,51 +8,57 @@ on:
         description: Exact PostHog commit to build
         required: true
         type: string
-      runner_label:
-        description: Native AMD64 runner label
-        required: true
-        type: string
-        default: ubuntu-latest-l
       cli_version:
         description: Exact immutable CLI release tag
         required: true
         type: string
         default: vcli-canary-accad696b8c0
-      managed_buildkit_image:
-        description: Exact managed BuildKit digest ref
-        required: true
-        type: string
-        default: ghcr.io/boringcache/buildkit@sha256:cfcc50779c981fa63ef4818e6744adfa642cc5fd00b60539def3458862739510
-      state_cache_tag:
-        description: Existing rolling state tag for this runner class
-        required: true
-        type: string
-        default: posthog-buildkit-state-cfcc50779c981fa63ef4818e6744adfa642cc5fd00b60539def3458862739510-amd64-mount-rolling-main-16c
-      ordinary_cache_tag:
-        description: Existing rolling type=boringcache tag
-        required: true
-        type: string
-        default: posthog-bc-buildkit-mountcache-run-rolling-main
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: ${{ format('posthog-push-timing-{0}-{1}', inputs.upstream_ref, inputs.runner_label) }}
+  group: ${{ format('posthog-push-timing-{0}', inputs.upstream_ref) }}
   cancel-in-progress: false
 
 jobs:
   push:
-    name: ${{ format('{0} push', matrix.backend) }}
-    runs-on: ${{ inputs.runner_label }}
+    name: ${{ format('{0} {1} push', matrix.backend, matrix.architecture) }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        backend:
-          - state
-          - boringcache
+        include:
+          - backend: state
+            architecture: amd64
+            runner: ubuntu-latest-l
+            cli_platform: linux-amd64
+            docker_platform: linux/amd64
+            managed_buildkit_image: ghcr.io/boringcache/buildkit@sha256:cfcc50779c981fa63ef4818e6744adfa642cc5fd00b60539def3458862739510
+            cache_tag: posthog-buildkit-state-cfcc50779c981fa63ef4818e6744adfa642cc5fd00b60539def3458862739510-amd64-mount-rolling-main-16c
+          - backend: boringcache
+            architecture: amd64
+            runner: ubuntu-latest-l
+            cli_platform: linux-amd64
+            docker_platform: linux/amd64
+            managed_buildkit_image: ghcr.io/boringcache/buildkit@sha256:cfcc50779c981fa63ef4818e6744adfa642cc5fd00b60539def3458862739510
+            cache_tag: posthog-bc-buildkit-mountcache-run-rolling-main
+          - backend: state
+            architecture: arm64
+            runner: ubuntu-latest-l-arm
+            cli_platform: linux-arm64
+            docker_platform: linux/arm64
+            managed_buildkit_image: ghcr.io/boringcache/buildkit@sha256:a479567d60945ad9ea6263432d32b4d1b3476150e6d1fbaba7ba42cd5674f657
+            cache_tag: posthog-buildkit-state-a479567d60945ad9ea6263432d32b4d1b3476150e6d1fbaba7ba42cd5674f657-arm64-mount-rolling-main-4c
+          - backend: boringcache
+            architecture: arm64
+            runner: ubuntu-latest-l-arm
+            cli_platform: linux-arm64
+            docker_platform: linux/arm64
+            managed_buildkit_image: ghcr.io/boringcache/buildkit@sha256:a479567d60945ad9ea6263432d32b4d1b3476150e6d1fbaba7ba42cd5674f657
+            cache_tag: arm-posthog-bc-buildkit-mountcache-run-rolling-main
     env:
       BORINGCACHE_API_URL: https://api.boringcache.com
       BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
@@ -105,18 +111,13 @@ jobs:
         shell: bash
         env:
           BACKEND: ${{ matrix.backend }}
-          STATE_CACHE_TAG: ${{ inputs.state_cache_tag }}
-          ORDINARY_CACHE_TAG: ${{ inputs.ordinary_cache_tag }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+          CACHE_TAG: ${{ matrix.cache_tag }}
         run: |
           set -euo pipefail
-          case "$BACKEND" in
-            state) cache_tag="$STATE_CACHE_TAG" ;;
-            boringcache) cache_tag="$ORDINARY_CACHE_TAG" ;;
-            *) echo "unsupported backend: $BACKEND" >&2; exit 1 ;;
-          esac
           {
-            echo "cache_tag=$cache_tag"
-            echo "image_tag=${BACKEND}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+            echo "cache_tag=$CACHE_TAG"
+            echo "image_tag=${BACKEND}-${ARCHITECTURE}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
             echo "started_ms=$(date +%s%3N)"
           } >> "$GITHUB_OUTPUT"
 
@@ -130,10 +131,10 @@ jobs:
           mode: docker
           workspace: boringcache/benchmark-posthog
           cli-version: ${{ inputs.cli_version }}
-          cli-platform: linux-amd64
+          cli-platform: ${{ matrix.cli_platform }}
           cache-runtime: "false"
           cache-backend: ${{ matrix.backend }}
-          managed-buildkit-image: ${{ inputs.managed_buildkit_image }}
+          managed-buildkit-image: ${{ matrix.managed_buildkit_image }}
           cache-tag: ${{ steps.timing.outputs.cache_tag }}
           registry-tag: ${{ steps.timing.outputs.cache_tag }}
           working-directory: .
@@ -141,7 +142,7 @@ jobs:
           dockerfile: upstream/Dockerfile
           image: ${{ env.IMAGE_REPOSITORY }}
           tags: ${{ steps.timing.outputs.image_tag }}
-          platforms: linux/amd64
+          platforms: ${{ matrix.docker_platform }}
           load: "false"
           push: "true"
           provenance: "false"
@@ -153,7 +154,7 @@ jobs:
           verify: wait
           verify-require-server-signature: "true"
           diagnostics: summary
-          metadata-hints: ${{ format('benchmark=posthog-push-timing,backend={0}', matrix.backend) }}
+          metadata-hints: ${{ format('benchmark=posthog-push-timing,backend={0},architecture={1}', matrix.backend, matrix.architecture) }}
 
       - name: Verify pushed image before Action post
         id: verify
@@ -173,9 +174,10 @@ jobs:
             echo "image_ready_elapsed_ms=$elapsed_ms"
           } >> "$GITHUB_OUTPUT"
           {
-            echo "### ${{ matrix.backend }} push timing"
+            echo "### ${{ matrix.backend }} ${{ matrix.architecture }} push timing"
             echo
             echo "- Source: \`${{ inputs.upstream_ref }}\`"
+            echo "- Platform: \`${{ matrix.docker_platform }}\`"
             echo "- Image: \`$image_ref\`"
             echo "- Registry verified before Action post: yes"
             echo "- Build start to registry verification: $((elapsed_ms / 1000))s"

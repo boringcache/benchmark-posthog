@@ -69,6 +69,20 @@ jobs:
       BORINGCACHE_BUILD_MAX_ATTEMPTS: "1"
       IMAGE_REPOSITORY: ghcr.io/boringcache/benchmark-posthog-push-timing
     steps:
+      - name: Validate native runner architecture
+        shell: bash
+        env:
+          CLI_PLATFORM: ${{ matrix.cli_platform }}
+        run: |
+          case "${CLI_PLATFORM}:${RUNNER_ARCH}" in
+            linux-amd64:X64|linux-arm64:ARM64)
+              ;;
+            *)
+              echo "::error::Runner architecture ${RUNNER_ARCH} does not match ${CLI_PLATFORM}."
+              exit 1
+              ;;
+          esac
+
       - name: Checkout benchmark repo
         uses: actions/checkout@v6
         with:

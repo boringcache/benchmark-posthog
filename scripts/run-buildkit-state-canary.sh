@@ -1013,7 +1013,13 @@ write_combined_result() {
           fully_state_cached_short_circuit: any(
             $base.phases[];
             .state.restore_status == "restored"
-            and .cached_steps > ($base.phases[0].cached_steps // 0)
+            and (
+              if ($base.phases | length) > 1 then
+                .cached_steps > ($base.phases[0].cached_steps // 0)
+              else
+                .cached_steps >= ($inputs[0].replay_min_cached_steps // 1)
+              end
+            )
             and (
               ((.tool_cache.hits // 0)
                + (.tool_cache.misses // 0)
@@ -1027,13 +1033,13 @@ write_combined_result() {
           )
         }
         | .valid = (
-            .mountcache_published
+            (.mountcache_published or .fully_state_cached_short_circuit)
             and .signed_refs_available
             and .zero_eager_mount_restore
             and .generation_refs_bounded
             and .deferred_publish_lifecycle
             and $terminal_mount_probe.valid
-            and .toolcache_exercised
+            and (.toolcache_exercised or .fully_state_cached_short_circuit)
             and (
               .bootstrap_only
               or .fully_state_cached_short_circuit

@@ -853,6 +853,11 @@ boringcache() {
     for ((cached_index = 1; cached_index <= cached_count; cached_index++)); do
       printf '#%d CACHED\n' "$cached_index"
     done
+  elif [[ "${MOCK_COMPOSITION_SHORT_CIRCUIT:-0}" == 1 ]]; then
+    local cached_index
+    for ((cached_index = 1; cached_index <= 68; cached_index++)); do
+      printf '#%d CACHED\n' "$cached_index"
+    done
   else
     echo '#1 CACHED'
     echo '#2 CACHED'
@@ -1863,6 +1868,25 @@ command jq -e '
     and .tool_cache.writes == 0
   )
 ' "$composition_short_circuit_dir/canary-result.json" >/dev/null
+
+composition_rolling_short_circuit_dir="$test_root/composition-rolling-short-circuit"
+MOCK_COMPOSITION_SHORT_CIRCUIT=1 run_mock rolling "$composition_rolling_short_circuit_dir" 2 fixture >/dev/null
+command jq -e '
+  .success == true
+  and (.phases | length) == 1
+  and .phases[0].state.restore_status == "restored"
+  and .phases[0].cached_steps >= .inputs.replay_min_cached_steps
+  and .composition.valid == true
+  and .composition.mountcache_published == false
+  and .composition.toolcache_exercised == false
+  and .composition.fully_state_cached_short_circuit == true
+  and .terminal_mount_probe.hydrate_hits == 1
+  and .terminal_mount_probe.valid == true
+  and .phases[0].state.mount_cache.hydrate_hits == 0
+  and .phases[0].tool_cache.hits == 0
+  and .phases[0].tool_cache.misses == 0
+  and .phases[0].tool_cache.writes == 0
+' "$composition_rolling_short_circuit_dir/canary-result.json" >/dev/null
 
 composition_mount_error_dir="$test_root/composition-mount-error"
 if MOCK_MOUNTCACHE_PROBE_HYDRATE_ERRORS=1 run_mock fresh "$composition_mount_error_dir" 2 fixture >/dev/null 2>&1; then

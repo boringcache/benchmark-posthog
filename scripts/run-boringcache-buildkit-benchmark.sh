@@ -11,7 +11,7 @@ cache_export_pattern='expected sha256:.*got sha256:e3b0|error writing layer blob
 mode="${1:-full}"
 backend="${BUILDKIT_BACKEND:-registry}"
 case "$backend" in
-  registry|boringcache)
+  registry|boringcache|state)
     ;;
   *)
     echo "Unsupported BUILDKIT_BACKEND: ${backend}" >&2
@@ -521,6 +521,7 @@ write_build_metrics() {
 
 capture_proxy_status() {
   local output_path="${1:-$status_snapshot_path}"
+  [[ "$backend" != "state" ]] || return 0
   curl -fsS "http://127.0.0.1:${proxy_port}/_boringcache/status" -o "$output_path" 2>/dev/null || true
 }
 
@@ -567,6 +568,25 @@ require_readable_cache_import() {
 }
 
 build_import_status() {
+  if [[ "$backend" == "state" && -s "${BORINGCACHE_STATE_SUMMARY_PATH:-}" ]]; then
+    local state_restore_status=""
+    state_restore_status="$(jq -r '.restore.status // empty' "$BORINGCACHE_STATE_SUMMARY_PATH" 2>/dev/null || true)"
+    case "$state_restore_status" in
+      restored)
+        echo "ok"
+        return
+        ;;
+      miss)
+        echo "bootstrap_miss"
+        return
+        ;;
+      discarded)
+        echo "proxy_unreadable"
+        return
+        ;;
+    esac
+  fi
+
   if grep -Eq 'failed to configure .*cache importer|cache manifest.*(manifest unknown|not found)|importing cache manifest.*(manifest unknown|not found)' "$build_log"; then
     echo "not_found"
   elif grep -Eq 'inferred cache manifest type|importing cache manifest' "$build_log"; then
@@ -629,7 +649,9 @@ write_build_diagnostics() {
     grep -E 'boringcache cache mount (hydrate|publish)' "$build_log" | tail -n 160 || true
     echo "EOF"
     echo "proxy_summary<<EOF"
-    grep -E 'Mode:|OCI Human Tags|Internal Registry Root Tag|Startup mode|Full-tag hydration|OCI body hydration|OCI HEAD|SESSION tool=oci|KV flush|root publish|boringcache cache mount|error|warn' "$proxy_log" | tail -n 160 || true
+    if [[ "$backend" != "state" ]]; then
+      grep -E 'Mode:|OCI Human Tags|Internal Registry Root Tag|Startup mode|Full-tag hydration|OCI body hydration|OCI HEAD|SESSION tool=oci|KV flush|root publish|boringcache cache mount|error|warn' "$proxy_log" | tail -n 160 || true
+    fi
     echo "EOF"
     echo "proxy_status<<EOF"
     if [[ -s "$status_snapshot_path" ]]; then
@@ -668,17 +690,22 @@ run_wrapped_boringcache_build() {
     --workspace "${BENCHMARK_WORKSPACE:?Set BENCHMARK_WORKSPACE}"
     --tag "${CACHE_SCOPE:?Set CACHE_SCOPE}"
     --backend "$cli_backend"
-    --port "$proxy_port"
-    --cache-mode max
     --no-platform
     --no-git
-    --oci-hydration "$oci_hydration"
     --metadata-hint "benchmark=posthog"
     --metadata-hint "phase=${phase_hint}"
     --metadata-hint "lane=${CACHE_LANE:-fresh}"
     --metadata-hint "backend=${cli_backend}"
     --fail-on-cache-error
   )
+
+  if [[ "$cli_backend" != "state" ]]; then
+    boringcache_args+=(
+      --port "$proxy_port"
+      --cache-mode max
+      --oci-hydration "$oci_hydration"
+    )
+  fi
 
   if [[ -n "$docker_tool_cache" && "${BORINGCACHE_DOCKER_TOOL_CACHE_ON_DEMAND:-false}" == "true" ]]; then
     boringcache_args+=(--on-demand)
@@ -853,10 +880,11 @@ while true; do
       echo "Flushing proxy cache to backend..."
       flush_action_proxy
     fi
-    # Dump proxy log for diagnostics
-    echo "=== Proxy log (${mode}, last 200 lines) ==="
-    tail -n 200 "$proxy_log" 2>/dev/null || true
-    echo "=== End proxy log ==="
+    if [[ "$backend" != "state" ]]; then
+      echo "=== Proxy log (${mode}, last 200 lines) ==="
+      tail -n 200 "$proxy_log" 2>/dev/null || true
+      echo "=== End proxy log ==="
+    fi
     write_build_metrics
     write_build_diagnostics
     break

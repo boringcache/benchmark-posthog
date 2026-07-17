@@ -222,7 +222,7 @@ require_text "$test_runner" "Expected same-source replay required-body growth to
 require_text "$test_runner" "Expected a replay whose exact backend head is not current to fail"
 require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode == 'fixture' && '1' || '0' }}"
 require_text "$workflow" "BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: \${{ inputs.composition_mode != 'off' && '1' || '' }}"
-require_text "$workflow" "uses: boringcache/one@one-canary-87a8bad1796d"
+require_text "$workflow" "uses: boringcache/one@one-canary-a2a1e9c7f82d"
 require_text "$workflow" "diagnostics-artifact-name:"
 require_text "$workflow" "diagnostics-artifact-retention-days: \"14\""
 require_text "$workflow" "cache-backend: state"

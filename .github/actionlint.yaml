@@ -2,4 +2,5 @@ self-hosted-runner:
   labels:
     - ubuntu-latest-8c-amd
     - ubuntu-latest-l
+    - ubuntu-latest-m-arm
     - ubuntu-latest-l-arm

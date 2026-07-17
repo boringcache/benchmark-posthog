@@ -62,7 +62,7 @@ on:
           - all
           - buildkit
       runner_label:
-        description: "Optional GitHub Actions runner label override. Empty uses the benchmark platform defaults."
+        description: "Optional native runner label override. It must match the selected platform; empty uses the benchmark defaults."
         required: false
         type: string
         default: ""
@@ -207,6 +207,21 @@ jobs:
         shell: bash
         run: |
           echo "Skipping ${{ matrix.lane.label }} ${{ matrix.platform.label }} for this event/configuration."
+
+      - name: Validate native runner architecture
+        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
+        shell: bash
+        env:
+          CLI_PLATFORM: ${{ matrix.platform.cli_platform }}
+        run: |
+          case "${CLI_PLATFORM}:${RUNNER_ARCH}" in
+            linux-amd64:X64|linux-arm64:ARM64)
+              ;;
+            *)
+              echo "::error::Runner architecture ${RUNNER_ARCH} does not match ${CLI_PLATFORM}. Choose a native runner label for this platform."
+              exit 1
+              ;;
+          esac
 
       - name: Checkout benchmark repo
         if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}

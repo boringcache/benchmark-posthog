@@ -46,37 +46,37 @@ jobs:
             composition: pure-demand-off
             mountcache_offloader: "0"
             demand_prefetch: "false"
-            cache_tag: posthog-exporter-composition-v2-pure-demand-off-amd64-8c
+            cache_tag: posthog-exporter-composition-v3-pure-demand-off-amd64-8c
           - runner_size: 8c
             runner: ubuntu-latest-8c-amd
             composition: pure-demand-on
             mountcache_offloader: "0"
             demand_prefetch: "true"
-            cache_tag: posthog-exporter-composition-v2-pure-demand-on-amd64-8c
+            cache_tag: posthog-exporter-composition-v3-pure-demand-on-amd64-8c
           - runner_size: 8c
             runner: ubuntu-latest-8c-amd
             composition: mount-demand-on
             mountcache_offloader: "1"
             demand_prefetch: "true"
-            cache_tag: posthog-exporter-composition-v2-mount-demand-on-amd64-8c
+            cache_tag: posthog-exporter-composition-v3-mount-demand-on-amd64-8c
           - runner_size: 16c
             runner: ubuntu-latest-l
             composition: pure-demand-off
             mountcache_offloader: "0"
             demand_prefetch: "false"
-            cache_tag: posthog-exporter-composition-v2-pure-demand-off-amd64-16c
+            cache_tag: posthog-exporter-composition-v3-pure-demand-off-amd64-16c
           - runner_size: 16c
             runner: ubuntu-latest-l
             composition: pure-demand-on
             mountcache_offloader: "0"
             demand_prefetch: "true"
-            cache_tag: posthog-exporter-composition-v2-pure-demand-on-amd64-16c
+            cache_tag: posthog-exporter-composition-v3-pure-demand-on-amd64-16c
           - runner_size: 16c
             runner: ubuntu-latest-l
             composition: mount-demand-on
             mountcache_offloader: "1"
             demand_prefetch: "true"
-            cache_tag: posthog-exporter-composition-v2-mount-demand-on-amd64-16c
+            cache_tag: posthog-exporter-composition-v3-mount-demand-on-amd64-16c
     env:
       BORINGCACHE_API_URL: https://api.boringcache.com
       BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}

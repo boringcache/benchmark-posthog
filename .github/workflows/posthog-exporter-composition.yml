@@ -19,7 +19,11 @@ on:
         description: Exact immutable CLI release tag
         required: true
         type: string
-        default: vcli-canary-538e6473ac9f
+        default: vcli-canary-3ffc8131138b
+      buildkit_image:
+        description: Exact single-platform BuildKit digest reference
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -39,24 +43,40 @@ jobs:
         include:
           - runner_size: 8c
             runner: ubuntu-latest-8c-amd
-            composition: pure
+            composition: pure-demand-off
             mountcache_offloader: "0"
-            cache_tag: posthog-exporter-composition-v1-pure-amd64-8c
+            demand_prefetch: "false"
+            cache_tag: posthog-exporter-composition-v2-pure-demand-off-amd64-8c
           - runner_size: 8c
             runner: ubuntu-latest-8c-amd
-            composition: mount
-            mountcache_offloader: "1"
-            cache_tag: posthog-exporter-composition-v1-mount-amd64-8c
-          - runner_size: 16c
-            runner: ubuntu-latest-l
-            composition: pure
+            composition: pure-demand-on
             mountcache_offloader: "0"
-            cache_tag: posthog-exporter-composition-v1-pure-amd64-16c
+            demand_prefetch: "true"
+            cache_tag: posthog-exporter-composition-v2-pure-demand-on-amd64-8c
+          - runner_size: 8c
+            runner: ubuntu-latest-8c-amd
+            composition: mount-demand-on
+            mountcache_offloader: "1"
+            demand_prefetch: "true"
+            cache_tag: posthog-exporter-composition-v2-mount-demand-on-amd64-8c
           - runner_size: 16c
             runner: ubuntu-latest-l
-            composition: mount
+            composition: pure-demand-off
+            mountcache_offloader: "0"
+            demand_prefetch: "false"
+            cache_tag: posthog-exporter-composition-v2-pure-demand-off-amd64-16c
+          - runner_size: 16c
+            runner: ubuntu-latest-l
+            composition: pure-demand-on
+            mountcache_offloader: "0"
+            demand_prefetch: "true"
+            cache_tag: posthog-exporter-composition-v2-pure-demand-on-amd64-16c
+          - runner_size: 16c
+            runner: ubuntu-latest-l
+            composition: mount-demand-on
             mountcache_offloader: "1"
-            cache_tag: posthog-exporter-composition-v1-mount-amd64-16c
+            demand_prefetch: "true"
+            cache_tag: posthog-exporter-composition-v2-mount-demand-on-amd64-16c
     env:
       BORINGCACHE_API_URL: https://api.boringcache.com
       BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
@@ -66,6 +86,7 @@ jobs:
       BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
       BORINGCACHE_BUILD_MAX_ATTEMPTS: "1"
       BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"
+      BORINGCACHE_OCI_DEMAND_PREFETCH: ${{ matrix.demand_prefetch }}
       BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ matrix.mountcache_offloader }}
     steps:
       - name: Validate native runner architecture
@@ -106,8 +127,24 @@ jobs:
         shell: bash
         run: ./scripts/prepare-source.sh base
 
+      - name: Validate immutable product pins
+        shell: bash
+        env:
+          CLI_VERSION: ${{ inputs.cli_version }}
+          BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+        run: |
+          set -euo pipefail
+          [[ "$CLI_VERSION" =~ ^vcli-canary-[0-9a-f]{12}$ ]] || {
+            echo "cli_version must be an exact immutable CLI canary tag" >&2
+            exit 1
+          }
+          [[ "$BUILDKIT_IMAGE" =~ ^ghcr\.io/boringcache/buildkit@sha256:[0-9a-f]{64}$ ]] || {
+            echo "buildkit_image must be an exact BoringCache BuildKit digest reference" >&2
+            exit 1
+          }
+
       - name: Build with the complete BoringCache product wrapper
-        uses: boringcache/one@one-canary-538e6473ac9f
+        uses: boringcache/one@one-canary-3ffc8131138b
         with:
           setup: none
           mode: docker
@@ -116,7 +153,7 @@ jobs:
           cli-platform: linux-amd64
           cache-runtime: "false"
           cache-backend: boringcache
-          managed-buildkit-image: ghcr.io/boringcache/buildkit@sha256:cfcc50779c981fa63ef4818e6744adfa642cc5fd00b60539def3458862739510
+          managed-buildkit-image: ${{ inputs.buildkit_image }}
           cache-tag: ${{ matrix.cache_tag }}
           registry-tag: ${{ matrix.cache_tag }}
           working-directory: .
@@ -137,7 +174,7 @@ jobs:
           verify: wait
           verify-require-server-signature: "true"
           diagnostics: summary
-          metadata-hints: ${{ format('benchmark=posthog-exporter-composition,phase={0},composition={1},runner_size={2}', inputs.phase, matrix.composition, matrix.runner_size) }}
+          metadata-hints: ${{ format('benchmark=posthog-exporter-composition,phase={0},composition={1},runner_size={2},demand_prefetch={3}', inputs.phase, matrix.composition, matrix.runner_size, matrix.demand_prefetch) }}
 
       - name: Record fixture identity
         shell: bash
@@ -149,6 +186,7 @@ jobs:
             echo "- Phase: \`${{ inputs.phase }}\`"
             echo "- Runner: \`${{ matrix.runner }}\`"
             echo "- Mount-cache offloader: \`${{ matrix.mountcache_offloader }}\`"
+            echo "- Demand lookahead: \`${{ matrix.demand_prefetch }}\`"
             echo "- Docker tool cache: disabled"
             echo "- Full CLI wrapper evidence: required"
           } >> "$GITHUB_STEP_SUMMARY"

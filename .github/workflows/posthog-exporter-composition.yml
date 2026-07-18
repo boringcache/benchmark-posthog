@@ -144,7 +144,7 @@ jobs:
           }
 
       - name: Build with the complete BoringCache product wrapper
-        uses: boringcache/one@one-canary-3ffc8131138b
+        uses: boringcache/one@one-canary-e857cffbe965
         with:
           setup: none
           mode: docker

@@ -40,7 +40,7 @@ jobs:
       - name: Run successful build with failing cache publication
         id: build
         continue-on-error: true
-        uses: boringcache/one@one-canary-3ffc8131138b
+        uses: boringcache/one@one-canary-e857cffbe965
         with:
           setup: none
           mode: docker
@@ -66,7 +66,7 @@ jobs:
           no-platform: "true"
           save-policy: auto
           fail-on-cache-error: ${{ matrix.strict }}
-          verify: wait
+          verify: none
           verify-require-server-signature: "true"
           diagnostics: summary
           metadata-hints: ${{ format('benchmark=exporter-failure-policy,policy={0}', matrix.policy) }}

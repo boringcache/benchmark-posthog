@@ -145,6 +145,8 @@ jobs:
 
       - name: Build with the complete BoringCache product wrapper
         uses: boringcache/one@one-canary-e857cffbe965
+        env:
+          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/posthog-exporter-${{ matrix.runner_size }}-${{ matrix.composition }}.jsonl
         with:
           setup: none
           mode: docker
@@ -175,6 +177,15 @@ jobs:
           verify-require-server-signature: "true"
           diagnostics: summary
           metadata-hints: ${{ format('benchmark=posthog-exporter-composition,phase={0},composition={1},runner_size={2},demand_prefetch={3}', inputs.phase, matrix.composition, matrix.runner_size, matrix.demand_prefetch) }}
+
+      - name: Upload exporter observability
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ format('posthog-exporter-{0}-{1}-{2}', matrix.runner_size, matrix.composition, github.run_id) }}
+          path: ${{ runner.temp }}/posthog-exporter-${{ matrix.runner_size }}-${{ matrix.composition }}.jsonl
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Record fixture identity
         shell: bash

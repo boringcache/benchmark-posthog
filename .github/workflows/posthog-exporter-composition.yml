@@ -19,7 +19,7 @@ on:
         description: Exact immutable CLI release tag
         required: true
         type: string
-        default: vcli-canary-b6adffaf1f3a
+        default: vcli-canary-0d4b5890eea3
       buildkit_image:
         description: Exact single-platform BuildKit digest reference
         required: true
@@ -43,40 +43,14 @@ jobs:
         include:
           - runner_size: 8c
             runner: ubuntu-latest-8c-amd
-            composition: pure-demand-off
+            composition: product-default
             mountcache_offloader: "0"
-            demand_prefetch: "false"
-            cache_tag: posthog-exporter-composition-v3-pure-demand-off-amd64-8c
-          - runner_size: 8c
-            runner: ubuntu-latest-8c-amd
-            composition: pure-demand-on
-            mountcache_offloader: "0"
-            demand_prefetch: "true"
-            cache_tag: posthog-exporter-composition-v3-pure-demand-on-amd64-8c
-          - runner_size: 8c
-            runner: ubuntu-latest-8c-amd
-            composition: mount-demand-on
-            mountcache_offloader: "1"
-            demand_prefetch: "true"
-            cache_tag: posthog-exporter-composition-v3-mount-demand-on-amd64-8c
+            cache_tag: posthog-exporter-composition-v4-product-default-amd64-8c
           - runner_size: 16c
             runner: ubuntu-latest-l
-            composition: pure-demand-off
+            composition: product-default
             mountcache_offloader: "0"
-            demand_prefetch: "false"
-            cache_tag: posthog-exporter-composition-v3-pure-demand-off-amd64-16c
-          - runner_size: 16c
-            runner: ubuntu-latest-l
-            composition: pure-demand-on
-            mountcache_offloader: "0"
-            demand_prefetch: "true"
-            cache_tag: posthog-exporter-composition-v3-pure-demand-on-amd64-16c
-          - runner_size: 16c
-            runner: ubuntu-latest-l
-            composition: mount-demand-on
-            mountcache_offloader: "1"
-            demand_prefetch: "true"
-            cache_tag: posthog-exporter-composition-v3-mount-demand-on-amd64-16c
+            cache_tag: posthog-exporter-composition-v4-product-default-amd64-16c
     env:
       BORINGCACHE_API_URL: https://api.boringcache.com
       BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
@@ -86,8 +60,6 @@ jobs:
       BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
       BORINGCACHE_BUILD_MAX_ATTEMPTS: "1"
       BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"
-      BORINGCACHE_OCI_DEMAND_PREFETCH: ${{ matrix.demand_prefetch }}
-      BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ matrix.mountcache_offloader }}
     steps:
       - name: Validate native runner architecture
         shell: bash
@@ -176,7 +148,7 @@ jobs:
           verify: wait
           verify-require-server-signature: "true"
           diagnostics: summary
-          metadata-hints: ${{ format('benchmark=posthog-exporter-composition,phase={0},composition={1},runner_size={2},demand_prefetch={3}', inputs.phase, matrix.composition, matrix.runner_size, matrix.demand_prefetch) }}
+          metadata-hints: ${{ format('benchmark=posthog-exporter-composition,phase={0},composition={1},runner_size={2}', inputs.phase, matrix.composition, matrix.runner_size) }}
 
       - name: Upload exporter observability
         if: ${{ always() }}
@@ -197,7 +169,7 @@ jobs:
             echo "- Phase: \`${{ inputs.phase }}\`"
             echo "- Runner: \`${{ matrix.runner }}\`"
             echo "- Mount-cache offloader: \`${{ matrix.mountcache_offloader }}\`"
-            echo "- Demand lookahead: \`${{ matrix.demand_prefetch }}\`"
+            echo "- Managed speculative reads: CLI product defaults (no workflow override)"
             echo "- Docker tool cache: disabled"
             echo "- Full CLI wrapper evidence: required"
           } >> "$GITHUB_STEP_SUMMARY"

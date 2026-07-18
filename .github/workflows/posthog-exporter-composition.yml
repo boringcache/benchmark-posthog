@@ -19,7 +19,7 @@ on:
         description: Exact immutable CLI release tag
         required: true
         type: string
-        default: vcli-canary-3ffc8131138b
+        default: vcli-canary-b6adffaf1f3a
       buildkit_image:
         description: Exact single-platform BuildKit digest reference
         required: true

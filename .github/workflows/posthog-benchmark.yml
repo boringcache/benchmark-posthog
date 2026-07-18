@@ -160,13 +160,13 @@ jobs:
             artifact_strategy: ""
             buildkit_backend: registry
             buildkit_cache_backend: boringcache
-            benchmark_id: posthog-bc-buildkit-mountcache
+            benchmark_id: posthog-bc-buildkit
             dockerfile_path: upstream/Dockerfile
             # PostHog's Turbo build inputs omit frontend/public, so remote hits
-            # can restore stale static assets. Keep this lane behavior-safe;
-            # mount-cache offload remains enabled independently.
+            # can restore stale static assets. Keep the graduated lane on the
+            # behavior-safe managed exporter defaults.
             docker_tool_cache: ""
-            buildkit_mountcache_offloader: true
+            buildkit_mountcache_offloader: false
             turbo_cache_mounts: false
             lane_filter: buildkit
             run_on_pull_request: false
@@ -185,11 +185,11 @@ jobs:
               artifact_strategy: ""
               buildkit_backend: registry
               buildkit_cache_backend: boringcache
-              benchmark_id: posthog-bc-buildkit-mountcache
+              benchmark_id: posthog-bc-buildkit
               dockerfile_path: upstream/Dockerfile
               # Keep ARM behavior-identical to AMD; see the lane above.
               docker_tool_cache: ""
-              buildkit_mountcache_offloader: true
+              buildkit_mountcache_offloader: false
               turbo_cache_mounts: false
               lane_filter: buildkit
               run_on_pull_request: false
@@ -247,7 +247,6 @@ jobs:
         if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (!matrix.lane.requires_buildkit_image || env.PREWARM_BUILDKIT_IMAGE != '') && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
         uses: ./.github/actions/docker-rolling-benchmark
         env:
-          BORINGCACHE_OCI_DEMAND_PREFETCH: ${{ matrix.lane.buildkit_cache_backend == 'boringcache' && 'false' || '' }}
           BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ matrix.lane.buildkit_mountcache_offloader && '1' || '' }}
         with:
           strategy: ${{ matrix.lane.strategy }}

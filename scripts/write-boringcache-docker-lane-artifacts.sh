@@ -114,6 +114,10 @@ fi
   --buildkit-cache-prewarm-body-downshifts "$(read_output buildkit_cache_prewarm_body_downshifts)" \
   --buildkit-cache-prewarm-body-backlog-reliefs "$(read_output buildkit_cache_prewarm_body_backlog_reliefs)" \
   --buildkit-cache-prewarm-cpu-pressure-seconds "$(read_output buildkit_cache_prewarm_cpu_pressure_seconds)" \
+  --buildkit-cache-prewarm-io-pressure-seconds "$(read_output buildkit_cache_prewarm_io_pressure_seconds)" \
+  --buildkit-cache-prewarm-body-phase "$(read_output buildkit_cache_prewarm_body_phase)" \
+  --buildkit-cache-prewarm-image-output-overlap-seconds "$(read_output buildkit_cache_prewarm_image_output_overlap_seconds)" \
+  --buildkit-cache-prewarm-cache-only-transitions "$(read_output buildkit_cache_prewarm_cache_only_transitions)" \
   --buildkit-cache-prewarm-slot-limit-min "$(read_output buildkit_cache_prewarm_slot_limit_min)" \
   --buildkit-cache-prewarm-slot-limit-max "$(read_output buildkit_cache_prewarm_slot_limit_max)" \
   --buildkit-cache-prewarm-body-wait-seconds "$(read_output buildkit_cache_prewarm_body_wait_seconds)" \

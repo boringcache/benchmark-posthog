@@ -239,7 +239,7 @@ jobs:
           cli-version: ${{ inputs.cli_version }}
           cache-tag: ${{ steps.scope.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
-          cache-backend: ${{ inputs.buildkit_cache_backend == 'boringcache' && 'boringcache' || 'registry' }}
+          cache-backend: registry
           oci-hydration: ${{ inputs.oci_hydration }}
           no-platform: 'true'
           proxy-no-git: 'true'
@@ -510,7 +510,7 @@ jobs:
           cli-version: ${{ inputs.cli_version }}
           cache-tag: ${{ steps.scope.outputs.cache_scope }}
           registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
-          cache-backend: ${{ inputs.buildkit_cache_backend == 'boringcache' && 'boringcache' || 'registry' }}
+          cache-backend: registry
           no-platform: 'true'
           proxy-no-git: 'true'
           proxy-no-platform: 'true'

@@ -311,7 +311,7 @@ runs:
         fi
 
     - name: Configure boringcache/one for Docker
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' }}
+      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.buildkit_cache_backend != 'boringcache' && inputs.docker_tool_cache == '' }}
       id: docker_cache
       uses: boringcache/one@v1
       env:
@@ -325,7 +325,7 @@ runs:
         cli-version: ${{ inputs.cli_version }}
         cache-tag: ${{ steps.scope.outputs.cache_scope }}
         registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
-        cache-backend: ${{ inputs.buildkit_cache_backend == 'boringcache' && 'boringcache' || 'registry' }}
+        cache-backend: registry
         oci-hydration: ${{ inputs.oci_hydration }}
         no-platform: "true"
         proxy-no-git: "true"
@@ -448,7 +448,6 @@ runs:
         BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.buildkit_mountcache_offloader == 'true' && '1' || '' }}
         BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
         BORINGCACHE_OCI_HYDRATION: ${{ inputs.oci_hydration }}
-        BORINGCACHE_DOCKER_WRAPPER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'state' && 'always' || inputs.strategy == 'boringcache' && inputs.docker_tool_cache == '' && 'never' || '' }}
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.buildkit_cache_backend != 'boringcache' && inputs.docker_tool_cache != '' && steps.tool_cache_buildx.outputs.name || steps.buildx.outputs.name || '' }}

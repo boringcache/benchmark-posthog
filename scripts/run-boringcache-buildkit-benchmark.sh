@@ -652,7 +652,7 @@ write_build_diagnostics() {
     grep -E 'boringcache cache mount (hydrate|publish)' "$build_log" | tail -n 160 || true
     echo "EOF"
     echo "proxy_summary<<EOF"
-    if [[ "$backend" != "state" ]]; then
+    if [[ "$backend" != "state" && -s "$proxy_log" ]]; then
       grep -E 'Mode:|OCI Human Tags|Internal Registry Root Tag|Startup mode|Full-tag hydration|OCI body hydration|OCI HEAD|SESSION tool=oci|KV flush|root publish|boringcache cache mount|error|warn' "$proxy_log" | tail -n 160 || true
     fi
     echo "EOF"

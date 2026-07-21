@@ -94,26 +94,19 @@ inputs:
   free_disk_space:
     required: false
     default: "false"
-  ecr_region:
-    description: "AWS region for the ECR registry-cache benchmark lane."
-    required: false
-    default: us-east-1
-  ecr_role_arn:
-    description: "IAM role ARN assumed by GitHub Actions through OIDC for the ECR registry-cache benchmark lane."
-    required: false
-    default: ""
-  ecr_registry:
-    description: "Optional ECR registry hostname. Defaults to the account registry for ecr_region after role assumption."
-    required: false
-    default: ""
-  ecr_repository:
-    description: "ECR repository used for BuildKit registry cache manifests."
-    required: false
-    default: ""
-
 runs:
   using: "composite"
   steps:
+    - name: Validate strategy
+      shell: bash
+      env:
+        STRATEGY: ${{ inputs.strategy }}
+      run: |
+        case "$STRATEGY" in
+          actions-cache|boringcache) ;;
+          *) echo "Unknown Docker benchmark strategy: $STRATEGY" >&2; exit 1 ;;
+        esac
+
     - name: Free disk space
       if: ${{ inputs.free_disk_space == 'true' }}
       shell: bash
@@ -345,59 +338,12 @@ runs:
           network=host
 
     - name: Set up Docker Buildx
-      if: ${{ inputs.strategy == 'actions-cache' || inputs.strategy == 'ecr-cache' }}
+      if: ${{ inputs.strategy == 'actions-cache' }}
       id: buildx
       uses: docker/setup-buildx-action@v4
       with:
         driver-opts: |
           image=${{ inputs.buildkit_image }}
-
-    - name: Validate ECR inputs
-      if: ${{ inputs.strategy == 'ecr-cache' }}
-      shell: bash
-      env:
-        ECR_REGION: ${{ inputs.ecr_region }}
-        ECR_ROLE_ARN: ${{ inputs.ecr_role_arn }}
-        ECR_REPOSITORY: ${{ inputs.ecr_repository }}
-      run: |
-        set -euo pipefail
-        [[ -n "$ECR_REGION" ]] || { echo "Missing ecr_region input" >&2; exit 1; }
-        [[ -n "$ECR_ROLE_ARN" ]] || { echo "Missing ecr_role_arn input" >&2; exit 1; }
-        [[ -n "$ECR_REPOSITORY" ]] || { echo "Missing ecr_repository input" >&2; exit 1; }
-
-    - name: Configure AWS credentials for ECR
-      if: ${{ inputs.strategy == 'ecr-cache' }}
-      uses: aws-actions/configure-aws-credentials@v6.1.0
-      with:
-        aws-region: ${{ inputs.ecr_region }}
-        role-to-assume: ${{ inputs.ecr_role_arn }}
-        role-session-name: bc-docker-cache-${{ github.run_id }}-${{ github.run_attempt }}
-        role-duration-seconds: 7200
-        mask-aws-account-id: "true"
-        unset-current-credentials: "true"
-
-    - name: Login to Amazon ECR
-      if: ${{ inputs.strategy == 'ecr-cache' }}
-      uses: aws-actions/amazon-ecr-login@v2.1.5
-
-    - name: Resolve ECR cache repository
-      if: ${{ inputs.strategy == 'ecr-cache' }}
-      id: ecr_cache
-      shell: bash
-      env:
-        ECR_REGION: ${{ inputs.ecr_region }}
-        ECR_REGISTRY: ${{ inputs.ecr_registry }}
-        ECR_REPOSITORY: ${{ inputs.ecr_repository }}
-      run: |
-        set -euo pipefail
-        account_id="$(aws sts get-caller-identity --query Account --output text)"
-        registry="${ECR_REGISTRY:-${account_id}.dkr.ecr.${ECR_REGION}.amazonaws.com}"
-        aws ecr describe-repositories \
-          --region "$ECR_REGION" \
-          --repository-names "$ECR_REPOSITORY" >/dev/null
-        echo "registry=${registry}" >> "$GITHUB_OUTPUT"
-        echo "repository=${ECR_REPOSITORY}" >> "$GITHUB_OUTPUT"
-        echo "cache_ref=${registry}/${ECR_REPOSITORY}" >> "$GITHUB_OUTPUT"
 
     - name: Expose GitHub runtime for Buildx cache
       if: ${{ inputs.strategy == 'actions-cache' }}
@@ -461,9 +407,6 @@ runs:
         BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-commit-observability.jsonl
         ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP: "true"
         BENCHMARK_BUILD_MODE: ${{ inputs.build_mode }}
-        ECR_CACHE_REF: ${{ steps.ecr_cache.outputs.cache_ref }}
-        ECR_REPOSITORY: ${{ steps.ecr_cache.outputs.repository }}
-        ECR_REGION: ${{ inputs.ecr_region }}
         IMAGE_TAG: ${{ inputs.image_tag }}
         DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
         BENCHMARK_DOCKER_CONTEXT: ${{ inputs.docker_context }}
@@ -507,33 +450,12 @@ runs:
           }
 
           selected_scope="$CACHE_SCOPE_PRIMARY"
-          registry_cache_import_status=""
           attempt=1
           while true; do
-            if [[ "$STRATEGY" == "actions-cache" ]]; then
-              build_cache_args=(
-                --cache-from "type=gha,scope=${selected_scope}"
-                --cache-to "type=gha,mode=max,scope=${selected_scope}"
-              )
-            else
-              cache_ref="${ECR_CACHE_REF:?Missing ECR cache ref}:${selected_scope}"
-              if aws ecr describe-images \
-                --region "${ECR_REGION:?Missing ECR region}" \
-                --repository-name "${ECR_REPOSITORY:?Missing ECR repository}" \
-                --image-ids imageTag="$selected_scope" >/dev/null 2>&1; then
-                registry_cache_import_status="ok"
-                build_cache_args=(
-                  --cache-from "type=registry,ref=${cache_ref}"
-                  --cache-to "type=registry,ref=${cache_ref},mode=max,oci-mediatypes=true,image-manifest=true"
-                )
-              else
-                registry_cache_import_status="missing"
-                echo "No prior ECR cache tag found for ${selected_scope}; bootstrapping rolling cache."
-                build_cache_args=(
-                  --cache-to "type=registry,ref=${cache_ref},mode=max,oci-mediatypes=true,image-manifest=true"
-                )
-              fi
-            fi
+            build_cache_args=(
+              --cache-from "type=gha,scope=${selected_scope}"
+              --cache-to "type=gha,mode=max,scope=${selected_scope}"
+            )
 
             : > "$build_log"
             set +e
@@ -561,25 +483,6 @@ runs:
             sleep 5
           done
 
-          if [[ "$STRATEGY" == "ecr-cache" ]]; then
-            export_verified=0
-            for _ in $(seq 1 20); do
-              if aws ecr describe-images \
-                --region "${ECR_REGION:?Missing ECR region}" \
-                --repository-name "${ECR_REPOSITORY:?Missing ECR repository}" \
-                --image-ids imageTag="$selected_scope" >/dev/null 2>&1; then
-                export_verified=1
-                break
-              fi
-              sleep 3
-            done
-
-            if [[ "$export_verified" -ne 1 ]]; then
-              echo "Docker cache export probe failed: no ECR cache image tag was found for ${selected_scope}" >&2
-              exit 1
-            fi
-          fi
-
           end="$(date +%s)"
           echo "cache_scope=${selected_scope}" >> "$GITHUB_OUTPUT"
           echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
@@ -589,23 +492,13 @@ runs:
           if [[ -n "$import_seconds" ]]; then
             echo "docker_cache_import_seconds=${import_seconds}" >> "$GITHUB_OUTPUT"
           fi
-          export_step="$(find_step_id "exporting cache to boringcache")"
-          if [[ -z "$export_step" ]]; then
-            if [[ "$STRATEGY" == "ecr-cache" ]]; then
-              export_step="$(find_step_id "exporting cache to registry")"
-            else
-              export_step="$(find_step_id "preparing build cache for export")"
-            fi
-          fi
+          export_step="$(find_step_id "preparing build cache for export")"
           export_seconds="$(find_step_seconds "$export_step")"
           if [[ -n "$export_seconds" ]]; then
             echo "docker_cache_export_seconds=${export_seconds}" >> "$GITHUB_OUTPUT"
           fi
           cached_steps="$(grep -Ec '^#[0-9]+ CACHED$' "$build_log" || true)"
           echo "buildkit_cached_steps=${cached_steps}" >> "$GITHUB_OUTPUT"
-          if [[ -n "$registry_cache_import_status" ]]; then
-            echo "cache_import_status=${registry_cache_import_status}" >> "$GITHUB_OUTPUT"
-          fi
         fi
 
     - name: Upload commit diagnostics
@@ -624,8 +517,6 @@ runs:
         BUILDKIT_BACKEND: ${{ inputs.buildkit_backend }}
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
         BENCHMARK_WORKSPACE: ${{ inputs.benchmark_workspace }}
-        ECR_REGION: ${{ inputs.ecr_region }}
-        ECR_REPOSITORY: ${{ steps.ecr_cache.outputs.repository }}
       run: |
         set -euo pipefail
         mkdir -p benchmark-storage
@@ -638,17 +529,6 @@ runs:
           fi
           bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" BORINGCACHE_EXACT_TAGS="$exact_tags" ./scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
           source="boringcache-check"
-        elif [[ "$STRATEGY" == "ecr-cache" ]]; then
-          breakdown_path=""
-          cache_scope="${{ steps.build.outputs.cache_scope }}"
-          bytes="$(aws ecr describe-images \
-            --region "${ECR_REGION:?Missing ECR region}" \
-            --repository-name "${ECR_REPOSITORY:?Missing ECR repository}" \
-            --image-ids "imageTag=${cache_scope}" \
-            --query 'imageDetails[0].imageSizeInBytes' \
-            --output text)"
-          [[ "$bytes" =~ ^[0-9]+$ ]] || { echo "Unexpected ECR image size: ${bytes}" >&2; exit 1; }
-          source="ecr-describe-images"
         else
           breakdown_path=""
           bytes="$(./scripts/sum-gha-cache-by-key.sh "$BENCHMARK_ID" "${{ steps.scope.outputs.scope_started_at }}")"
@@ -676,7 +556,7 @@ runs:
         fi
 
         cache_import_status=""
-        if [[ "$STRATEGY" == "boringcache" || "$STRATEGY" == "ecr-cache" ]]; then
+        if [[ "$STRATEGY" == "boringcache" ]]; then
           cache_import_status="${{ steps.build.outputs.cache_import_status }}"
         fi
         project_ref="$(git -C upstream rev-parse HEAD 2>/dev/null || git rev-parse HEAD:upstream)"

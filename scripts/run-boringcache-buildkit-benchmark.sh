@@ -431,6 +431,10 @@ write_build_metrics() {
     write_prewarm_value buildkit_cache_prewarm_body_downshifts body_downshifts
     write_prewarm_value buildkit_cache_prewarm_body_backlog_reliefs body_backlog_reliefs
     write_prewarm_value buildkit_cache_prewarm_cpu_pressure_seconds cpu_pressure_seconds
+    write_prewarm_value buildkit_cache_prewarm_io_pressure_seconds io_pressure_seconds
+    write_prewarm_value buildkit_cache_prewarm_body_phase body_phase
+    write_prewarm_duration buildkit_cache_prewarm_image_output_overlap_seconds image_output_overlap
+    write_prewarm_value buildkit_cache_prewarm_cache_only_transitions cache_only_transitions
     write_prewarm_value buildkit_cache_prewarm_slot_limit_min slot_limit_min
     write_prewarm_value buildkit_cache_prewarm_slot_limit_max slot_limit_max
     write_prewarm_duration buildkit_cache_prewarm_body_wait_seconds body_wait

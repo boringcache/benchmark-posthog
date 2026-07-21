@@ -12,10 +12,14 @@ set -euo pipefail
 observability_path="${1:-${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}}"
 
 fail() {
-  echo "Managed Docker product-path contract failed: $*" >&2
-  echo "Run the build through 'boringcache docker --backend boringcache -- ...'; setup-only plus raw Docker is not the managed product path." >&2
+  echo "Managed Docker product-path contract failed: $1" >&2
+  if [[ -n "${2:-}" ]]; then
+    echo "$2" >&2
+  fi
   exit 1
 }
+
+product_path_hint="Run the build through 'boringcache docker --backend boringcache -- ...'; setup-only plus raw Docker is not the managed product path."
 
 [[ -n "$observability_path" ]] || fail "pass the observability JSONL path or set BORINGCACHE_OBSERVABILITY_JSONL_PATH"
 [[ -s "$observability_path" ]] || fail "missing observability JSONL at ${observability_path}"
@@ -38,7 +42,9 @@ result="$(jq -sr '
 ' "$observability_path")" || fail "invalid observability JSONL at ${observability_path}"
 IFS=$'\t' read -r summary_bytes evidence <<< "$result"
 
-[[ -n "$evidence" ]] || fail "cache_session_summary is missing buildkit.vertex_spans evidence"
+[[ -n "$evidence" ]] || fail "cache_session_summary is missing buildkit.vertex_spans evidence" "$product_path_hint"
 [[ "$summary_bytes" =~ ^[0-9]+$ ]] || fail "cache_session_summary size could not be measured"
-(( summary_bytes <= summary_limit_bytes )) || fail "cache_session_summary is ${summary_bytes} bytes; Rails accepts at most ${summary_limit_bytes} bytes"
+(( summary_bytes <= summary_limit_bytes )) || fail \
+  "run summary is ${summary_bytes} bytes; the BoringCache ingestion limit is ${summary_limit_bytes} bytes" \
+  "Use a current BoringCache CLI; older clients can emit managed-build telemetry that exceeds this contract."
 echo "Managed Docker product path verified: ${evidence} summary_bytes=${summary_bytes}"

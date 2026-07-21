@@ -95,7 +95,6 @@ concurrency:
 permissions:
   contents: read
   actions: write
-  id-token: write
   packages: read
 
 jobs:
@@ -128,18 +127,6 @@ jobs:
             turbo_cache_mounts: false
             lane_filter: default
             run_on_pull_request: true
-          - label: ECR
-            strategy: ecr-cache
-            artifact_strategy: ecr-cache
-            benchmark_id: posthog
-            buildkit_backend: registry
-            buildkit_cache_backend: ""
-            dockerfile_path: upstream/Dockerfile
-            docker_tool_cache: ""
-            buildkit_mountcache_offloader: false
-            turbo_cache_mounts: false
-            lane_filter: default
-            run_on_pull_request: false
           - label: BC OCI
             strategy: boringcache
             artifact_strategy: ""
@@ -269,7 +256,3 @@ jobs:
           cli_platform: ${{ matrix.platform.cli_platform }}
           benchmark_workspace: ${{ github.repository }}
           docker_tool_cache: ${{ matrix.lane.docker_tool_cache }}
-          ecr_region: ${{ vars.DOCKER_BENCHMARK_ECR_REGION || 'us-east-1' }}
-          ecr_role_arn: ${{ vars.DOCKER_BENCHMARK_ECR_ROLE_ARN }}
-          ecr_registry: ${{ vars.DOCKER_BENCHMARK_ECR_REGISTRY }}
-          ecr_repository: ${{ vars.DOCKER_BENCHMARK_ECR_REPOSITORY }}

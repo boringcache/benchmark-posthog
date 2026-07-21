@@ -76,7 +76,7 @@ This repo uses split BoringCache tokens as the standard CI shape:
 
 [`state-sync-v13-cas.yml`](.github/workflows/state-sync-v13-cas.yml) is
 the isolated pre-graduation path for the CLI `--backend state` product. It is
-independently dispatched and does not alter the public GHA, ECR, BC OCI, or managed
+independently dispatched and does not alter the public GHA, BC OCI, or managed
 `type=boringcache` lanes. It deliberately does not use `boringcache/one` or a
 Docker cache importer/exporter.
 
@@ -221,7 +221,7 @@ The runner needs AWS CLI v2 on `PATH` because BoringBuild verifies EC2 credentia
 - [`scripts/render-posthog-toolcache-dockerfile.sh`](scripts/render-posthog-toolcache-dockerfile.sh) derives the state-canary tool-cache fixture from each exact upstream source instead of carrying a drifting Dockerfile copy.
 - [`scripts/run-boringbuild-ec2-shape-sweep.sh`](scripts/run-boringbuild-ec2-shape-sweep.sh)
 - [`docs/buildkit-mountcache-planner-experiment.md`](docs/buildkit-mountcache-planner-experiment.md) records the BuildKit mountcache planner experiment and the BC BuildKit vs ECR comparison for the July 6, 2026 spike run.
-- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache, ECR, and explicit BoringCache OCI and BuildKit-backend product lanes side by side.
+- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml) runs GitHub Actions Cache and explicit BoringCache OCI and BuildKit-backend product lanes side by side. ECR is retired; its historical runs and comparison documents remain available as evidence.
 - [`.github/workflows/rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml) runs the product rolling lanes and the variable-gated BuildKit state canary after upstream sync.
 - [`.github/workflows/sync.yml`](.github/workflows/sync.yml) checks for a newer pinned upstream source every 30 minutes.
 

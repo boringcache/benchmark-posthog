@@ -9,7 +9,7 @@ on:
         type: string
         default: ""
       prewarm_buildkit_image:
-        description: "Optional BuildKit image for managed backend canary lanes."
+        description: "Optional managed BuildKit image override. Defaults to the stable managed channel."
         required: false
         type: string
         default: ""
@@ -61,7 +61,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CLI_VERSION: ${{ inputs.cli_version || vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION }}
-          PREWARM_BUILDKIT_IMAGE: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE }}
+          PREWARM_BUILDKIT_IMAGE: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc' }}
           BENCHMARK_ID_SUFFIX: ${{ inputs.benchmark_id_suffix || vars.POSTHOG_BENCHMARK_ID_SUFFIX }}
           LANE_FILTER: ${{ inputs.lane_filter || 'all' }}
           RUNNER_LABEL: ${{ inputs.runner_label }}

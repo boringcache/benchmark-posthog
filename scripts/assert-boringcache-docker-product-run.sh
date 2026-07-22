@@ -25,10 +25,9 @@ product_path_hint="Run the build through 'boringcache docker --backend boringcac
 [[ -s "$observability_path" ]] || fail "missing observability JSONL at ${observability_path}"
 command -v jq >/dev/null 2>&1 || fail "jq is required to verify managed run evidence"
 
-summary_limit_bytes=65536
-summary_bytes=""
-evidence=""
-result="$(jq -sr '
+# Payload acceptance is the backend's contract. This benchmark only proves that
+# the run used the managed Docker product path and emitted its required evidence.
+evidence="$(jq -sr '
   ([.[] | select(.operation == "cache_session_summary")] | last) as $record
   | ($record.summary // $record.details // $record) as $summary
   | ($summary.buildkit.vertex_spans // null) as $spans
@@ -38,13 +37,8 @@ result="$(jq -sr '
   | ($spans.cached_count | numbers) as $cached
   | ($spans.error_count | numbers) as $errors
   | select($total > 0 and ($executed + $cached + $errors) > 0)
-  | "\($summary | tojson | utf8bytelength)\tvertex_spans total=\($total) executed=\($executed) cached=\($cached) errors=\($errors)"
+  | "vertex_spans total=\($total) executed=\($executed) cached=\($cached) errors=\($errors)"
 ' "$observability_path")" || fail "invalid observability JSONL at ${observability_path}"
-IFS=$'\t' read -r summary_bytes evidence <<< "$result"
 
 [[ -n "$evidence" ]] || fail "cache_session_summary is missing buildkit.vertex_spans evidence" "$product_path_hint"
-[[ "$summary_bytes" =~ ^[0-9]+$ ]] || fail "cache_session_summary size could not be measured"
-(( summary_bytes <= summary_limit_bytes )) || fail \
-  "run summary is ${summary_bytes} bytes; the BoringCache ingestion limit is ${summary_limit_bytes} bytes" \
-  "Use a current BoringCache CLI; older clients can emit managed-build telemetry that exceeds this contract."
-echo "Managed Docker product path verified: ${evidence} summary_bytes=${summary_bytes}"
+echo "Managed Docker product path verified: ${evidence}"

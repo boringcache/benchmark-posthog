@@ -1,0 +1,100 @@
+name: "PostHog Fresh"
+run-name: >-
+  ${{ format('Benchmark {0} | {1}', inputs.cli_version != '' && 'Canary' || 'Fresh', github.event_name == 'schedule' && 'Weekly' || format('Manual dispatch ({0})', github.ref_name)) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      prewarm_buildkit_image:
+        description: "Optional BuildKit image for the managed backend lane."
+        required: false
+        type: string
+        default: ""
+      cli_version:
+        description: "Optional BoringCache CLI release tag for canary runs, for example vcli-canary."
+        required: false
+        type: string
+        default: ""
+      benchmark_id_suffix:
+        description: "Optional suffix appended to built-in benchmark/cache scopes for isolated comparison runs."
+        required: false
+        type: string
+        default: ""
+      runner_label:
+        description: "Optional native runner label override. It must match the selected platform; empty uses the benchmark defaults."
+        required: false
+        type: string
+        default: ""
+  schedule:
+    - cron: "0 3 * * 3"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+  packages: read
+
+jobs:
+  github-actions-cache:
+    name: GHA amd64
+    uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
+    with:
+      strategy: actions-cache
+      cache_lane: fresh
+      benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+      runner_label: ${{ inputs.runner_label || 'ubuntu-latest' }}
+      project_repo: PostHog/posthog
+      dockerfile_path: upstream/Dockerfile
+      docker_context: upstream
+      image_tag: posthog-benchmark:latest
+      docker_platform: linux/amd64
+      cli_platform: linux-amd64
+      benchmark_workspace: ${{ github.repository }}
+      free_disk_space: true
+    secrets: inherit
+
+  boringcache-oci:
+    name: BC OCI amd64
+    uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
+    with:
+      strategy: boringcache
+      cache_lane: fresh
+      buildkit_backend: registry
+      benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+      runner_label: ${{ inputs.runner_label || 'ubuntu-latest' }}
+      project_repo: PostHog/posthog
+      dockerfile_path: upstream/Dockerfile
+      docker_context: upstream
+      image_tag: posthog-benchmark:latest
+      docker_platform: linux/amd64
+      cli_platform: linux-amd64
+      cli_version: ${{ inputs.cli_version }}
+      benchmark_workspace: ${{ github.repository }}
+      free_disk_space: true
+    secrets: inherit
+
+  boringcache-buildkit-backend:
+    name: BC BuildKit Backend amd64
+    uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
+    with:
+      strategy: boringcache
+      cache_lane: fresh
+      buildkit_backend: registry
+      buildkit_cache_backend: boringcache
+      oci_hydration: metadata-only
+      benchmark_id: ${{ format('posthog-bc-buildkit{0}', inputs.benchmark_id_suffix) }}
+      runner_label: ${{ inputs.runner_label || 'ubuntu-latest' }}
+      project_repo: PostHog/posthog
+      dockerfile_path: upstream/Dockerfile
+      docker_context: upstream
+      image_tag: posthog-benchmark:latest
+      docker_platform: linux/amd64
+      cli_platform: linux-amd64
+      cli_version: ${{ inputs.cli_version }}
+      buildkit_image: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc' }}
+      benchmark_workspace: ${{ github.repository }}
+      free_disk_space: true
+    secrets: inherit

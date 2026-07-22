@@ -313,22 +313,8 @@ jobs:
     secrets: inherit
 
   fresh-boringcache-buildkit-backend:
-    name: BC BuildKit Backend ${{ matrix.label }}
+    name: BC BuildKit Backend amd64
     if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'fresh') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: amd64
-            runner_label: ubuntu-latest
-            cli_platform: linux-amd64
-            docker_platform: linux/amd64
-            benchmark_id_prefix: ""
-          - label: arm64
-            runner_label: ubuntu-24.04-arm
-            cli_platform: linux-arm64
-            docker_platform: linux/arm64
-            benchmark_id_prefix: arm-
     uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
     with:
       strategy: boringcache
@@ -336,16 +322,16 @@ jobs:
       buildkit_backend: registry
       buildkit_cache_backend: boringcache
       oci_hydration: metadata-only
-      benchmark_id: ${{ format('{0}posthog-bc-buildkit{1}', matrix.benchmark_id_prefix, inputs.benchmark_id_suffix) }}
-      runner_label: ${{ inputs.runner_label || matrix.runner_label }}
+      benchmark_id: ${{ format('posthog-bc-buildkit{0}', inputs.benchmark_id_suffix) }}
+      runner_label: ${{ inputs.runner_label || 'ubuntu-latest' }}
       project_repo: PostHog/posthog
       dockerfile_path: upstream/Dockerfile
       docker_context: upstream
       image_tag: posthog-benchmark:latest
-      docker_platform: ${{ matrix.docker_platform }}
-      cli_platform: ${{ matrix.cli_platform }}
+      docker_platform: linux/amd64
+      cli_platform: linux-amd64
       cli_version: ${{ inputs.cli_version || vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION }}
-      buildkit_image: ${{ matrix.cli_platform == 'linux-arm64' && (inputs.prewarm_buildkit_image_arm64 || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE_ARM64 || inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc') || (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc') }}
+      buildkit_image: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc' }}
       benchmark_workspace: ${{ github.repository }}
       free_disk_space: true
     secrets: inherit

@@ -4,21 +4,10 @@ description: "Run one rolling Docker benchmark provider inside a single visible 
 inputs:
   strategy:
     required: true
-  buildkit_backend:
-    required: false
-    default: registry
-  buildkit_cache_backend:
-    description: "Optional BuildKit cache backend type. Use boringcache for the managed BuildKit backend."
-    required: false
-    default: ""
   buildkit_mountcache_offloader:
     description: "Enable BuildKit-owned cache-mount archive offload for managed type=boringcache lanes."
     required: false
     default: "false"
-  oci_hydration:
-    description: "Docker/BuildKit proxy hydration policy for benchmark lanes; keep metadata-only."
-    required: false
-    default: "metadata-only"
   benchmark_id:
     required: true
   cache_scope_override:
@@ -38,7 +27,7 @@ inputs:
     required: false
     default: upstream
   docker_tool_cache:
-    description: "Optional Docker tool-cache adapter. Native BuildKit backend injects it without Dockerfile changes; legacy registry lanes require a Dockerfile bridge."
+    description: "Optional Docker tool-cache adapter injected by the managed BuildKit backend."
     required: false
     default: ""
   docker_build_args:
@@ -67,14 +56,11 @@ inputs:
     required: false
     default: ""
   buildkit_image:
-    description: "BuildKit daemon image used by benchmark-created builders."
+    description: "Managed BoringCache BuildKit image."
     required: false
-    default: mirror.gcr.io/moby/buildkit:buildx-stable-1
+    default: ghcr.io/boringcache/buildkit:v0.30.0-bc
   benchmark_workspace:
     required: true
-  artifact_strategy:
-    required: false
-    default: ""
   build_mode:
     description: "Build mode passed to the BoringCache benchmark script. Use partial-warm for read-only cache replay."
     required: false
@@ -87,13 +73,10 @@ inputs:
     description: "Apply the benchmark-only PostHog Dockerfile patch that declares Turbo cache mounts."
     required: false
     default: "false"
-  cache_export_type:
-    description: "Legacy compatibility alias for buildkit_cache_backend. Prefer buildkit_cache_backend for BuildKit backend lanes."
-    required: false
-    default: ""
   free_disk_space:
     required: false
     default: "false"
+
 runs:
   using: "composite"
   steps:
@@ -293,7 +276,6 @@ runs:
             tags_csv="${tags_csv},${tool_cache_tags}"
           fi
           echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
-          echo "registry_proxy_tags=${cache_scope}" >> "$GITHUB_OUTPUT"
           echo "tags_csv=${tags_csv}" >> "$GITHUB_OUTPUT"
           echo "tool_cache_tags_csv=${tool_cache_tags}" >> "$GITHUB_OUTPUT"
         else
@@ -302,40 +284,6 @@ runs:
           echo "cache_scope_primary=${cache_scope_primary}" >> "$GITHUB_OUTPUT"
           echo "cache_scope_fallback=${cache_scope_fallback}" >> "$GITHUB_OUTPUT"
         fi
-
-    - name: Configure boringcache/one for Docker
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.buildkit_cache_backend != 'boringcache' && inputs.docker_tool_cache == '' }}
-      id: docker_cache
-      uses: boringcache/one@v1
-      env:
-        BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.buildkit_mountcache_offloader == 'true' && '1' || '' }}
-      with:
-        setup: none
-        cache-runtime: false
-        mode: docker
-        docker-command: setup
-        workspace: ${{ inputs.benchmark_workspace }}
-        cli-version: ${{ inputs.cli_version }}
-        cache-tag: ${{ steps.scope.outputs.cache_scope }}
-        registry-tag: ${{ steps.scope.outputs.registry_proxy_tags }}
-        cache-backend: registry
-        oci-hydration: ${{ inputs.oci_hydration }}
-        no-platform: "true"
-        proxy-no-git: "true"
-        proxy-no-platform: "true"
-        driver-opts: |
-          image=${{ inputs.buildkit_image }}
-          network=host
-        verbose: true
-
-    - name: Set up Docker Buildx for BoringCache wrapped build
-      if: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.buildkit_cache_backend != 'boringcache' && inputs.docker_tool_cache != '' }}
-      id: tool_cache_buildx
-      uses: docker/setup-buildx-action@v4
-      with:
-        driver-opts: |
-          image=${{ inputs.buildkit_image }}
-          network=host
 
     - name: Set up Docker Buildx
       if: ${{ inputs.strategy == 'actions-cache' }}
@@ -379,31 +327,17 @@ runs:
       shell: bash
       env:
         STRATEGY: ${{ inputs.strategy }}
-        BUILDKIT_BACKEND: ${{ inputs.buildkit_backend }}
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
         BENCHMARK_WORKSPACE: ${{ inputs.benchmark_workspace }}
-        BORINGCACHE_PROXY_LOG_PATH: ${{ steps.docker_cache.outputs.proxy-log-path }}
-        BORINGCACHE_PROXY_PORT: ${{ steps.docker_cache.outputs.proxy-port }}
-        BORINGCACHE_CACHE_IMPORT_READY: ${{ steps.docker_cache.outputs.docker-cache-import-ready }}
-        BORINGCACHE_CACHE_REQUESTED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-requested-from-refs }}
-        BORINGCACHE_CACHE_USED_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-from-refs }}
-        BORINGCACHE_CACHE_UNREADABLE_FROM_REFS: ${{ steps.docker_cache.outputs.docker-cache-unreadable-from-refs }}
-        BORINGCACHE_DOCKER_PROMOTION_REFS: ${{ steps.docker_cache.outputs.docker-cache-promotion-refs }}
         BORINGCACHE_DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
-        BORINGCACHE_BUILDKIT_CACHE_BACKEND: ${{ inputs.buildkit_cache_backend }}
         BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.buildkit_mountcache_offloader == 'true' && '1' || '' }}
-        BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
-        BORINGCACHE_OCI_HYDRATION: ${{ inputs.oci_hydration }}
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
-        BUILDER: ${{ inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.docker_tool_cache == '' && steps.docker_cache.outputs.buildx-name || inputs.strategy == 'boringcache' && inputs.buildkit_backend == 'registry' && inputs.buildkit_cache_backend != 'boringcache' && inputs.docker_tool_cache != '' && steps.tool_cache_buildx.outputs.name || steps.buildx.outputs.name || '' }}
-        CACHE_FROM: ${{ steps.docker_cache.outputs.cache-from }}
-        CACHE_TO: ${{ steps.docker_cache.outputs.cache-to }}
+        BUILDER: ${{ steps.buildx.outputs.name || '' }}
         CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
         CACHE_SCOPE_PRIMARY: ${{ steps.scope.outputs.cache_scope_primary }}
         CACHE_SCOPE_FALLBACK: ${{ steps.scope.outputs.cache_scope_fallback }}
         CACHE_LANE: rolling
-        BORINGCACHE_REGISTRY_PROXY_TAGS: ${{ steps.scope.outputs.registry_proxy_tags }}
         BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ inputs.benchmark_id }}-boringcache-commit-observability.jsonl
         ALLOW_BORINGCACHE_ROLLING_BOOTSTRAP: "true"
         BENCHMARK_BUILD_MODE: ${{ inputs.build_mode }}
@@ -514,7 +448,6 @@ runs:
       shell: bash
       env:
         STRATEGY: ${{ inputs.strategy }}
-        BUILDKIT_BACKEND: ${{ inputs.buildkit_backend }}
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
         BENCHMARK_WORKSPACE: ${{ inputs.benchmark_workspace }}
       run: |
@@ -524,9 +457,6 @@ runs:
           tags_csv="${{ steps.scope.outputs.tags_csv }}"
           breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
           exact_tags=""
-          if [[ "$BUILDKIT_BACKEND" == "registry" ]]; then
-            exact_tags="${tags_csv}"
-          fi
           bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" BORINGCACHE_EXACT_TAGS="$exact_tags" ./scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
           source="boringcache-check"
         else
@@ -546,8 +476,6 @@ runs:
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
         PROJECT_REPO: ${{ inputs.project_repo }}
         BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
-        BORINGCACHE_BUILDKIT_CACHE_BACKEND: ${{ inputs.buildkit_cache_backend }}
-        BORINGCACHE_CACHE_EXPORT_TYPE: ${{ inputs.cache_export_type }}
       run: |
         set -euo pipefail
         cache_summary_args=()
@@ -566,7 +494,7 @@ runs:
           --strategy "$STRATEGY" \
           --lane rolling \
           --mode docker \
-          --adapter oci \
+          --adapter buildkit \
           --project-repo "$PROJECT_REPO" \
           --project-ref "$project_ref" \
           --cold-seconds "${{ steps.build.outputs.seconds }}" \
@@ -653,7 +581,7 @@ runs:
     - name: Upload benchmark artifacts
       uses: actions/upload-artifact@v6
       with:
-        name: benchmark-${{ inputs.benchmark_id }}-${{ inputs.artifact_strategy || inputs.strategy }}-rolling
+        name: benchmark-${{ inputs.benchmark_id }}-${{ inputs.strategy }}-rolling
         path: |
           ${{ steps.artifact_files.outputs.json_path }}
           ${{ steps.artifact_files.outputs.md_path }}

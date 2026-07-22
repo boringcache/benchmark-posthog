@@ -44,7 +44,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --ref "${{ github.ref_name }}" \
             -f "cli_version=${CLI_VERSION}" \
-            -f "prewarm_buildkit_image=${BUILDKIT_IMAGE}" \
+            -f "buildkit_image=${BUILDKIT_IMAGE}" \
             -f benchmark_id_suffix=-canary)"
           RUN_ID="${RUN_URL##*/}"
           echo "Canary benchmark: ${RUN_URL}"

@@ -42,8 +42,8 @@
 #     are emitted here. New fields are nullable and never required
 #     by the aggregator. Build-only/setup splits and Docker rolling
 #     commit-build fields are emitted with nullable warm fields.
-#   - GitHub run context is emitted uniformly for every lane so native,
-#     OCI, ECR, and Actions Cache artifacts can be compared by run id,
+#   - GitHub run context is emitted uniformly for every lane so BoringCache
+#     and GitHub Actions Cache artifacts can be compared by run id,
 #     run number, and attempt without guessing from artifact names.
 #
 set -euo pipefail
@@ -114,8 +114,6 @@ docker_cache_export_seconds=""
 buildkit_cached_steps="${BENCHMARK_BUILDKIT_CACHED_STEPS:-}"
 cli_image="${BENCHMARK_CLI_IMAGE:-}"
 buildkit_image="${BENCHMARK_BUILDKIT_IMAGE:-${BUILDKIT_IMAGE:-}}"
-buildkit_cache_backend="${BENCHMARK_BUILDKIT_CACHE_BACKEND:-${BORINGCACHE_BUILDKIT_CACHE_BACKEND:-${BENCHMARK_BUILDKIT_CACHE_EXPORT_TYPE:-${BORINGCACHE_CACHE_EXPORT_TYPE:-}}}}"
-buildkit_cache_export_type="${BENCHMARK_BUILDKIT_CACHE_EXPORT_TYPE:-${BORINGCACHE_CACHE_EXPORT_TYPE:-}}"
 buildkit_cache_prewarm_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_SECONDS:-}"
 buildkit_cache_prepare_seconds="${BENCHMARK_BUILDKIT_CACHE_PREPARE_SECONDS:-}"
 buildkit_cache_send_seconds="${BENCHMARK_BUILDKIT_CACHE_SEND_SECONDS:-}"
@@ -410,15 +408,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --buildkit-image)
       buildkit_image="$2"
-      shift 2
-      ;;
-    --buildkit-cache-backend)
-      buildkit_cache_backend="$2"
-      shift 2
-      ;;
-
-    --buildkit-cache-export-type)
-      buildkit_cache_export_type="$2"
       shift 2
       ;;
     --buildkit-cache-prewarm-seconds)
@@ -2323,8 +2312,6 @@ cat > "$json_path" <<JSON
   "docker_cache": {
     "cli_image": $(json_string_or_null "$cli_image"),
     "buildkit_image": $(json_string_or_null "$buildkit_image"),
-    "buildkit_cache_backend": $(json_string_or_null "$buildkit_cache_backend"),
-    "buildkit_cache_export_type": $(json_string_or_null "$buildkit_cache_export_type"),
     "import_seconds": $(json_num_or_null "$docker_cache_import_seconds"),
     "export_seconds": $(json_num_or_null "$docker_cache_export_seconds"),
     "cached_steps": $(json_num_or_null "$buildkit_cached_steps"),
@@ -2507,12 +2494,6 @@ JSON
   fi
   if [[ -n "$buildkit_image" ]]; then
     echo "| BuildKit image | \`${buildkit_image}\` |"
-  fi
-  if [[ -n "$buildkit_cache_backend" ]]; then
-    echo "| BuildKit cache backend | \`${buildkit_cache_backend}\` |"
-  fi
-  if [[ -n "$buildkit_cache_export_type" ]]; then
-    echo "| BuildKit cache export type | \`${buildkit_cache_export_type}\` |"
   fi
   echo "| Slow reason build | ${slow_build_seconds}s |"
   if [[ -n "$slow_setup_seconds" ]]; then

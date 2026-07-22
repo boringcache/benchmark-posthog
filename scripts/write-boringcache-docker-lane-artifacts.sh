@@ -6,7 +6,6 @@ cd "$repo_root"
 
 benchmark_id="${BENCHMARK_ID:?Set BENCHMARK_ID}"
 benchmark_workspace="${BENCHMARK_WORKSPACE:?Set BENCHMARK_WORKSPACE}"
-backend="${BUILDKIT_BACKEND:-registry}"
 cache_scope="${CACHE_SCOPE:?Set CACHE_SCOPE}"
 outputs_file="${BENCHMARK_OUTPUTS_PATH:-benchmark-results/${benchmark_id}-boringcache-rolling.outputs.env}"
 project_repo="${BENCHMARK_PROJECT_REPO:-PostHog/posthog}"
@@ -65,7 +64,7 @@ fi
   --strategy boringcache \
   --lane rolling \
   --mode docker \
-  --adapter oci \
+  --adapter buildkit \
   --project-repo "$project_repo" \
   --project-ref "$project_ref" \
   --cold-seconds "$(read_output seconds)" \

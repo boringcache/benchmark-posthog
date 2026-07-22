@@ -1,116 +1,39 @@
-name: "Canary Benchmark Dispatch"
+name: "Canary Benchmark"
+run-name: ${{ format('Canary | CLI {0} | BuildKit {1}', inputs.cli_version, inputs.buildkit_image) }}
 
 on:
   workflow_dispatch:
     inputs:
       cli_version:
         description: "BoringCache CLI release tag to test."
-        required: false
+        required: true
         type: string
         default: vcli-canary
-      prewarm_buildkit_image:
-        description: "BuildKit image to test for managed backend lanes."
-        required: false
+      buildkit_image:
+        description: "BoringCache BuildKit image to test."
+        required: true
         type: string
         default: ghcr.io/boringcache/buildkit:canary
-      benchmark_id_suffix:
-        description: "Stable suffix for canary/cache scopes. Change only for isolated comparison runs."
-        required: false
-        type: string
-        default: -canary
-      upstream_ref:
-        description: "Optional PostHog ref/SHA. Empty uses the pinned upstream submodule ref."
-        required: false
-        type: string
-        default: ""
-      lane_filter:
-        description: "Lane filter for the canary comparison."
-        required: false
-        type: choice
-        default: all
-        options:
-          - all
-          - buildkit
-      runner_label:
-        description: "Optional GitHub Actions runner label override. Empty uses the benchmark platform defaults."
-        required: false
-        type: string
-        default: ""
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: false
 
 permissions:
-  contents: read
   actions: write
+  contents: read
 
 jobs:
   dispatch:
-    name: Dispatch stable canary comparison
+    name: Run PostHog canary
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
-      - name: Dispatch PostHog canary comparison
+      - name: Dispatch isolated fresh benchmark
         env:
           GH_TOKEN: ${{ github.token }}
-          CLI_VERSION: ${{ inputs.cli_version || vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION || 'vcli-canary' }}
-          PREWARM_BUILDKIT_IMAGE: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:canary' }}
-          BENCHMARK_ID_SUFFIX: ${{ inputs.benchmark_id_suffix || vars.POSTHOG_CANARY_BENCHMARK_ID_SUFFIX || '-canary' }}
-          UPSTREAM_REF: ${{ inputs.upstream_ref }}
-          LANE_FILTER: ${{ inputs.lane_filter || 'all' }}
-          RUNNER_LABEL: ${{ inputs.runner_label }}
-        run: |
-          set -euo pipefail
-
-          check_cli_release_assets() {
-            local cli_version="$1"
-            [[ -n "$cli_version" ]] || return 0
-
-            local release_repo="${BORINGCACHE_CLI_RELEASE_REPOSITORY:-boringcache/cli}"
-            local assets asset missing_assets=()
-            assets="$(gh release view "$cli_version" --repo "$release_repo" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-
-            for asset in boringcache-linux-amd64 boringcache-linux-arm64 SHA256SUMS; do
-              if ! grep -Fxq "$asset" <<< "$assets"; then
-                missing_assets+=("$asset")
-              fi
-            done
-
-            if ((${#missing_assets[@]})); then
-              echo "::notice::Skipping PostHog canary dispatch; ${release_repo}@${cli_version} is missing required amd64/arm64 matrix assets: ${missing_assets[*]}"
-              return 1
-            fi
-
-            echo "Found ${release_repo}@${cli_version} amd64/arm64 canary assets."
-            return 0
-          }
-
-          if ! check_cli_release_assets "$CLI_VERSION"; then
-            exit 0
-          fi
-
-          args=(
-            -f "cli_version=${CLI_VERSION}"
-            -f "prewarm_buildkit_image=${PREWARM_BUILDKIT_IMAGE}"
-            -f "benchmark_id_suffix=${BENCHMARK_ID_SUFFIX}"
-            -f "lane_filter=${LANE_FILTER}"
-          )
-          if [[ -n "$RUNNER_LABEL" ]]; then
-            args+=(-f "runner_label=${RUNNER_LABEL}")
-          fi
-          if [[ -n "$UPSTREAM_REF" ]]; then
-            args+=(-f "upstream_ref=${UPSTREAM_REF}")
-          fi
-
-          attempt=1
-          max_attempts=3
-          until gh workflow run posthog-benchmark.yml --repo "$GITHUB_REPOSITORY" --ref "${{ github.ref_name }}" "${args[@]}"; do
-            if [[ "$attempt" -ge "$max_attempts" ]]; then
-              echo "Failed to dispatch posthog-benchmark.yml after ${attempt} attempts" >&2
-              exit 1
-            fi
-            echo "Dispatch failed; retrying (${attempt}/${max_attempts})" >&2
-            attempt=$((attempt + 1))
-            sleep 5
-          done
+          CLI_VERSION: ${{ inputs.cli_version }}
+          BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+        run: >-
+          gh workflow run posthog-benchmark.yml
+          --repo "$GITHUB_REPOSITORY"
+          --ref "${{ github.ref_name }}"
+          -f cache_lane=fresh
+          -f "cli_version=${CLI_VERSION}"
+          -f "prewarm_buildkit_image=${BUILDKIT_IMAGE}"
+          -f benchmark_id_suffix=-canary

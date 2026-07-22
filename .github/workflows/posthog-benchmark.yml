@@ -1,12 +1,20 @@
 name: "PostHog Benchmark"
 run-name: >-
-  ${{ format('Benchmark Rolling | {0} | {1}', github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || github.event_name == 'schedule' && 'Scheduled' || format('Manual dispatch ({0})', github.ref_name), inputs.runner_label || 'platform defaults') }}
+  ${{ format('Benchmark {0} | {1} | {2}', github.event_name == 'pull_request' && 'Validation' || github.event_name == 'workflow_dispatch' && inputs.cli_version != '' && 'Canary' || (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling')) && 'Rolling' || 'Fresh', github.event_name == 'push' && 'Upstream update' || github.event_name == 'schedule' && 'Weekly' || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name), inputs.runner_label || 'platform defaults') }}
 
 on:
   workflow_dispatch:
     inputs:
+      cache_lane:
+        description: "Benchmark lane"
+        required: false
+        type: choice
+        default: fresh
+        options:
+          - fresh
+          - rolling
       prewarm_buildkit_image:
-        description: "Optional managed BuildKit image override. Defaults to the stable managed channel."
+        description: "Optional amd64 or multi-platform experimental BuildKit image. When set, the rolling matrix includes BC BuildKit backend lanes."
         required: false
         type: string
         default: ""
@@ -75,6 +83,12 @@ on:
           - all
           - amd64
           - arm64
+  push:
+    branches:
+      - main
+    paths:
+      - ".gitmodules"
+      - "upstream"
   schedule:
     - cron: "0 3 * * 3"
   pull_request:
@@ -100,6 +114,7 @@ permissions:
 jobs:
   docker-benchmark:
     name: ${{ format('{0} {1}', matrix.lane.label, matrix.platform.label) }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'rolling') }}
     # Apply a manual runner override only to the matrix entries that will run.
     # Disabled entries should use their cheap defaults and exit immediately.
     runs-on: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) && (inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && inputs.runner_label || matrix.platform.runner_label }}
@@ -256,3 +271,81 @@ jobs:
           cli_platform: ${{ matrix.platform.cli_platform }}
           benchmark_workspace: ${{ github.repository }}
           docker_tool_cache: ${{ matrix.lane.docker_tool_cache }}
+
+  fresh-github-actions-cache:
+    name: GHA amd64
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'fresh') }}
+    uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
+    with:
+      strategy: actions-cache
+      cache_lane: fresh
+      benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+      runner_label: ${{ inputs.runner_label || 'ubuntu-latest' }}
+      project_repo: PostHog/posthog
+      dockerfile_path: upstream/Dockerfile
+      docker_context: upstream
+      image_tag: posthog-benchmark:latest
+      docker_platform: linux/amd64
+      cli_platform: linux-amd64
+      benchmark_workspace: ${{ github.repository }}
+      free_disk_space: true
+    secrets: inherit
+
+  fresh-boringcache-oci:
+    name: BC OCI amd64
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'fresh') }}
+    uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
+    with:
+      strategy: boringcache
+      cache_lane: fresh
+      buildkit_backend: registry
+      benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+      runner_label: ${{ inputs.runner_label || 'ubuntu-latest' }}
+      project_repo: PostHog/posthog
+      dockerfile_path: upstream/Dockerfile
+      docker_context: upstream
+      image_tag: posthog-benchmark:latest
+      docker_platform: linux/amd64
+      cli_platform: linux-amd64
+      cli_version: ${{ inputs.cli_version || vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION }}
+      benchmark_workspace: ${{ github.repository }}
+      free_disk_space: true
+    secrets: inherit
+
+  fresh-boringcache-buildkit-backend:
+    name: BC BuildKit Backend ${{ matrix.label }}
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.cache_lane == 'fresh') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: amd64
+            runner_label: ubuntu-latest
+            cli_platform: linux-amd64
+            docker_platform: linux/amd64
+            benchmark_id_prefix: ""
+          - label: arm64
+            runner_label: ubuntu-24.04-arm
+            cli_platform: linux-arm64
+            docker_platform: linux/arm64
+            benchmark_id_prefix: arm-
+    uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
+    with:
+      strategy: boringcache
+      cache_lane: fresh
+      buildkit_backend: registry
+      buildkit_cache_backend: boringcache
+      oci_hydration: metadata-only
+      benchmark_id: ${{ format('{0}posthog-bc-buildkit{1}', matrix.benchmark_id_prefix, inputs.benchmark_id_suffix) }}
+      runner_label: ${{ inputs.runner_label || matrix.runner_label }}
+      project_repo: PostHog/posthog
+      dockerfile_path: upstream/Dockerfile
+      docker_context: upstream
+      image_tag: posthog-benchmark:latest
+      docker_platform: ${{ matrix.docker_platform }}
+      cli_platform: ${{ matrix.cli_platform }}
+      cli_version: ${{ inputs.cli_version || vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION }}
+      buildkit_image: ${{ matrix.cli_platform == 'linux-arm64' && (inputs.prewarm_buildkit_image_arm64 || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE_ARM64 || inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc') || (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc') }}
+      benchmark_workspace: ${{ github.repository }}
+      free_disk_space: true
+    secrets: inherit

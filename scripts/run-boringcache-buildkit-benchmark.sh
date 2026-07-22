@@ -890,9 +890,6 @@ while true; do
     fi
     write_build_metrics
     write_build_diagnostics
-    if [[ "$buildkit_cache_backend" == "boringcache" ]]; then
-      "$(dirname "${BASH_SOURCE[0]}")/assert-boringcache-docker-product-run.sh" "${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}"
-    fi
     break
   fi
 

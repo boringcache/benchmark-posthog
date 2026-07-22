@@ -588,7 +588,7 @@ jobs:
           if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
             metrics_file="${RUNNER_TEMP}/warm-build-metrics.env"
             rm -f "$metrics_file"
-            if [[ "$BUILDKIT_BACKEND" == "registry" ]] && { [[ "${BORINGCACHE_CACHE_IMPORT_READY:-}" != "true" ]] || [[ -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ]]; }; then
+            if [[ "$BUILDKIT_BACKEND" == "registry" && "$BORINGCACHE_BUILDKIT_CACHE_BACKEND" != "boringcache" ]] && { [[ "${BORINGCACHE_CACHE_IMPORT_READY:-}" != "true" ]] || [[ -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ]]; }; then
               echo "BoringCache Docker warm import was not ready; refusing invalid warm sample." >&2
               echo "import ready: ${BORINGCACHE_CACHE_IMPORT_READY:-}" >&2
               echo "requested refs: ${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}" >&2

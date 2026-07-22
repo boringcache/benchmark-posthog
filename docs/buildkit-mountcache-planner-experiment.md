@@ -42,7 +42,10 @@ That upstream commit is `feat: make the chatbox stay fixed (#68712)` and changed
 It did not change `uv.lock`, `pyproject.toml`, `pnpm-lock.yaml`, `package.json`, or `Dockerfile`.
 So this specific spike should not be explained as Python lockfile invalidation.
 
-## BC BuildKit vs ECR In That Run
+## Historical comparison from that run
+
+This section records a retired ECR experiment. ECR is no longer a product or
+benchmark lane; current runs use the single managed BoringCache path.
 
 Both lanes reported 27 cached BuildKit steps.
 

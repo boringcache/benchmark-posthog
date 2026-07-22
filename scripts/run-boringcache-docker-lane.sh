@@ -4,7 +4,6 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 mode="${1:-full}"
-backend="${BUILDKIT_BACKEND:-registry}"
 phase_start="${BENCHMARK_PHASE_STARTED_AT:-$(date +%s)}"
 metrics_file="${BENCHMARK_METRICS_OUTPUT:-${RUNNER_TEMP:-/tmp}/rolling-build-metrics.env}"
 diagnostics_file="${BENCHMARK_DIAGNOSTICS_OUTPUT:-benchmark-diagnostics/${BENCHMARK_ID:-posthog}-boringcache-rolling-commit.txt}"
@@ -33,7 +32,7 @@ append_outputs_file() {
   fi
 }
 
-if [[ "$backend" != "state" && ( "${BORINGCACHE_CACHE_IMPORT_READY:-}" != "true" || ( -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ) ) ]]; then
+if [[ "${BORINGCACHE_CACHE_IMPORT_READY:-}" != "true" || ( -z "${CACHE_FROM:-}" && -z "${BORINGCACHE_CACHE_USED_FROM_REFS:-}" ) ]]; then
   echo "Rolling BoringCache Docker import was not ready; continuing as a bootstrap/update sample." >&2
   echo "import ready: ${BORINGCACHE_CACHE_IMPORT_READY:-}" >&2
   echo "requested refs: ${BORINGCACHE_CACHE_REQUESTED_FROM_REFS:-}" >&2

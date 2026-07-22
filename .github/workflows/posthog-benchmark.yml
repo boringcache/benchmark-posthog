@@ -4,13 +4,13 @@ run-name: >-
 on:
   workflow_dispatch:
     inputs:
-      prewarm_buildkit_image:
-        description: "Optional amd64 or multi-platform experimental BuildKit image. When set, the rolling matrix includes BC BuildKit backend lanes."
+      buildkit_image:
+        description: "Optional amd64 or multi-platform managed BuildKit image."
         required: false
         type: string
         default: ""
-      prewarm_buildkit_image_arm64:
-        description: "Optional arm64 BuildKit image override when the primary image is an amd64-only digest."
+      buildkit_image_arm64:
+        description: "Optional arm64 managed BuildKit image override."
         required: false
         type: string
         default: ""
@@ -54,7 +54,7 @@ on:
         default: all
         options:
           - all
-          - buildkit
+          - boringcache
       runner_label:
         description: "Optional native runner label override. It must match the selected platform; empty uses the benchmark defaults."
         required: false
@@ -80,8 +80,6 @@ on:
       - ".gitmodules"
       - ".github/actions/docker-rolling-benchmark/**"
       - ".github/workflows/posthog-benchmark.yml"
-      - ".github/workflows/posthog-fresh-benchmark.yml"
-      - ".github/workflows/reusable-docker-buildkit-benchmark.yml"
       - "README.md"
       - "scenarios/**"
       - "scripts/**"
@@ -117,34 +115,16 @@ jobs:
         lane:
           - label: GHA
             strategy: actions-cache
-            artifact_strategy: ""
-            benchmark_id: posthog
-            buildkit_backend: registry
-            buildkit_cache_backend: ""
-            dockerfile_path: upstream/Dockerfile
-            docker_tool_cache: ""
-            buildkit_mountcache_offloader: false
-            turbo_cache_mounts: false
-            lane_filter: default
-            run_on_pull_request: true
-          - label: BC OCI
-            strategy: boringcache
-            artifact_strategy: ""
-            buildkit_backend: registry
-            buildkit_cache_backend: ""
             benchmark_id: posthog
             dockerfile_path: upstream/Dockerfile
             docker_tool_cache: ""
             buildkit_mountcache_offloader: false
             turbo_cache_mounts: false
-            lane_filter: default
+            lane_filter: all
             run_on_pull_request: true
-          - label: BC BuildKit Backend
+          - label: BoringCache
             strategy: boringcache
-            artifact_strategy: ""
-            buildkit_backend: registry
-            buildkit_cache_backend: boringcache
-            benchmark_id: posthog-bc-buildkit
+            benchmark_id: posthog
             dockerfile_path: upstream/Dockerfile
             # PostHog's Turbo build inputs omit frontend/public, so remote hits
             # can restore stale static assets. Keep the graduated lane on the
@@ -152,8 +132,8 @@ jobs:
             docker_tool_cache: ""
             buildkit_mountcache_offloader: false
             turbo_cache_mounts: false
-            lane_filter: buildkit
-            run_on_pull_request: false
+            lane_filter: boringcache
+            run_on_pull_request: true
         include:
           - platform:
               label: arm64
@@ -163,18 +143,15 @@ jobs:
               benchmark_id_prefix: arm-
               setup_qemu: false
             lane:
-              label: BC BuildKit Backend
+              label: BoringCache
               strategy: boringcache
-              artifact_strategy: ""
-              buildkit_backend: registry
-              buildkit_cache_backend: boringcache
-              benchmark_id: posthog-bc-buildkit
+              benchmark_id: posthog
               dockerfile_path: upstream/Dockerfile
               # Keep ARM behavior-identical to AMD; see the lane above.
               docker_tool_cache: ""
               buildkit_mountcache_offloader: false
               turbo_cache_mounts: false
-              lane_filter: buildkit
+              lane_filter: boringcache
               run_on_pull_request: false
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -183,7 +160,8 @@ jobs:
       BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
       BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
       BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
-      PREWARM_BUILDKIT_IMAGE: ${{ matrix.platform.cli_platform == 'linux-arm64' && (inputs.prewarm_buildkit_image_arm64 || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE_ARM64 || inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc') || (inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc') }}
+      BUILDKIT_IMAGE: ${{ matrix.platform.cli_platform == 'linux-arm64' && (inputs.buildkit_image_arm64 || vars.POSTHOG_BUILDKIT_IMAGE_ARM64 || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE_ARM64 || inputs.buildkit_image || vars.POSTHOG_BUILDKIT_IMAGE || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc') || (inputs.buildkit_image || vars.POSTHOG_BUILDKIT_IMAGE || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc') }}
+      BORINGCACHE_CLI_VERSION: ${{ vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION }}
     steps:
       - name: Skip disabled lane
         if: ${{ (github.event_name == 'pull_request' && !matrix.lane.run_on_pull_request) || (github.event_name == 'workflow_dispatch' && inputs.lane_filter != 'all' && inputs.lane_filter != matrix.lane.lane_filter) || (github.event_name == 'workflow_dispatch' && inputs.platform_filter != 'all' && inputs.platform_filter != matrix.platform.label) }}
@@ -231,14 +209,11 @@ jobs:
           BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ matrix.lane.buildkit_mountcache_offloader && '1' || '' }}
         with:
           strategy: ${{ matrix.lane.strategy }}
-          artifact_strategy: ${{ matrix.lane.artifact_strategy }}
-          buildkit_backend: ${{ matrix.lane.buildkit_backend }}
-          buildkit_cache_backend: ${{ matrix.lane.buildkit_cache_backend }}
           buildkit_mountcache_offloader: ${{ matrix.lane.buildkit_mountcache_offloader }}
           build_mode: ${{ inputs.build_mode || 'full' }}
           cache_scope_ref_slug: ${{ inputs.cache_scope_ref_slug }}
           turbo_cache_mounts: ${{ matrix.lane.turbo_cache_mounts && 'true' || 'false' }}
-          buildkit_image: ${{ matrix.lane.buildkit_cache_backend == 'boringcache' && env.PREWARM_BUILDKIT_IMAGE || 'mirror.gcr.io/moby/buildkit:buildx-stable-1' }}
+          buildkit_image: ${{ env.BUILDKIT_IMAGE }}
           benchmark_id: ${{ format('{0}{1}{2}', matrix.platform.benchmark_id_prefix, matrix.lane.benchmark_id, inputs.benchmark_id_suffix) }}
           docker_platform: ${{ matrix.platform.docker_platform }}
           docker_build_args: |-

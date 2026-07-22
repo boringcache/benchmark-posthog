@@ -5,8 +5,8 @@ run-name: >-
 on:
   workflow_dispatch:
     inputs:
-      prewarm_buildkit_image:
-        description: "Optional BuildKit image for the managed backend lane."
+      buildkit_image:
+        description: "Optional managed BoringCache BuildKit image for canary runs."
         required: false
         type: string
         default: ""
@@ -56,13 +56,12 @@ jobs:
       free_disk_space: true
     secrets: inherit
 
-  boringcache-oci:
-    name: BC OCI amd64
+  boringcache:
+    name: BoringCache amd64
     uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
     with:
       strategy: boringcache
       cache_lane: fresh
-      buildkit_backend: registry
       benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
       runner_label: ${{ inputs.runner_label || 'ubuntu-latest' }}
       project_repo: PostHog/posthog
@@ -72,29 +71,7 @@ jobs:
       docker_platform: linux/amd64
       cli_platform: linux-amd64
       cli_version: ${{ inputs.cli_version }}
-      benchmark_workspace: ${{ github.repository }}
-      free_disk_space: true
-    secrets: inherit
-
-  boringcache-buildkit-backend:
-    name: BC BuildKit Backend amd64
-    uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
-    with:
-      strategy: boringcache
-      cache_lane: fresh
-      buildkit_backend: registry
-      buildkit_cache_backend: boringcache
-      oci_hydration: metadata-only
-      benchmark_id: ${{ format('posthog-bc-buildkit{0}', inputs.benchmark_id_suffix) }}
-      runner_label: ${{ inputs.runner_label || 'ubuntu-latest' }}
-      project_repo: PostHog/posthog
-      dockerfile_path: upstream/Dockerfile
-      docker_context: upstream
-      image_tag: posthog-benchmark:latest
-      docker_platform: linux/amd64
-      cli_platform: linux-amd64
-      cli_version: ${{ inputs.cli_version }}
-      buildkit_image: ${{ inputs.prewarm_buildkit_image || vars.POSTHOG_PREWARM_BUILDKIT_IMAGE || 'ghcr.io/boringcache/buildkit:v0.30.0-bc' }}
+      buildkit_image: ${{ inputs.buildkit_image || 'ghcr.io/boringcache/buildkit:v0.30.0-bc' }}
       benchmark_workspace: ${{ github.repository }}
       free_disk_space: true
     secrets: inherit

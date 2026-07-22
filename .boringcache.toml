@@ -1,8 +1,7 @@
 workspace = "boringcache/benchmark-posthog"
 
-# Docker BuildKit registry cache benchmark. The proxy is the only cache
-# surface (boringcache/one mode=docker exporting --cache-from / --cache-to
-# against the BoringCache OCI registry endpoint). The PostHog BuildKit lane can
+# Managed BoringCache BuildKit benchmark. The managed backend is the only
+# Docker cache surface. The PostHog BuildKit lane can
 # also pass Turbo through the explicit docker_tool_cache input. Managed
 # mountcache experiments stay opt-in and are not declared here.
 #

@@ -24,7 +24,7 @@
 #   - Default mode == 71-line variant (the dedupe is universally correct
 #     and was the most common fork). The 55-line callers gain dedupe.
 #     Storage totals can only decrease or stay equal — never inflate.
-#   - Set BORINGCACHE_EXACT_TAGS=<csv> to check exact cache tags with
+#   - Set BORINGCACHE_EXACT_TAGS=<csv> to check proxy/native tags with
 #     `--no-platform --exact` while checking archive tags with default
 #     restore-style resolution.
 #   - Set BORINGCACHE_CHECK_STRICT=1 to enable `--no-platform --exact`
@@ -94,6 +94,9 @@ component_type_for() {
   local combined="${tag} ${primary_tag}"
 
   case "$storage_mode" in
+    kv)
+      echo "remote_kv"
+      ;;
     cas)
       echo "remote_cas"
       ;;
@@ -115,6 +118,9 @@ component_label_for() {
   local tag="$2"
 
   case "$component_type" in
+    remote_kv)
+      echo "native tool cache"
+      ;;
     remote_cas)
       echo "remote CAS"
       ;;
@@ -144,7 +150,7 @@ write_storage_breakdown() {
   while IFS= read -r row; do
     [[ -n "$row" ]] || continue
 
-    local key tag requested_tag inspect_target inspect_json
+    local key tag requested_tag cache_type inspect_target inspect_json
     key="$(jq -r '.cache_entry_id // .cacheEntryId // .manifest_root_digest // .manifestRootDigest // .requested_tag // .requestedTag // .tag // "unknown"' <<<"$row")"
     if [[ -n "${seen_breakdown_entries[$key]+x}" ]]; then
       continue
@@ -154,24 +160,39 @@ write_storage_breakdown() {
     tag="$(jq -r '.tag // .requested_tag // .requestedTag // empty' <<<"$row")"
     requested_tag="$(jq -r '.requested_tag // .requestedTag // .tag // empty' <<<"$row")"
     [[ -n "$tag" ]] || continue
-    inspect_target="$(jq -r '.cache_entry_id // .cacheEntryId // empty' <<<"$row")"
-    inspect_target="${inspect_target:-$tag}"
-
-    inspect_json="$(boringcache inspect "$workspace" "$inspect_target" --json 2> "$breakdown_stderr" || true)"
-    if [[ -z "$inspect_json" ]]; then
-      echo "boringcache inspect failed while writing storage breakdown for tag: ${tag}" >&2
-      cat "$breakdown_stderr" >&2
-      rm -f "$components_file" "$breakdown_stderr"
-      exit 1
-    fi
-
     local entry_id primary_tag storage_mode stored_size archive_size blob_total_size component_type component_label
-    entry_id="$(jq -r '.entry.id // empty' <<<"$inspect_json")"
-    primary_tag="$(jq -r '.entry.primary_tag // empty' <<<"$inspect_json")"
-    storage_mode="$(jq -r '.entry.storage_mode // "unknown"' <<<"$inspect_json")"
-    stored_size="$(jq -r '.entry.stored_size_bytes // .entry.compressed_size // .entry.blob_total_size_bytes // 0' <<<"$inspect_json")"
-    archive_size="$(jq -r '.entry.archive_size // .entry.compressed_size // 0' <<<"$inspect_json")"
-    blob_total_size="$(jq -r '.entry.blob_total_size_bytes // 0' <<<"$inspect_json")"
+    cache_type="$(jq -r '.cache_type // .cacheType // empty' <<<"$row")"
+    if [[ "$cache_type" == "kv" ]]; then
+      entry_id=""
+      primary_tag=""
+      storage_mode="kv"
+      stored_size="$(jq -r '.kv_total_size // .kvTotalSize // .compressed_size // .compressedSize // .size // 0' <<<"$row")"
+      archive_size=0
+      blob_total_size=0
+    else
+      inspect_target="$(jq -r '.cache_entry_id // .cacheEntryId // empty' <<<"$row")"
+      inspect_target="${inspect_target:-$tag}"
+      : > "$breakdown_stderr"
+      inspect_json="$(boringcache inspect "$workspace" "$inspect_target" --json 2> "$breakdown_stderr" || true)"
+
+      if [[ -n "$inspect_json" ]]; then
+        entry_id="$(jq -r '.entry.id // empty' <<<"$inspect_json")"
+        primary_tag="$(jq -r '.entry.primary_tag // empty' <<<"$inspect_json")"
+        storage_mode="$(jq -r '.entry.storage_mode // "unknown"' <<<"$inspect_json")"
+        stored_size="$(jq -r '.entry.stored_size_bytes // .entry.compressed_size // .entry.blob_total_size_bytes // 0' <<<"$inspect_json")"
+        archive_size="$(jq -r '.entry.archive_size // .entry.compressed_size // 0' <<<"$inspect_json")"
+        blob_total_size="$(jq -r '.entry.blob_total_size_bytes // 0' <<<"$inspect_json")"
+      else
+        echo "warning: boringcache inspect could not enrich storage breakdown for tag: ${tag}; using check metadata" >&2
+        cat "$breakdown_stderr" >&2
+        entry_id="$(jq -r '.cache_entry_id // .cacheEntryId // empty' <<<"$row")"
+        primary_tag=""
+        storage_mode="unknown"
+        stored_size="$(jq -r '.compressed_size // .compressedSize // .size_bytes // .sizeBytes // .size // 0' <<<"$row")"
+        archive_size=0
+        blob_total_size=0
+      fi
+    fi
     stored_size="$(to_num "$stored_size")"
     archive_size="$(to_num "$archive_size")"
     blob_total_size="$(to_num "$blob_total_size")"
@@ -213,6 +234,7 @@ write_storage_breakdown() {
       tags: ($tags_csv | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))),
       total_bytes: (map(.bytes) | add // 0),
       summary: {
+        remote_kv_bytes: sum_type("remote_kv"),
         remote_cas_bytes: sum_type("remote_cas"),
         dependency_archive_bytes: sum_type("dependency_archive"),
         tool_runtime_archive_bytes: sum_type("tool_runtime_archive"),

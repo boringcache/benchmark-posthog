@@ -112,7 +112,56 @@ output_dir="benchmark-results"
 docker_cache_import_seconds=""
 docker_cache_export_seconds=""
 buildkit_cached_steps="${BENCHMARK_BUILDKIT_CACHED_STEPS:-}"
+cli_image="${BENCHMARK_CLI_IMAGE:-}"
 buildkit_image="${BENCHMARK_BUILDKIT_IMAGE:-${BUILDKIT_IMAGE:-}}"
+buildkit_cache_prewarm_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_SECONDS:-}"
+buildkit_cache_prepare_seconds="${BENCHMARK_BUILDKIT_CACHE_PREPARE_SECONDS:-}"
+buildkit_cache_send_seconds="${BENCHMARK_BUILDKIT_CACHE_SEND_SECONDS:-}"
+buildkit_cache_prewarm_queued="${BENCHMARK_BUILDKIT_CACHE_PREWARM_QUEUED:-}"
+buildkit_cache_prewarm_dropped="${BENCHMARK_BUILDKIT_CACHE_PREWARM_DROPPED:-}"
+buildkit_cache_prewarm_canceled="${BENCHMARK_BUILDKIT_CACHE_PREWARM_CANCELED:-}"
+buildkit_cache_prewarm_retried="${BENCHMARK_BUILDKIT_CACHE_PREWARM_RETRIED:-}"
+buildkit_cache_prewarm_deferred="${BENCHMARK_BUILDKIT_CACHE_PREWARM_DEFERRED:-}"
+buildkit_cache_prewarm_prepared="${BENCHMARK_BUILDKIT_CACHE_PREWARM_PREPARED:-}"
+buildkit_cache_prewarm_body_prepared="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_PREPARED:-}"
+buildkit_cache_prewarm_committed_bodies="${BENCHMARK_BUILDKIT_CACHE_PREWARM_COMMITTED_BODIES:-}"
+buildkit_cache_prewarm_delegated_bodies="${BENCHMARK_BUILDKIT_CACHE_PREWARM_DELEGATED_BODIES:-}"
+buildkit_cache_prewarm_owned_bodies="${BENCHMARK_BUILDKIT_CACHE_PREWARM_OWNED_BODIES:-}"
+buildkit_cache_prewarm_owned_body_bytes="${BENCHMARK_BUILDKIT_CACHE_PREWARM_OWNED_BODY_BYTES:-}"
+buildkit_cache_prewarm_owned_body_max="${BENCHMARK_BUILDKIT_CACHE_PREWARM_OWNED_BODY_MAX:-}"
+buildkit_cache_prewarm_resolved="${BENCHMARK_BUILDKIT_CACHE_PREWARM_RESOLVED:-}"
+buildkit_cache_prewarm_reused="${BENCHMARK_BUILDKIT_CACHE_PREWARM_REUSED:-}"
+buildkit_cache_prewarm_uploaded="${BENCHMARK_BUILDKIT_CACHE_PREWARM_UPLOADED:-}"
+buildkit_cache_prewarm_failed="${BENCHMARK_BUILDKIT_CACHE_PREWARM_FAILED:-}"
+buildkit_cache_prewarm_recursive="${BENCHMARK_BUILDKIT_CACHE_PREWARM_RECURSIVE:-}"
+buildkit_cache_prewarm_direct="${BENCHMARK_BUILDKIT_CACHE_PREWARM_DIRECT:-}"
+buildkit_cache_prewarm_missed="${BENCHMARK_BUILDKIT_CACHE_PREWARM_MISSED:-}"
+buildkit_cache_prewarm_body_time_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_TIME_SECONDS:-}"
+buildkit_cache_prewarm_body_max_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_MAX_SECONDS:-}"
+buildkit_cache_prewarm_resolve_time_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_RESOLVE_TIME_SECONDS:-}"
+buildkit_cache_prewarm_resolve_max_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_RESOLVE_MAX_SECONDS:-}"
+buildkit_cache_prewarm_upload_time_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_UPLOAD_TIME_SECONDS:-}"
+buildkit_cache_prewarm_upload_max_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_UPLOAD_MAX_SECONDS:-}"
+buildkit_cache_prewarm_queue_depth="${BENCHMARK_BUILDKIT_CACHE_PREWARM_QUEUE_DEPTH:-}"
+buildkit_cache_prewarm_max_queue_depth="${BENCHMARK_BUILDKIT_CACHE_PREWARM_MAX_QUEUE_DEPTH:-}"
+buildkit_cache_prewarm_body_slot_limit="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_SLOT_LIMIT:-}"
+buildkit_cache_prewarm_body_slot_max="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_SLOT_MAX:-}"
+buildkit_cache_prewarm_body_active="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_ACTIVE:-}"
+buildkit_cache_prewarm_body_active_max="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_ACTIVE_MAX:-}"
+buildkit_cache_prewarm_body_scaleups="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_SCALEUPS:-}"
+buildkit_cache_prewarm_body_downshifts="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_DOWNSHIFTS:-}"
+buildkit_cache_prewarm_body_backlog_reliefs="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_BACKLOG_RELIEFS:-}"
+buildkit_cache_prewarm_cpu_pressure_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_CPU_PRESSURE_SECONDS:-}"
+buildkit_cache_prewarm_io_pressure_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_IO_PRESSURE_SECONDS:-}"
+buildkit_cache_prewarm_body_phase="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_PHASE:-}"
+buildkit_cache_prewarm_image_output_overlap_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_IMAGE_OUTPUT_OVERLAP_SECONDS:-}"
+buildkit_cache_prewarm_cache_only_transitions="${BENCHMARK_BUILDKIT_CACHE_PREWARM_CACHE_ONLY_TRANSITIONS:-}"
+buildkit_cache_prewarm_slot_limit_min="${BENCHMARK_BUILDKIT_CACHE_PREWARM_SLOT_LIMIT_MIN:-}"
+buildkit_cache_prewarm_slot_limit_max="${BENCHMARK_BUILDKIT_CACHE_PREWARM_SLOT_LIMIT_MAX:-}"
+buildkit_cache_prewarm_body_wait_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_WAIT_SECONDS:-}"
+buildkit_cache_prewarm_body_wait_max_seconds="${BENCHMARK_BUILDKIT_CACHE_PREWARM_BODY_WAIT_MAX_SECONDS:-}"
+buildkit_cache_prewarm_workers_current="${BENCHMARK_BUILDKIT_CACHE_PREWARM_WORKERS_CURRENT:-}"
+buildkit_cache_prewarm_workers_max="${BENCHMARK_BUILDKIT_CACHE_PREWARM_WORKERS_MAX:-}"
 oci_hydration_policy=""
 oci_body_local_hits=""
 oci_body_remote_fetches=""
@@ -353,8 +402,204 @@ while [[ $# -gt 0 ]]; do
       buildkit_cached_steps="$2"
       shift 2
       ;;
+    --cli-image)
+      cli_image="$2"
+      shift 2
+      ;;
     --buildkit-image)
       buildkit_image="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-seconds)
+      buildkit_cache_prewarm_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prepare-seconds)
+      buildkit_cache_prepare_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-send-seconds)
+      buildkit_cache_send_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-queued)
+      buildkit_cache_prewarm_queued="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-dropped)
+      buildkit_cache_prewarm_dropped="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-canceled)
+      buildkit_cache_prewarm_canceled="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-retried)
+      buildkit_cache_prewarm_retried="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-deferred)
+      buildkit_cache_prewarm_deferred="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-prepared)
+      buildkit_cache_prewarm_prepared="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-prepared)
+      buildkit_cache_prewarm_body_prepared="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-committed-bodies)
+      buildkit_cache_prewarm_committed_bodies="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-delegated-bodies)
+      buildkit_cache_prewarm_delegated_bodies="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-owned-bodies)
+      buildkit_cache_prewarm_owned_bodies="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-owned-body-bytes)
+      buildkit_cache_prewarm_owned_body_bytes="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-owned-body-max)
+      buildkit_cache_prewarm_owned_body_max="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-resolved)
+      buildkit_cache_prewarm_resolved="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-reused)
+      buildkit_cache_prewarm_reused="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-uploaded)
+      buildkit_cache_prewarm_uploaded="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-failed)
+      buildkit_cache_prewarm_failed="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-recursive)
+      buildkit_cache_prewarm_recursive="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-direct)
+      buildkit_cache_prewarm_direct="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-missed)
+      buildkit_cache_prewarm_missed="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-time-seconds)
+      buildkit_cache_prewarm_body_time_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-max-seconds)
+      buildkit_cache_prewarm_body_max_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-resolve-time-seconds)
+      buildkit_cache_prewarm_resolve_time_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-resolve-max-seconds)
+      buildkit_cache_prewarm_resolve_max_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-upload-time-seconds)
+      buildkit_cache_prewarm_upload_time_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-upload-max-seconds)
+      buildkit_cache_prewarm_upload_max_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-queue-depth)
+      buildkit_cache_prewarm_queue_depth="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-max-queue-depth)
+      buildkit_cache_prewarm_max_queue_depth="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-slot-limit)
+      buildkit_cache_prewarm_body_slot_limit="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-slot-max)
+      buildkit_cache_prewarm_body_slot_max="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-active)
+      buildkit_cache_prewarm_body_active="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-active-max)
+      buildkit_cache_prewarm_body_active_max="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-scaleups)
+      buildkit_cache_prewarm_body_scaleups="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-downshifts)
+      buildkit_cache_prewarm_body_downshifts="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-backlog-reliefs)
+      buildkit_cache_prewarm_body_backlog_reliefs="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-cpu-pressure-seconds)
+      buildkit_cache_prewarm_cpu_pressure_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-io-pressure-seconds)
+      buildkit_cache_prewarm_io_pressure_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-phase)
+      buildkit_cache_prewarm_body_phase="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-image-output-overlap-seconds)
+      buildkit_cache_prewarm_image_output_overlap_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-cache-only-transitions)
+      buildkit_cache_prewarm_cache_only_transitions="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-slot-limit-min)
+      buildkit_cache_prewarm_slot_limit_min="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-slot-limit-max)
+      buildkit_cache_prewarm_slot_limit_max="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-wait-seconds)
+      buildkit_cache_prewarm_body_wait_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-body-wait-max-seconds)
+      buildkit_cache_prewarm_body_wait_max_seconds="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-workers-current)
+      buildkit_cache_prewarm_workers_current="$2"
+      shift 2
+      ;;
+    --buildkit-cache-prewarm-workers-max)
+      buildkit_cache_prewarm_workers_max="$2"
       shift 2
       ;;
     --http-transport)
@@ -1253,7 +1498,65 @@ fi
 if [[ -n "$docker_cache_export_seconds" ]] && ! [[ "$docker_cache_export_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   docker_cache_export_seconds=""
 fi
+if [[ -n "$buildkit_cache_prewarm_seconds" ]] && ! [[ "$buildkit_cache_prewarm_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  buildkit_cache_prewarm_seconds=""
+fi
+if [[ -n "$buildkit_cache_prepare_seconds" ]] && ! [[ "$buildkit_cache_prepare_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  buildkit_cache_prepare_seconds=""
+fi
+if [[ -n "$buildkit_cache_send_seconds" ]] && ! [[ "$buildkit_cache_send_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  buildkit_cache_send_seconds=""
+fi
 buildkit_cached_steps="$(sanitize_uint "$buildkit_cached_steps")"
+buildkit_cache_prewarm_queued="$(sanitize_uint "$buildkit_cache_prewarm_queued")"
+buildkit_cache_prewarm_dropped="$(sanitize_uint "$buildkit_cache_prewarm_dropped")"
+buildkit_cache_prewarm_canceled="$(sanitize_uint "$buildkit_cache_prewarm_canceled")"
+buildkit_cache_prewarm_retried="$(sanitize_uint "$buildkit_cache_prewarm_retried")"
+buildkit_cache_prewarm_deferred="$(sanitize_uint "$buildkit_cache_prewarm_deferred")"
+buildkit_cache_prewarm_prepared="$(sanitize_uint "$buildkit_cache_prewarm_prepared")"
+buildkit_cache_prewarm_body_prepared="$(sanitize_uint "$buildkit_cache_prewarm_body_prepared")"
+buildkit_cache_prewarm_committed_bodies="$(sanitize_uint "$buildkit_cache_prewarm_committed_bodies")"
+buildkit_cache_prewarm_delegated_bodies="$(sanitize_uint "$buildkit_cache_prewarm_delegated_bodies")"
+buildkit_cache_prewarm_owned_bodies="$(sanitize_uint "$buildkit_cache_prewarm_owned_bodies")"
+buildkit_cache_prewarm_owned_body_bytes="$(sanitize_uint "$buildkit_cache_prewarm_owned_body_bytes")"
+buildkit_cache_prewarm_owned_body_max="$(sanitize_uint "$buildkit_cache_prewarm_owned_body_max")"
+buildkit_cache_prewarm_resolved="$(sanitize_uint "$buildkit_cache_prewarm_resolved")"
+buildkit_cache_prewarm_reused="$(sanitize_uint "$buildkit_cache_prewarm_reused")"
+buildkit_cache_prewarm_uploaded="$(sanitize_uint "$buildkit_cache_prewarm_uploaded")"
+buildkit_cache_prewarm_failed="$(sanitize_uint "$buildkit_cache_prewarm_failed")"
+buildkit_cache_prewarm_recursive="$(sanitize_uint "$buildkit_cache_prewarm_recursive")"
+buildkit_cache_prewarm_direct="$(sanitize_uint "$buildkit_cache_prewarm_direct")"
+buildkit_cache_prewarm_missed="$(sanitize_uint "$buildkit_cache_prewarm_missed")"
+buildkit_cache_prewarm_body_time_seconds="$(sanitize_number "$buildkit_cache_prewarm_body_time_seconds")"
+buildkit_cache_prewarm_body_max_seconds="$(sanitize_number "$buildkit_cache_prewarm_body_max_seconds")"
+buildkit_cache_prewarm_resolve_time_seconds="$(sanitize_number "$buildkit_cache_prewarm_resolve_time_seconds")"
+buildkit_cache_prewarm_resolve_max_seconds="$(sanitize_number "$buildkit_cache_prewarm_resolve_max_seconds")"
+buildkit_cache_prewarm_upload_time_seconds="$(sanitize_number "$buildkit_cache_prewarm_upload_time_seconds")"
+buildkit_cache_prewarm_upload_max_seconds="$(sanitize_number "$buildkit_cache_prewarm_upload_max_seconds")"
+buildkit_cache_prewarm_queue_depth="$(sanitize_uint "$buildkit_cache_prewarm_queue_depth")"
+buildkit_cache_prewarm_max_queue_depth="$(sanitize_uint "$buildkit_cache_prewarm_max_queue_depth")"
+buildkit_cache_prewarm_body_slot_limit="$(sanitize_uint "$buildkit_cache_prewarm_body_slot_limit")"
+buildkit_cache_prewarm_body_slot_max="$(sanitize_uint "$buildkit_cache_prewarm_body_slot_max")"
+buildkit_cache_prewarm_body_active="$(sanitize_uint "$buildkit_cache_prewarm_body_active")"
+buildkit_cache_prewarm_body_active_max="$(sanitize_uint "$buildkit_cache_prewarm_body_active_max")"
+buildkit_cache_prewarm_body_scaleups="$(sanitize_uint "$buildkit_cache_prewarm_body_scaleups")"
+buildkit_cache_prewarm_body_downshifts="$(sanitize_uint "$buildkit_cache_prewarm_body_downshifts")"
+buildkit_cache_prewarm_body_backlog_reliefs="$(sanitize_uint "$buildkit_cache_prewarm_body_backlog_reliefs")"
+buildkit_cache_prewarm_cpu_pressure_seconds="$(sanitize_number "$buildkit_cache_prewarm_cpu_pressure_seconds")"
+buildkit_cache_prewarm_io_pressure_seconds="$(sanitize_number "$buildkit_cache_prewarm_io_pressure_seconds")"
+buildkit_cache_prewarm_body_phase="$(sanitize_token "$buildkit_cache_prewarm_body_phase")"
+case "$buildkit_cache_prewarm_body_phase" in
+  solve|image-output|cache-only) ;;
+  *) buildkit_cache_prewarm_body_phase="" ;;
+esac
+buildkit_cache_prewarm_image_output_overlap_seconds="$(sanitize_number "$buildkit_cache_prewarm_image_output_overlap_seconds")"
+buildkit_cache_prewarm_cache_only_transitions="$(sanitize_uint "$buildkit_cache_prewarm_cache_only_transitions")"
+buildkit_cache_prewarm_slot_limit_min="$(sanitize_uint "$buildkit_cache_prewarm_slot_limit_min")"
+buildkit_cache_prewarm_slot_limit_max="$(sanitize_uint "$buildkit_cache_prewarm_slot_limit_max")"
+buildkit_cache_prewarm_body_wait_seconds="$(sanitize_number "$buildkit_cache_prewarm_body_wait_seconds")"
+buildkit_cache_prewarm_body_wait_max_seconds="$(sanitize_number "$buildkit_cache_prewarm_body_wait_max_seconds")"
+buildkit_cache_prewarm_workers_current="$(sanitize_uint "$buildkit_cache_prewarm_workers_current")"
+buildkit_cache_prewarm_workers_max="$(sanitize_uint "$buildkit_cache_prewarm_workers_max")"
 cache_reuse_status=""
 effective_cache_import_status="$cache_import_status"
 if [[ "$strategy" == "boringcache" && ( "$mode" == "docker" || "$adapter" == "oci" ) ]]; then
@@ -1417,6 +1720,13 @@ slow_hypotheses_payload="$(jq -n -c \
   --argjson hit_rate "$(json_num_or_null "$slow_hit_rate")" \
   --argjson non_cacheable_calls "$(json_num_or_null "$slow_native_non_cacheable_calls")" \
   --argjson new_blob_bytes "$(json_num_or_null "$slow_new_blob_bytes")" \
+  --argjson prewarm_body_time "$(json_num_or_null "$buildkit_cache_prewarm_body_time_seconds")" \
+  --argjson prewarm_upload_time "$(json_num_or_null "$buildkit_cache_prewarm_upload_time_seconds")" \
+  --argjson prewarm_body_wait "$(json_num_or_null "$buildkit_cache_prewarm_body_wait_seconds")" \
+  --argjson prewarm_cpu_pressure "$(json_num_or_null "$buildkit_cache_prewarm_cpu_pressure_seconds")" \
+  --argjson prewarm_io_pressure "$(json_num_or_null "$buildkit_cache_prewarm_io_pressure_seconds")" \
+  --argjson prewarm_body_downshifts "$(json_num_or_null "$buildkit_cache_prewarm_body_downshifts")" \
+  --argjson prewarm_body_slot_min "$(json_num_or_null "$buildkit_cache_prewarm_slot_limit_min")" \
   --argjson issue_candidates "$issue_candidates_payload" \
   '
   def dominates($value; $build):
@@ -1460,6 +1770,58 @@ slow_hypotheses_payload="$(jq -n -c \
         "confidence": "high",
         "summary": "Cache save/export time is a likely slow-build contributor.",
         "evidence": {"cache_save_export_seconds": $cache_save_export, "build_seconds": $build}
+      }
+    else empty end,
+    if dominates($prewarm_upload_time; $build) then
+      {
+        "id": "buildkit_prewarm_upload_tail",
+        "confidence": "medium",
+        "summary": "BuildKit prewarm upload work consumed meaningful time during the measured build.",
+        "evidence": {"prewarm_upload_time_seconds": $prewarm_upload_time, "build_seconds": $build}
+      }
+    else empty end,
+    if dominates($prewarm_body_time; $build) then
+      {
+        "id": "buildkit_prewarm_body_tail",
+        "confidence": "medium",
+        "summary": "BuildKit prewarm body materialization consumed meaningful time during the measured build.",
+        "evidence": {"prewarm_body_time_seconds": $prewarm_body_time, "build_seconds": $build}
+      }
+    else empty end,
+    if ($prewarm_body_wait != null and $prewarm_body_wait >= 60) then
+      {
+        "id": "buildkit_body_backlog_wait",
+        "confidence": "medium",
+        "summary": "BuildKit body materialization waited behind the slot governor or queue.",
+        "evidence": {
+          "prewarm_body_wait_seconds": $prewarm_body_wait,
+          "body_downshifts": $prewarm_body_downshifts,
+          "slot_limit_min": $prewarm_body_slot_min
+        }
+      }
+    else empty end,
+    if ($prewarm_cpu_pressure != null and $prewarm_cpu_pressure >= 60) then
+      {
+        "id": "buildkit_cpu_pressure_observed",
+        "confidence": "low",
+        "summary": "The BuildKit backend observed sustained CPU pressure while prewarm work was active.",
+        "evidence": {
+          "cpu_pressure_seconds": $prewarm_cpu_pressure,
+          "body_downshifts": $prewarm_body_downshifts,
+          "slot_limit_min": $prewarm_body_slot_min
+        }
+      }
+    else empty end,
+    if ($prewarm_io_pressure != null and $prewarm_io_pressure >= 60) then
+      {
+        "id": "buildkit_io_pressure_observed",
+        "confidence": "medium",
+        "summary": "The BuildKit backend observed sustained I/O pressure while prewarm work was active.",
+        "evidence": {
+          "io_pressure_seconds": $prewarm_io_pressure,
+          "body_downshifts": $prewarm_body_downshifts,
+          "slot_limit_min": $prewarm_body_slot_min
+        }
       }
     else empty end,
     if dominates($post_cleanup; $build) then
@@ -1532,6 +1894,17 @@ slow_reason_payload="$(jq -n -c \
   --argjson miss_count "$(json_num_or_null "$slow_miss_count")" \
   --argjson hit_rate "$(json_num_or_null "$slow_hit_rate")" \
   --argjson new_blob_bytes "$(json_num_or_null "$slow_new_blob_bytes")" \
+  --argjson prewarm_body_time "$(json_num_or_null "$buildkit_cache_prewarm_body_time_seconds")" \
+  --argjson prewarm_upload_time "$(json_num_or_null "$buildkit_cache_prewarm_upload_time_seconds")" \
+  --argjson prewarm_body_wait "$(json_num_or_null "$buildkit_cache_prewarm_body_wait_seconds")" \
+  --argjson prewarm_cpu_pressure "$(json_num_or_null "$buildkit_cache_prewarm_cpu_pressure_seconds")" \
+  --argjson prewarm_io_pressure "$(json_num_or_null "$buildkit_cache_prewarm_io_pressure_seconds")" \
+  --arg prewarm_body_phase "$buildkit_cache_prewarm_body_phase" \
+  --argjson prewarm_image_output_overlap "$(json_num_or_null "$buildkit_cache_prewarm_image_output_overlap_seconds")" \
+  --argjson prewarm_cache_only_transitions "$(json_num_or_null "$buildkit_cache_prewarm_cache_only_transitions")" \
+  --argjson prewarm_body_downshifts "$(json_num_or_null "$buildkit_cache_prewarm_body_downshifts")" \
+  --argjson prewarm_slot_limit_min "$(json_num_or_null "$buildkit_cache_prewarm_slot_limit_min")" \
+  --argjson prewarm_slot_limit_max "$(json_num_or_null "$buildkit_cache_prewarm_slot_limit_max")" \
   --argjson native_tool "$native_tool_payload" \
   --argjson issue_candidates "$issue_candidates_payload" \
   --argjson hypotheses "$slow_hypotheses_payload" \
@@ -1553,6 +1926,19 @@ slow_reason_payload="$(jq -n -c \
     "hit_rate": $hit_rate,
     "prior_cache_state": $prior_cache_state,
     "new_blob_bytes": $new_blob_bytes,
+    "buildkit_prewarm": {
+      "body_time_seconds": $prewarm_body_time,
+      "upload_time_seconds": $prewarm_upload_time,
+      "body_wait_seconds": $prewarm_body_wait,
+      "cpu_pressure_seconds": $prewarm_cpu_pressure,
+      "io_pressure_seconds": $prewarm_io_pressure,
+      "body_phase": (if $prewarm_body_phase == "" then null else $prewarm_body_phase end),
+      "image_output_overlap_seconds": $prewarm_image_output_overlap,
+      "cache_only_transitions": $prewarm_cache_only_transitions,
+      "body_downshifts": $prewarm_body_downshifts,
+      "slot_limit_min": $prewarm_slot_limit_min,
+      "slot_limit_max": $prewarm_slot_limit_max
+    },
     "native_tool": $native_tool,
     "issue_candidates": $issue_candidates,
     "hypotheses": $hypotheses
@@ -1917,10 +2303,61 @@ cat > "$json_path" <<JSON
     "storage_breakdown": $storage_breakdown_payload
   },
   "docker_cache": {
+    "cli_image": $(json_string_or_null "$cli_image"),
     "buildkit_image": $(json_string_or_null "$buildkit_image"),
     "import_seconds": $(json_num_or_null "$docker_cache_import_seconds"),
     "export_seconds": $(json_num_or_null "$docker_cache_export_seconds"),
-    "cached_steps": $(json_num_or_null "$buildkit_cached_steps")
+    "cached_steps": $(json_num_or_null "$buildkit_cached_steps"),
+    "prewarm_seconds": $(json_num_or_null "$buildkit_cache_prewarm_seconds"),
+    "prepare_seconds": $(json_num_or_null "$buildkit_cache_prepare_seconds"),
+    "send_seconds": $(json_num_or_null "$buildkit_cache_send_seconds"),
+    "prewarm": {
+      "queued": $(json_num_or_null "$buildkit_cache_prewarm_queued"),
+      "dropped": $(json_num_or_null "$buildkit_cache_prewarm_dropped"),
+      "canceled": $(json_num_or_null "$buildkit_cache_prewarm_canceled"),
+      "retried": $(json_num_or_null "$buildkit_cache_prewarm_retried"),
+      "deferred": $(json_num_or_null "$buildkit_cache_prewarm_deferred"),
+      "prepared": $(json_num_or_null "$buildkit_cache_prewarm_prepared"),
+      "body_prepared": $(json_num_or_null "$buildkit_cache_prewarm_body_prepared"),
+      "committed_bodies": $(json_num_or_null "$buildkit_cache_prewarm_committed_bodies"),
+      "delegated_bodies": $(json_num_or_null "$buildkit_cache_prewarm_delegated_bodies"),
+      "owned_bodies": $(json_num_or_null "$buildkit_cache_prewarm_owned_bodies"),
+      "owned_body_bytes": $(json_num_or_null "$buildkit_cache_prewarm_owned_body_bytes"),
+      "owned_body_max": $(json_num_or_null "$buildkit_cache_prewarm_owned_body_max"),
+      "resolved": $(json_num_or_null "$buildkit_cache_prewarm_resolved"),
+      "reused": $(json_num_or_null "$buildkit_cache_prewarm_reused"),
+      "uploaded": $(json_num_or_null "$buildkit_cache_prewarm_uploaded"),
+      "failed": $(json_num_or_null "$buildkit_cache_prewarm_failed"),
+      "recursive": $(json_num_or_null "$buildkit_cache_prewarm_recursive"),
+      "direct": $(json_num_or_null "$buildkit_cache_prewarm_direct"),
+      "missed": $(json_num_or_null "$buildkit_cache_prewarm_missed"),
+      "body_time_seconds": $(json_num_or_null "$buildkit_cache_prewarm_body_time_seconds"),
+      "body_max_seconds": $(json_num_or_null "$buildkit_cache_prewarm_body_max_seconds"),
+      "resolve_time_seconds": $(json_num_or_null "$buildkit_cache_prewarm_resolve_time_seconds"),
+      "resolve_max_seconds": $(json_num_or_null "$buildkit_cache_prewarm_resolve_max_seconds"),
+      "upload_time_seconds": $(json_num_or_null "$buildkit_cache_prewarm_upload_time_seconds"),
+      "upload_max_seconds": $(json_num_or_null "$buildkit_cache_prewarm_upload_max_seconds"),
+      "queue_depth": $(json_num_or_null "$buildkit_cache_prewarm_queue_depth"),
+      "max_queue_depth": $(json_num_or_null "$buildkit_cache_prewarm_max_queue_depth"),
+      "body_slot_limit": $(json_num_or_null "$buildkit_cache_prewarm_body_slot_limit"),
+      "body_slot_max": $(json_num_or_null "$buildkit_cache_prewarm_body_slot_max"),
+      "body_active": $(json_num_or_null "$buildkit_cache_prewarm_body_active"),
+      "body_active_max": $(json_num_or_null "$buildkit_cache_prewarm_body_active_max"),
+      "body_scaleups": $(json_num_or_null "$buildkit_cache_prewarm_body_scaleups"),
+      "body_downshifts": $(json_num_or_null "$buildkit_cache_prewarm_body_downshifts"),
+      "body_backlog_reliefs": $(json_num_or_null "$buildkit_cache_prewarm_body_backlog_reliefs"),
+      "cpu_pressure_seconds": $(json_num_or_null "$buildkit_cache_prewarm_cpu_pressure_seconds"),
+      "io_pressure_seconds": $(json_num_or_null "$buildkit_cache_prewarm_io_pressure_seconds"),
+      "body_phase": $(json_string_or_null "$buildkit_cache_prewarm_body_phase"),
+      "image_output_overlap_seconds": $(json_num_or_null "$buildkit_cache_prewarm_image_output_overlap_seconds"),
+      "cache_only_transitions": $(json_num_or_null "$buildkit_cache_prewarm_cache_only_transitions"),
+      "slot_limit_min": $(json_num_or_null "$buildkit_cache_prewarm_slot_limit_min"),
+      "slot_limit_max": $(json_num_or_null "$buildkit_cache_prewarm_slot_limit_max"),
+      "body_wait_seconds": $(json_num_or_null "$buildkit_cache_prewarm_body_wait_seconds"),
+      "body_wait_max_seconds": $(json_num_or_null "$buildkit_cache_prewarm_body_wait_max_seconds"),
+      "workers_current": $(json_num_or_null "$buildkit_cache_prewarm_workers_current"),
+      "workers_max": $(json_num_or_null "$buildkit_cache_prewarm_workers_max")
+    }
   },
   "startup_prefetch": {
     "duration_ms": $(json_num_or_null "$startup_prefetch_duration_ms"),
@@ -2045,6 +2482,9 @@ JSON
   if [[ -n "$buildkit_cached_steps" ]]; then
     echo "| BuildKit cached steps | ${buildkit_cached_steps} |"
   fi
+  if [[ -n "$cli_image" ]]; then
+    echo "| CLI image | \`${cli_image}\` |"
+  fi
   if [[ -n "$buildkit_image" ]]; then
     echo "| BuildKit image | \`${buildkit_image}\` |"
   fi
@@ -2145,6 +2585,21 @@ JSON
   fi
   if [[ -n "$docker_cache_export_seconds" ]]; then
     echo "| Docker cache export | ${docker_cache_export_seconds}s |"
+  fi
+  if [[ -n "$buildkit_cache_prewarm_seconds" || -n "$buildkit_cache_prepare_seconds" || -n "$buildkit_cache_send_seconds" ]]; then
+    echo "| BuildKit cache export split | prewarm=${buildkit_cache_prewarm_seconds:-?}s; prepare=${buildkit_cache_prepare_seconds:-?}s; send=${buildkit_cache_send_seconds:-?}s |"
+  fi
+  if [[ -n "$buildkit_cache_prewarm_recursive" || -n "$buildkit_cache_prewarm_body_prepared" ]]; then
+    echo "| BuildKit prewarm shape | body_prepared=${buildkit_cache_prewarm_body_prepared:-?}; committed_bodies=${buildkit_cache_prewarm_committed_bodies:-?}; delegated_bodies=${buildkit_cache_prewarm_delegated_bodies:-?}; uploaded=${buildkit_cache_prewarm_uploaded:-?}; recursive=${buildkit_cache_prewarm_recursive:-?}; failed=${buildkit_cache_prewarm_failed:-?} |"
+  fi
+  if [[ -n "$buildkit_cache_prewarm_body_time_seconds" || -n "$buildkit_cache_prewarm_upload_time_seconds" || -n "$buildkit_cache_prewarm_body_wait_seconds" ]]; then
+    echo "| BuildKit prewarm work | body=${buildkit_cache_prewarm_body_time_seconds:-?}s; upload=${buildkit_cache_prewarm_upload_time_seconds:-?}s; body_wait=${buildkit_cache_prewarm_body_wait_seconds:-?}s; cpu_pressure=${buildkit_cache_prewarm_cpu_pressure_seconds:-?}s; io_pressure=${buildkit_cache_prewarm_io_pressure_seconds:-?}s |"
+  fi
+  if [[ -n "$buildkit_cache_prewarm_body_phase" || -n "$buildkit_cache_prewarm_image_output_overlap_seconds" ]]; then
+    echo "| BuildKit body phase | phase=${buildkit_cache_prewarm_body_phase:-?}; image_output_overlap=${buildkit_cache_prewarm_image_output_overlap_seconds:-?}s; cache_only_transitions=${buildkit_cache_prewarm_cache_only_transitions:-?} |"
+  fi
+  if [[ -n "$buildkit_cache_prewarm_body_slot_limit" || -n "$buildkit_cache_prewarm_body_downshifts" ]]; then
+    echo "| BuildKit body slots | limit=${buildkit_cache_prewarm_body_slot_limit:-?}/${buildkit_cache_prewarm_body_slot_max:-?}; active_max=${buildkit_cache_prewarm_body_active_max:-?}; downshifts=${buildkit_cache_prewarm_body_downshifts:-?}; reliefs=${buildkit_cache_prewarm_body_backlog_reliefs:-?} |"
   fi
   if [[ -n "$startup_prefetch_duration_ms" ]]; then
     echo "| Startup prefetch | ${startup_prefetch_duration_ms}ms |"

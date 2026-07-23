@@ -139,7 +139,7 @@ jobs:
 
       - name: Install BoringCache CLI with boringcache/one
         if: inputs.strategy == 'boringcache'
-        uses: boringcache/one@v1
+        uses: boringcache/one@one-canary-655b1ad38bf1
         with:
           setup: none
           mode: archive
@@ -645,7 +645,7 @@ jobs:
 
       - name: Install BoringCache CLI with boringcache/one
         if: inputs.strategy == 'boringcache'
-        uses: boringcache/one@v1
+        uses: boringcache/one@one-canary-655b1ad38bf1
         with:
           setup: none
           mode: archive

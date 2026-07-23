@@ -155,7 +155,7 @@ runs:
 
     - name: Install BoringCache CLI with boringcache/one
       if: ${{ inputs.strategy == 'boringcache' }}
-      uses: boringcache/one@one-canary-fa7e24f0f30f
+      uses: boringcache/one@one-canary-ae853e48ce8f
       with:
         setup: none
         mode: archive

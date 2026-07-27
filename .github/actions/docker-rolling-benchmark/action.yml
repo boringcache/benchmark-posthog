@@ -153,17 +153,12 @@ runs:
         username: ${{ env.BORINGCACHE_GHCR_READ_USER || github.actor }}
         password: ${{ env.BORINGCACHE_GHCR_READ_TOKEN }}
 
-    - name: Install BoringCache CLI with boringcache/one
+    - name: Install BoringCache CLI
       if: ${{ inputs.strategy == 'boringcache' }}
-      uses: boringcache/one@v1
-      with:
-        setup: none
-        mode: archive
-        workspace: ${{ inputs.benchmark_workspace }}
-        cli-version: ${{ inputs.cli_version }}
-        cli-platform: ${{ inputs.cli_platform }}
-        cache-runtime: false
-
+      run: >-
+        ./scripts/install-boringcache-cli.sh
+        "${{ inputs.cli_version }}"
+        "${{ inputs.cli_platform }}"
     - name: Checkout pinned upstream submodule shallowly
       shell: bash
       env:

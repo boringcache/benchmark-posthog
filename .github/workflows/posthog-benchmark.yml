@@ -134,6 +134,15 @@ jobs:
             turbo_cache_mounts: false
             lane_filter: boringcache
             run_on_pull_request: true
+          - label: BoringCache + toolcache
+            strategy: boringcache
+            benchmark_id: posthog-toolcache
+            dockerfile_path: upstream/Dockerfile
+            docker_tool_cache: turbo
+            buildkit_mountcache_offloader: false
+            turbo_cache_mounts: false
+            lane_filter: boringcache
+            run_on_pull_request: true
         include:
           - platform:
               label: arm64

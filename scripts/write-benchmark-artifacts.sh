@@ -1324,33 +1324,6 @@ issue_candidates_payload_from_inputs() {
   echo "[]"
 }
 
-cache_read_rollup_payload_from_summary() {
-  if [[ "$session_summary_payload" == "null" ]]; then
-    echo '{"hits":null,"misses":null,"hit_rate":null}'
-    return
-  fi
-
-  jq -c '
-    def number_or_null:
-      if type == "number" then .
-      elif type == "string" then (try tonumber catch null)
-      else null
-      end;
-    (((if (.tool | type) == "object" then .tool.cache_read_hit_count else null end) // .metrics.total_hits // .metrics.hit_count // .hit_count // .classification.cache_temperature.hits // .classification.bottleneck.evidence.hits // .cache_read_hit_count) | number_or_null) as $hits |
-    (((if (.tool | type) == "object" then .tool.cache_read_miss_count else null end) // .metrics.total_misses // .metrics.miss_count // .miss_count // .classification.cache_temperature.misses // .classification.bottleneck.evidence.misses // .cache_read_miss_count) | number_or_null) as $misses |
-    {
-      hits: $hits,
-      misses: $misses,
-      hit_rate: (
-        if ($hits != null and $misses != null and ($hits + $misses) > 0)
-        then ((($hits * 1000) / ($hits + $misses) | round) / 10)
-        else null
-        end
-      )
-    }
-  ' <<< "$session_summary_payload"
-}
-
 cache_review_payload_from_summary() {
   if [[ "$session_summary_payload" == "null" && "$native_tool_payload" == "null" ]]; then
     echo "null"
@@ -1367,11 +1340,12 @@ cache_review_payload_from_summary() {
       if type == "array" then . else [] end;
     def bounded_strings:
       array_or_empty | map(tostring) | .[:8];
-    def tool_name($native):
+    def summary_tool_name:
       if (.tool | type) == "string" then .tool
       elif (.tool | type) == "object" then (.tool.tool // .tool.name // .tool.adapter // .adapter // null)
-      else (.adapter // $native.tool // null)
+      else (.adapter // null)
       end;
+    def tool_name($native): summary_tool_name // $native.tool // null;
     def cache_target:
       .cache_target // .target // (
         if (.workspace // null) != null or (.tag // null) != null or (.mode // null) != null
@@ -1393,20 +1367,43 @@ cache_review_payload_from_summary() {
         })
       | .[:5];
     ($native_tool // {}) as $native |
-    (((if (.tool | type) == "object" then .tool.cache_read_hit_count else null end) // .metrics.total_hits // .metrics.hit_count // .hit_count // .classification.cache_temperature.hits // .classification.bottleneck.evidence.hits // .cache_read_hit_count // $native.cache_hits // $native.hit_count) | number_or_null) as $hits |
-    (((if (.tool | type) == "object" then .tool.cache_read_miss_count else null end) // .metrics.total_misses // .metrics.miss_count // .miss_count // .classification.cache_temperature.misses // .classification.bottleneck.evidence.misses // .cache_read_miss_count // $native.cache_misses // $native.miss_count) | number_or_null) as $misses |
-    ((.metrics.hit_rate // .hit_rate // .classification.cache_temperature.hit_rate // .classification.bottleneck.evidence.hit_rate // $native.hit_rate) | number_or_null) as $reported_hit_rate |
+    (. != null) as $summary_present |
+    (summary_tool_name) as $summary_tool |
+    (($native.tool // null) | if . == null then null else tostring end) as $native_tool_name |
+    (((if (.tool | type) == "object" then .tool.cache_read_hit_count else null end) // .metrics.total_hits // .metrics.hit_count // .hit_count // .classification.cache_temperature.hits // .classification.bottleneck.evidence.hits // .cache_read_hit_count) | number_or_null) as $summary_hits |
+    (((if (.tool | type) == "object" then .tool.cache_read_miss_count else null end) // .metrics.total_misses // .metrics.miss_count // .miss_count // .classification.cache_temperature.misses // .classification.bottleneck.evidence.misses // .cache_read_miss_count) | number_or_null) as $summary_misses |
+    ((.metrics.hit_rate // .hit_rate // .classification.cache_temperature.hit_rate // .classification.bottleneck.evidence.hit_rate) | number_or_null) as $summary_hit_rate |
+    (($native.cache_hits // $native.hit_count) | number_or_null) as $native_hits |
+    (($native.cache_misses // $native.miss_count) | number_or_null) as $native_misses |
+    (($native.hit_rate // null) | number_or_null) as $native_hit_rate |
+    (($native != {}) and ($native_tool_name != null) and ((($summary_present | not)) or (($summary_tool != null) and (($summary_tool | tostring | ascii_downcase) == ($native_tool_name | ascii_downcase)))) and (($native_hits != null) or ($native_misses != null) or ($native_hit_rate != null))) as $native_cache_authoritative |
+    (if $native_cache_authoritative then $native_hits else ($summary_hits // $native_hits) end) as $hits |
+    (if $native_cache_authoritative then $native_misses else ($summary_misses // $native_misses) end) as $misses |
+    (if $native_cache_authoritative then $native_hit_rate else ($summary_hit_rate // $native_hit_rate) end) as $reported_hit_rate |
     ((.metrics.duration_seconds // .duration_seconds) | number_or_null) as $duration_seconds |
     ((.duration_ms // null) | number_or_null) as $duration_ms |
     ((.oci.oci_engine_publish_total_duration_ms // .buildkit.export_duration_ms // null) | number_or_null) as $publish_ms |
     ((.startup_prefetch.startup_prefetch_oci_duration_ms // .startup_prefetch.duration_ms // null) | number_or_null) as $startup_ms |
     (($native.non_cacheable_calls // 0) | number_or_null) as $non_cacheable_calls |
-    (.review.primary_bottleneck // .classification.primary_bottleneck // .classification.bottleneck.primary_bottleneck // .classification.bottleneck.state // (
-      if ($misses != null and $misses > 0) then "cache_miss_quality"
-      elif ($non_cacheable_calls != null and $non_cacheable_calls > 0) then "native_tool_work"
-      else null
-      end
-    )) as $primary_bottleneck |
+    ((.metrics.total_errors // .metrics.error_count // (if (.tool | type) == "object" then .tool.error_count else null end) // .error_count // .classification.cache_temperature.errors // .classification.bottleneck.evidence.errors) | number_or_null) as $summary_errors |
+    (if (($native.cache_errors // null) != null or ($native.cache_read_errors // null) != null or ($native.cache_write_errors // null) != null or ($native.cache_timeouts // null) != null)
+     then ((($native.cache_errors | number_or_null) // 0) + (($native.cache_read_errors | number_or_null) // 0) + (($native.cache_write_errors | number_or_null) // 0) + (($native.cache_timeouts | number_or_null) // 0))
+     else null
+     end) as $native_errors |
+    (if $native_cache_authoritative then ($native_errors // $summary_errors) else ($summary_errors // $native_errors) end) as $errors |
+    (.review.primary_bottleneck // .classification.primary_bottleneck // .classification.bottleneck.primary_bottleneck // .classification.bottleneck.state // null) as $summary_primary_bottleneck |
+    (if $native_cache_authoritative then
+       if ($misses != null and $misses > 0) then "cache_miss_quality"
+       elif ($non_cacheable_calls != null and $non_cacheable_calls > 0) then "native_tool_work"
+       elif $summary_primary_bottleneck == "cache_miss_quality" then null
+       else $summary_primary_bottleneck
+       end
+     else ($summary_primary_bottleneck //
+       if ($misses != null and $misses > 0) then "cache_miss_quality"
+       elif ($non_cacheable_calls != null and $non_cacheable_calls > 0) then "native_tool_work"
+       else null
+       end)
+     end) as $primary_bottleneck |
     {
       "schema_version": "benchmark_cache_review.v1",
       "summary_schema": (.summary_schema // .schema // .schema_version // "cache_session_summary.v2"),
@@ -1416,13 +1413,14 @@ cache_review_payload_from_summary() {
       "project_hints": ((.project_hints // []) | array_or_empty),
       "phase_hints": ((.phase_hints // []) | array_or_empty),
       "primary_bottleneck": $primary_bottleneck,
-      "diagnostic_classification": (.review.diagnostic.classification // .classification.bottleneck.state // .classification.cache_temperature.state // null),
+      "diagnostic_classification": (if $native_cache_authoritative then $primary_bottleneck else (.review.diagnostic.classification // .classification.bottleneck.state // .classification.cache_temperature.state // null) end),
+      "cache_effectiveness_source": (if $native_cache_authoritative then ($native.stats_source // "native_tool") elif . != null then "cache_session_summary" else null end),
       "reason_codes": ([
         if ($startup_ms != null and $startup_ms >= 3000) then "setup_overhead" else empty end,
         if ($misses != null and $misses > 0) then "cache_miss_quality" else empty end,
         if ($publish_ms != null and $publish_ms >= 5000) then "save_export" else empty end,
         if ($non_cacheable_calls != null and $non_cacheable_calls > 0) then "native_tool_work" else empty end,
-        if (($primary_bottleneck // "") == "cache_side_clear" and (($misses // 0) == 0) and (((.error_count // .classification.cache_temperature.errors // .classification.bottleneck.evidence.errors // 0) | number_or_null) == 0)) then "native_tool_work" else empty end
+        if (($primary_bottleneck // "") == "cache_side_clear" and (($misses // 0) == 0) and (($errors // 0) == 0)) then "native_tool_work" else empty end
       ] | unique),
       "native_tool": (if $native == {} then null else $native end),
       "diagnostic_label": (.review.diagnostic.label // null),
@@ -1444,7 +1442,7 @@ cache_review_payload_from_summary() {
         else $reported_hit_rate
         end
       ),
-      "error_count": ((.metrics.total_errors // .metrics.error_count // (if (.tool | type) == "object" then .tool.error_count else null end) // .error_count // .classification.cache_temperature.errors // .classification.bottleneck.evidence.errors) | number_or_null),
+      "error_count": $errors,
       "bytes_read": ((.metrics.total_bytes_read // .metrics.bytes_read // (if (.tool | type) == "object" then .tool.cache_read_bytes else null end) // .bytes_read // .storage.oci_engine_storage_get_bytes // .storage.bytes // .oci.oci_engine_blob_served_bytes) | number_or_null),
       "bytes_written": ((.metrics.total_bytes_written // .metrics.bytes_written // (if (.tool | type) == "object" then .tool.cache_write_bytes else null end) // .bytes_written // .oci.oci_engine_borrowed_upload_session_bytes) | number_or_null),
       "duration_seconds": ($duration_seconds // (if $duration_ms != null then ($duration_ms / 1000) else null end)),
@@ -1620,7 +1618,6 @@ if [[ -n "$action_timings_json" ]]; then
 fi
 session_summary_payload="$(session_summary_payload_from_inputs)"
 issue_candidates_payload="$(issue_candidates_payload_from_inputs)"
-cache_read_rollup_payload="$(cache_read_rollup_payload_from_summary)"
 native_tool_payload="$(native_tool_payload_from_inputs)"
 cache_review_payload="$(cache_review_payload_from_summary)"
 launch_proof_paths_payload="$(launch_proof_paths_payload_from_inputs)"
@@ -1675,22 +1672,11 @@ slow_cache_save_export_seconds="$docker_cache_export_seconds"
 if [[ -z "$slow_cache_save_export_seconds" ]]; then
   slow_cache_save_export_seconds="$(number_from_payload "$action_timings_payload" '.phases.seed.archive_save.total_seconds // .seed.archive_save.total_seconds')"
 fi
-slow_hit_count="$(jq -r '.hits // empty' <<< "$cache_read_rollup_payload")"
-slow_miss_count="$(jq -r '.misses // empty' <<< "$cache_read_rollup_payload")"
-slow_hit_rate="$(jq -r '.hit_rate // empty' <<< "$cache_read_rollup_payload")"
-slow_native_hit_count="$(number_from_payload "$native_tool_payload" '.cache_hits // .hit_count')"
-slow_native_miss_count="$(number_from_payload "$native_tool_payload" '.cache_misses // .miss_count')"
-slow_native_hit_rate="$(number_from_payload "$native_tool_payload" '.hit_rate')"
+slow_hit_count="$(number_from_payload "$cache_review_payload" '.hit_count')"
+slow_miss_count="$(number_from_payload "$cache_review_payload" '.miss_count')"
+slow_hit_rate="$(number_from_payload "$cache_review_payload" '.hit_rate')"
+slow_cache_effectiveness_source="$(jq -r '.cache_effectiveness_source // empty' <<< "$cache_review_payload")"
 slow_native_non_cacheable_calls="$(number_from_payload "$native_tool_payload" '.non_cacheable_calls')"
-if [[ -z "$slow_hit_count" ]]; then
-  slow_hit_count="$slow_native_hit_count"
-fi
-if [[ -z "$slow_miss_count" ]]; then
-  slow_miss_count="$slow_native_miss_count"
-fi
-if [[ -z "$slow_hit_rate" ]]; then
-  slow_hit_rate="$slow_native_hit_rate"
-fi
 slow_new_blob_bytes="$oci_new_blob_bytes"
 slow_prior_cache_state="$prior_cache_state"
 if [[ -z "$slow_prior_cache_state" ]]; then
@@ -1884,6 +1870,7 @@ slow_reason_payload="$(jq -n -c \
   --arg run_uid "$run_uid" \
   --arg paired_run_id "$paired_run_id" \
   --arg prior_cache_state "$slow_prior_cache_state" \
+  --arg cache_effectiveness_source "$slow_cache_effectiveness_source" \
   --argjson build "$(json_num_or_null "$slow_build_seconds")" \
   --argjson setup "$(json_num_or_null "$slow_setup_seconds")" \
   --argjson post_cleanup "$(json_num_or_null "$slow_post_cleanup_seconds")" \
@@ -1924,6 +1911,7 @@ slow_reason_payload="$(jq -n -c \
     "hit_count": $hit_count,
     "miss_count": $miss_count,
     "hit_rate": $hit_rate,
+    "cache_effectiveness_source": (if $cache_effectiveness_source == "" then null else $cache_effectiveness_source end),
     "prior_cache_state": $prior_cache_state,
     "new_blob_bytes": $new_blob_bytes,
     "buildkit_prewarm": {
@@ -2503,6 +2491,9 @@ JSON
   fi
   if [[ -n "$slow_hit_rate" ]]; then
     echo "| Slow reason hit rate | ${slow_hit_rate}% |"
+  fi
+  if [[ -n "$slow_cache_effectiveness_source" ]]; then
+    echo "| Cache effectiveness source | ${slow_cache_effectiveness_source} |"
   fi
   echo "| Slow reason prior cache | ${slow_prior_cache_state} |"
   if [[ -n "$slow_new_blob_bytes" ]]; then

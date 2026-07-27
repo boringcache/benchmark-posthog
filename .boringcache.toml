@@ -1,9 +1,14 @@
 workspace = "boringcache/benchmark-posthog"
 
+[adapters.docker]
+tag = "posthog-docker"
+
+[adapters.turbo]
+tag = "posthog-turbo"
+
 # Managed BoringCache BuildKit benchmark. The managed backend is the only
 # Docker cache surface. The PostHog BuildKit lane can
 # also pass Turbo through the explicit docker_tool_cache input. Managed
 # mountcache experiments stay opt-in and are not declared here.
 #
-# This file is the canonical config anchor; durable entries can be declared
-# here if a local-archive contract becomes part of the public benchmark surface.
+# The CLI derives Git and platform scope from these committed root tags.

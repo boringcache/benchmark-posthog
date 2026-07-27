@@ -42,8 +42,6 @@ build, while keeping cache reuse and storage growth visible.
 
 - `BORINGCACHE_RESTORE_TOKEN` authorizes reads.
 - `BORINGCACHE_SAVE_TOKEN` authorizes trusted writes.
-- `BORINGCACHE_API_TOKEN` is retained only where a single bearer environment
-  variable is still required by a shared helper.
 
 ## BoringBuild EC2 shape sweep
 

@@ -50,8 +50,6 @@ if [[ -z "$cache_workspace" ]]; then
   echo "Missing BENCHMARK_WORKSPACE or BORINGCACHE_DEFAULT_WORKSPACE" >&2
   exit 1
 fi
-export BORINGCACHE_API_TOKEN="${BORINGCACHE_API_TOKEN:-${BORINGCACHE_RESTORE_TOKEN}}"
-
 echo "Running ${label} through BoringBuild"
 boringcache --version
 

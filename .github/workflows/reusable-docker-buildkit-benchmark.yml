@@ -52,10 +52,10 @@ on:
         type: string
         default: linux-amd64
       cli_version:
-        description: 'Optional BoringCache CLI release tag. Canary runs can pass vcli-canary.'
+        description: 'Exact BoringCache CLI release tag. Canary runs can pass an immutable canary tag.'
         required: false
         type: string
-        default: ''
+        default: 'v1.14.0'
       buildkit_image:
         description: 'Managed BoringCache BuildKit image used by BoringCache benchmark lanes.'
         required: false

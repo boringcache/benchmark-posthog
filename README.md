@@ -25,6 +25,9 @@ offload. The optional
 `scenarios/posthog-turbo-cache-mounts.patch` remains available for focused
 experiments but is not part of the default rolling lane.
 
+Stable fresh and rolling workflows install the verified BoringCache CLI
+`v1.14.0` release. Canary dispatches must provide an exact immutable CLI tag.
+
 The amd64 lane preserves the existing `posthog` cache scope and benchmark
 history. A native arm64 BoringCache lane uses an `arm-` prefix so it cannot
 disturb that scope.

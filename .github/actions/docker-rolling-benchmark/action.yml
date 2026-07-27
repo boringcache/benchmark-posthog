@@ -155,10 +155,12 @@ runs:
 
     - name: Install BoringCache CLI
       if: ${{ inputs.strategy == 'boringcache' }}
+      shell: bash
       run: >-
         ./scripts/install-boringcache-cli.sh
         "${{ inputs.cli_version }}"
         "${{ inputs.cli_platform }}"
+
     - name: Checkout pinned upstream submodule shallowly
       shell: bash
       env:

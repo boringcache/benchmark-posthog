@@ -1,6 +1,6 @@
 name: "PostHog Fresh"
 run-name: >-
-  ${{ format('Benchmark {0} | {1}', inputs.cli_version != '' && 'Canary' || 'Fresh', github.event_name == 'schedule' && 'Weekly' || format('Manual dispatch ({0})', github.ref_name)) }}
+  ${{ format('Benchmark {0} | {1}', startsWith(inputs.cli_version, 'vcli-canary-') && 'Canary' || 'Fresh', github.event_name == 'schedule' && 'Weekly' || format('Manual dispatch ({0})', github.ref_name)) }}
 
 on:
   workflow_dispatch:
@@ -11,10 +11,10 @@ on:
         type: string
         default: ""
       cli_version:
-        description: "Optional BoringCache CLI release tag for canary runs, for example vcli-canary."
+        description: "Exact BoringCache CLI release tag; immutable canary tags are also accepted."
         required: false
         type: string
-        default: ""
+        default: "v1.14.0"
       benchmark_id_suffix:
         description: "Optional suffix appended to built-in benchmark/cache scopes for isolated comparison runs."
         required: false

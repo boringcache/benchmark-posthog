@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-proxy_port="${BORINGCACHE_PROXY_PORT:-5000}"
+proxy_port="${BORINGCACHE_PROXY_PORT:-22243}"
 proxy_log="${BORINGCACHE_PROXY_LOG_PATH:-/tmp/boringcache-proxy-${proxy_port}.log}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_log="$(mktemp -t boringcache-build.XXXXXX)"

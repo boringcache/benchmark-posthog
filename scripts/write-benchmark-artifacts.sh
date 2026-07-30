@@ -1135,6 +1135,10 @@ collect_default_product_refs() {
     fi
   fi
 
+  if [[ -z "$action_ref" && "$strategy" == "boringcache" ]]; then
+    action_ref="boringcache/one@8294be671cd5a2b73638df1b8e1e240df888297e"
+  fi
+
   if [[ -z "$action_sha" && "$action_ref" =~ ^([^@]+)@(.+)$ ]]; then
     local action_repo="${BASH_REMATCH[1]}"
     local action_ref_name="${BASH_REMATCH[2]}"

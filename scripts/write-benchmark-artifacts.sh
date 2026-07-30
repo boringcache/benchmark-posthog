@@ -2255,6 +2255,7 @@ cat > "$json_path" <<JSON
     "ref": "$project_ref"
   },
   "product_refs": {
+    "schema_version": 1,
     "cli_version": $(json_string_or_null "$cli_version"),
     "action_ref": $(json_string_or_null "$action_ref"),
     "action_sha": $(json_string_or_null "$action_sha"),

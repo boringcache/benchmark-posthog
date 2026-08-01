@@ -41,6 +41,7 @@ on:
         default: full
         options:
           - full
+          - seed-cache
           - partial-warm
       turbo_cache_mounts:
         description: "Patch the prepared PostHog Dockerfile to mount Turbo cache directories."
@@ -70,6 +71,8 @@ on:
         options:
           - all
           - boringcache
+          - boringcache-base
+          - boringcache-toolcache
       runner_label:
         description: "Optional native runner label override. It must match the selected platform; empty uses the benchmark defaults."
         required: false
@@ -115,7 +118,7 @@ jobs:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
     # Apply a manual runner override only to the matrix entries that will run.
     # Disabled entries should use their cheap defaults and exit immediately.
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) && (inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && inputs.runner_label || matrix.platform.runner_label }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) && (inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter || inputs.lane_filter == matrix.lane.manual_filter) && inputs.runner_label || matrix.platform.runner_label }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -136,6 +139,7 @@ jobs:
             buildkit_mountcache_offloader: false
             turbo_cache_mounts: false
             lane_filter: all
+            manual_filter: all
             run_on_pull_request: true
           - label: BoringCache
             strategy: boringcache
@@ -148,6 +152,7 @@ jobs:
             buildkit_mountcache_offloader: false
             turbo_cache_mounts: false
             lane_filter: boringcache
+            manual_filter: boringcache-base
             run_on_pull_request: true
           - label: BoringCache + toolcache
             strategy: boringcache
@@ -157,6 +162,7 @@ jobs:
             buildkit_mountcache_offloader: false
             turbo_cache_mounts: false
             lane_filter: boringcache
+            manual_filter: boringcache-toolcache
             run_on_pull_request: true
         include:
           - platform:
@@ -176,6 +182,7 @@ jobs:
               buildkit_mountcache_offloader: false
               turbo_cache_mounts: false
               lane_filter: boringcache
+              manual_filter: boringcache-base
               run_on_pull_request: false
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -187,13 +194,13 @@ jobs:
       BORINGCACHE_CLI_VERSION: ${{ inputs.cli_version || vars.POSTHOG_BORINGCACHE_CLI_VERSION || vars.BORINGCACHE_BENCHMARK_CLI_VERSION || 'v1.15.0' }}
     steps:
       - name: Skip disabled lane
-        if: ${{ (github.event_name == 'pull_request' && !matrix.lane.run_on_pull_request) || (github.event_name == 'workflow_dispatch' && inputs.lane_filter != 'all' && inputs.lane_filter != matrix.lane.lane_filter) || (github.event_name == 'workflow_dispatch' && inputs.platform_filter != 'all' && inputs.platform_filter != matrix.platform.label) }}
+        if: ${{ (github.event_name == 'pull_request' && !matrix.lane.run_on_pull_request) || (github.event_name == 'workflow_dispatch' && inputs.lane_filter != 'all' && inputs.lane_filter != matrix.lane.lane_filter && inputs.lane_filter != matrix.lane.manual_filter) || (github.event_name == 'workflow_dispatch' && inputs.platform_filter != 'all' && inputs.platform_filter != matrix.platform.label) }}
         shell: bash
         run: |
           echo "Skipping ${{ matrix.lane.label }} ${{ matrix.platform.label }} for this event/configuration."
 
       - name: Validate native runner architecture
-        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter || inputs.lane_filter == matrix.lane.manual_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
         shell: bash
         env:
           CLI_PLATFORM: ${{ matrix.platform.cli_platform }}
@@ -208,25 +215,25 @@ jobs:
           esac
 
       - name: Checkout benchmark repo
-        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter || inputs.lane_filter == matrix.lane.manual_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
           submodules: false
 
       - name: Free disk space
-        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter || inputs.lane_filter == matrix.lane.manual_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
         shell: bash
         run: ./scripts/free-runner-disk.sh
 
       - name: Set up QEMU for arm64 Docker builds
-        if: ${{ matrix.platform.setup_qemu && (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
+        if: ${{ matrix.platform.setup_qemu && (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter || inputs.lane_filter == matrix.lane.manual_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
       - name: ${{ format('{0} {1}', matrix.lane.label, matrix.platform.label) }}
-        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
+        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter || inputs.lane_filter == matrix.lane.manual_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
         uses: ./.github/actions/docker-rolling-benchmark
         env:
           BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ (inputs.mountcache_probe && matrix.lane.strategy == 'boringcache') && '1' || '' }}

@@ -104,19 +104,50 @@ assert_posthog_mountcache_used() {
   case "$mode" in
     seed-cache) expected_status="published" ;;
     partial-warm) expected_status="hit" ;;
+    full)
+      [[ "${CACHE_LANE:-}" == "rolling" ]] || return 0
+      expected_status="hit"
+      ;;
     *) return 0 ;;
   esac
 
   local cache_id
   for cache_id in pnpm uv-libxmlsec1.2.37-2; do
-    if ! grep -Eq "boringcache cache mount (publish|hydrate) cacheID=\"/?${cache_id}\" status=${expected_status}.*worker=rust" "$build_log"; then
+    if [[ "$expected_status" == "published" ]]; then
+      local archive_tag
+      local inspect_path
+      archive_tag="$(
+        sed -nE \
+          "s/.*cache mount hydrate cacheID=\"\/?${cache_id}\" status=start archive=\"([^\"]+)\" worker=rust.*/\1/p" \
+          "$build_log" \
+          | tail -n 1
+      )"
+      inspect_path="$(mktemp -t boringcache-mountcache-inspect.XXXXXX)"
+      if [[ -n "$archive_tag" ]] && \
+        boringcache inspect "${BENCHMARK_WORKSPACE:?Set BENCHMARK_WORKSPACE}" "$archive_tag" --json > "$inspect_path" && \
+        jq -e '
+          .entry.status == "ready" and
+          .entry.server_signed == true and
+          .entry.storage_verified == true and
+          .entry.storage_mode == "cas" and
+          .entry.cas_layout == "archive-chunks-v1" and
+          .performance.saves >= 1 and
+          .performance.errors == 0
+        ' "$inspect_path" >/dev/null; then
+        continue
+      fi
+    elif grep -Eq "boringcache cache mount hydrate cacheID=\"/?${cache_id}\" status=hit.*worker=rust" "$build_log"; then
+      continue
+    fi
+
+    {
       capture_proxy_status
       write_build_metrics
       write_build_diagnostics
       echo "PostHog cache-mount proof expected ${expected_status} through the Rust worker for ${cache_id}." >&2
       grep -E 'boringcache cache mount (hydrate|publish)' "$build_log" | tail -n 160 >&2 || true
       exit 1
-    fi
+    }
   done
 }
 

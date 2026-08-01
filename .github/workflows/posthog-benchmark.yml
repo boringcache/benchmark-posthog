@@ -29,6 +29,11 @@ on:
         required: false
         type: string
         default: ""
+      cache_scope_override:
+        description: "Optional exact BoringCache cache scope to continue an existing rolling chain."
+        required: false
+        type: string
+        default: ""
       build_mode:
         description: "Benchmark script mode for BoringCache lanes."
         required: false
@@ -39,6 +44,11 @@ on:
           - partial-warm
       turbo_cache_mounts:
         description: "Patch the prepared PostHog Dockerfile to mount Turbo cache directories."
+        required: false
+        type: boolean
+        default: false
+      mountcache_probe:
+        description: "Exercise PostHog's pnpm and uv cache mounts through the CLI-owned Rust worker."
         required: false
         type: boolean
         default: false
@@ -219,11 +229,12 @@ jobs:
         if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
         uses: ./.github/actions/docker-rolling-benchmark
         env:
-          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ matrix.lane.buildkit_mountcache_offloader && '1' || '' }}
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ (inputs.mountcache_probe && matrix.lane.strategy == 'boringcache') && '1' || '' }}
         with:
           strategy: ${{ matrix.lane.strategy }}
-          buildkit_mountcache_offloader: ${{ matrix.lane.buildkit_mountcache_offloader }}
+          buildkit_mountcache_offloader: ${{ inputs.mountcache_probe && matrix.lane.strategy == 'boringcache' }}
           build_mode: ${{ inputs.build_mode || 'full' }}
+          cache_scope_override: ${{ inputs.cache_scope_override }}
           cache_scope_ref_slug: ${{ inputs.cache_scope_ref_slug }}
           turbo_cache_mounts: ${{ matrix.lane.turbo_cache_mounts && 'true' || 'false' }}
           buildkit_image: ${{ env.BUILDKIT_IMAGE }}

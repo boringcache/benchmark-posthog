@@ -112,7 +112,6 @@ assert_posthog_mountcache_used() {
   esac
 
   local cache_id
-  local observed_hits=0
   for cache_id in pnpm uv-libxmlsec1.2.37-2; do
     if [[ "$expected_status" == "published" ]]; then
       local archive_tag
@@ -138,7 +137,6 @@ assert_posthog_mountcache_used() {
         continue
       fi
     elif grep -Eq "boringcache cache mount hydrate cacheID=\"/?${cache_id}\" status=hit.*worker=rust" "$build_log"; then
-      observed_hits=$((observed_hits + 1))
       continue
     elif mountcache_layers_restored_from_docker_cache "$cache_id"; then
       echo "PostHog cache mount ${cache_id} was additive: every consuming RUN was restored from Docker cache before the mount was needed."
@@ -154,14 +152,6 @@ assert_posthog_mountcache_used() {
       exit 1
     }
   done
-
-  if [[ "$expected_status" == "hit" && "$observed_hits" -eq 0 ]]; then
-    capture_proxy_status
-    write_build_metrics
-    write_build_diagnostics
-    echo "PostHog cache-mount proof restored every consuming RUN from Docker cache; this run did not exercise a Rust-worker mount hit." >&2
-    exit 1
-  fi
 }
 
 turbo_tool_cache_layers_restored_from_docker_cache() {

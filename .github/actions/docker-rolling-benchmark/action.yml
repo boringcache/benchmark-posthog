@@ -494,6 +494,7 @@ runs:
           --adapter buildkit \
           --project-repo "$PROJECT_REPO" \
           --project-ref "$project_ref" \
+          --cli-version "${{ inputs.cli_version }}" \
           --cold-seconds "${{ steps.build.outputs.seconds }}" \
           --cold-build-seconds "${{ steps.build.outputs.build_seconds }}" \
           --warm1-seconds "" \

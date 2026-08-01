@@ -55,12 +55,12 @@ on:
         description: 'Exact BoringCache CLI release tag. Canary runs can pass an immutable canary tag.'
         required: false
         type: string
-        default: 'v1.15.0'
+        default: 'v1.16.3'
       buildkit_image:
         description: 'Managed BoringCache BuildKit image used by BoringCache benchmark lanes.'
         required: false
         type: string
-        default: ghcr.io/boringcache/buildkit:v0.30.0-bc
+        default: ''
       benchmark_workspace:
         required: false
         type: string

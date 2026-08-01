@@ -9,11 +9,7 @@ scope_suffix="${POSTHOG_BORINGBUILD_SCOPE_SUFFIX:-boringbuild}"
 label="BoringCache managed BuildKit"
 benchmark_id="posthog"
 
-if [[ -n "${BUILDKIT_IMAGE:-}" ]]; then
-  buildkit_image="$BUILDKIT_IMAGE"
-else
-  buildkit_image="ghcr.io/boringcache/buildkit:v0.30.0-bc"
-fi
+buildkit_image="${BUILDKIT_IMAGE:-}"
 
 boringcache_candidate=""
 if [[ -x /workspace/bin/boringcache ]]; then

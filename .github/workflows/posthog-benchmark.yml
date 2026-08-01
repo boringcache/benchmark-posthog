@@ -234,7 +234,9 @@ jobs:
           strategy: ${{ matrix.lane.strategy }}
           buildkit_mountcache_offloader: ${{ inputs.mountcache_probe && matrix.lane.strategy == 'boringcache' }}
           build_mode: ${{ inputs.build_mode || 'full' }}
-          cache_scope_override: ${{ inputs.cache_scope_override }}
+          # Continue ordinary amd64 exactly; isolate other exporters with
+          # stable suffixes so a cadence sample never has a last-writer race.
+          cache_scope_override: ${{ inputs.cache_scope_override && format('{0}{1}{2}', inputs.cache_scope_override, matrix.platform.cli_platform == 'linux-arm64' && '-arm64' || '', matrix.lane.docker_tool_cache != '' && '-toolcache' || '') || '' }}
           cache_scope_ref_slug: ${{ inputs.cache_scope_ref_slug }}
           turbo_cache_mounts: ${{ matrix.lane.turbo_cache_mounts && 'true' || 'false' }}
           buildkit_image: ${{ env.BUILDKIT_IMAGE }}

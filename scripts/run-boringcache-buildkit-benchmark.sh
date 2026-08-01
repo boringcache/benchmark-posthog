@@ -112,6 +112,7 @@ assert_posthog_mountcache_used() {
   esac
 
   local cache_id
+  local observed_hits=0
   for cache_id in pnpm uv-libxmlsec1.2.37-2; do
     if [[ "$expected_status" == "published" ]]; then
       local archive_tag
@@ -137,6 +138,10 @@ assert_posthog_mountcache_used() {
         continue
       fi
     elif grep -Eq "boringcache cache mount hydrate cacheID=\"/?${cache_id}\" status=hit.*worker=rust" "$build_log"; then
+      observed_hits=$((observed_hits + 1))
+      continue
+    elif mountcache_layers_restored_from_docker_cache "$cache_id"; then
+      echo "PostHog cache mount ${cache_id} was additive: every consuming RUN was restored from Docker cache before the mount was needed."
       continue
     fi
 
@@ -149,6 +154,14 @@ assert_posthog_mountcache_used() {
       exit 1
     }
   done
+
+  if [[ "$expected_status" == "hit" && "$observed_hits" -eq 0 ]]; then
+    capture_proxy_status
+    write_build_metrics
+    write_build_diagnostics
+    echo "PostHog cache-mount proof restored every consuming RUN from Docker cache; this run did not exercise a Rust-worker mount hit." >&2
+    exit 1
+  fi
 }
 
 turbo_tool_cache_layers_restored_from_docker_cache() {
@@ -169,11 +182,28 @@ turbo_tool_cache_layers_restored_from_docker_cache() {
   done < "$build_log"
 
   [[ -n "$frontend_step" && -n "$plugin_step" ]] || return 1
-  turbo_tool_cache_step_restored_from_docker_cache "$frontend_step" &&
-    turbo_tool_cache_step_restored_from_docker_cache "$plugin_step"
+  buildkit_step_restored_from_docker_cache "$frontend_step" &&
+    buildkit_step_restored_from_docker_cache "$plugin_step"
 }
 
-turbo_tool_cache_step_restored_from_docker_cache() {
+mountcache_layers_restored_from_docker_cache() {
+  local cache_id="$1"
+  local found=false
+  local line
+
+  while IFS= read -r line; do
+    [[ "$line" == *"RUN "* ]] || continue
+    [[ "$line" == *"--mount=type=cache,id=${cache_id}"* ]] || continue
+    [[ "$line" =~ ^#([0-9]+)[[:space:]] ]] || continue
+
+    found=true
+    buildkit_step_restored_from_docker_cache "${BASH_REMATCH[1]}" || return 1
+  done < "$build_log"
+
+  [[ "$found" == true ]]
+}
+
+buildkit_step_restored_from_docker_cache() {
   local step_id="$1"
 
   if grep -qE "^#${step_id} CACHED$" "$build_log"; then

@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-version="${1:-v1.15.0}"
+version="${1:-v1.16.3}"
 platform="${2:-linux-amd64}"
 version="${version#v}"
 tag="v${version}"

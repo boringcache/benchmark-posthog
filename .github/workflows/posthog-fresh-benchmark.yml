@@ -14,7 +14,7 @@ on:
         description: "Exact BoringCache CLI release tag; immutable canary tags are also accepted."
         required: false
         type: string
-        default: "v1.15.0"
+        default: "v1.16.3"
       benchmark_id_suffix:
         description: "Optional suffix appended to built-in benchmark/cache scopes for isolated comparison runs."
         required: false
@@ -71,7 +71,7 @@ jobs:
       docker_platform: linux/amd64
       cli_platform: linux-amd64
       cli_version: ${{ inputs.cli_version }}
-      buildkit_image: ${{ inputs.buildkit_image || 'ghcr.io/boringcache/buildkit:v0.30.0-bc' }}
+      buildkit_image: ${{ inputs.buildkit_image }}
       benchmark_workspace: ${{ github.repository }}
       free_disk_space: true
     secrets: inherit

@@ -97,6 +97,29 @@ assert_turbo_remote_cache_used() {
   fi
 }
 
+assert_posthog_mountcache_used() {
+  [[ -n "$buildkit_mountcache_offloader" ]] || return 0
+
+  local expected_status=""
+  case "$mode" in
+    seed-cache) expected_status="published" ;;
+    partial-warm) expected_status="hit" ;;
+    *) return 0 ;;
+  esac
+
+  local cache_id
+  for cache_id in pnpm uv-libxmlsec1.2.37-2; do
+    if ! grep -Eq "boringcache cache mount (publish|hydrate) cacheID=\"/?${cache_id}\" status=${expected_status}.*worker=rust" "$build_log"; then
+      capture_proxy_status
+      write_build_metrics
+      write_build_diagnostics
+      echo "PostHog cache-mount proof expected ${expected_status} through the Rust worker for ${cache_id}." >&2
+      grep -E 'boringcache cache mount (hydrate|publish)' "$build_log" | tail -n 160 >&2 || true
+      exit 1
+    fi
+  done
+}
+
 turbo_tool_cache_layers_restored_from_docker_cache() {
   local frontend_step=""
   local plugin_step=""
@@ -620,6 +643,7 @@ while true; do
 
   if [[ "$status" -eq 0 ]]; then
     assert_turbo_remote_cache_used
+    assert_posthog_mountcache_used
     import_status="$(build_import_status)"
     if [[ "$mode" == "partial-warm" && "$import_status" != "ok" ]]; then
       capture_proxy_status

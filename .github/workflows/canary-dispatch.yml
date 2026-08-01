@@ -14,6 +14,11 @@ on:
         required: true
         type: string
         default: ghcr.io/boringcache/buildkit:canary
+      mountcache_probe:
+        description: "Exercise PostHog's existing pnpm and uv cache mounts through the CLI-owned archive worker."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   actions: write
@@ -29,6 +34,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CLI_VERSION: ${{ inputs.cli_version }}
           BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+          MOUNTCACHE_PROBE: ${{ inputs.mountcache_probe }}
         run: |
           set -euo pipefail
 
@@ -40,12 +46,21 @@ jobs:
             exit 1
           fi
 
+          dispatch_args=(
+            -f "cli_version=${CLI_VERSION}"
+            -f "buildkit_image=${BUILDKIT_IMAGE}"
+            -f benchmark_id_suffix=-canary
+          )
+          if [[ "$MOUNTCACHE_PROBE" == "true" ]]; then
+            dispatch_args+=(
+              -f lane_filter=boringcache
+              -f mountcache_probe=true
+            )
+          fi
           RUN_URL="$(gh workflow run posthog-fresh-benchmark.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "${{ github.ref_name }}" \
-            -f "cli_version=${CLI_VERSION}" \
-            -f "buildkit_image=${BUILDKIT_IMAGE}" \
-            -f benchmark_id_suffix=-canary)"
+            "${dispatch_args[@]}")"
           RUN_ID="${RUN_URL##*/}"
           echo "Canary benchmark: ${RUN_URL}"
           gh run watch "$RUN_ID" --repo "$GITHUB_REPOSITORY" --exit-status

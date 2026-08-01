@@ -25,6 +25,13 @@ offload. The optional
 `scenarios/posthog-turbo-cache-mounts.patch` remains available for focused
 experiments but is not part of the default rolling lane.
 
+The manual fresh benchmark's `mountcache_probe` keeps that default unchanged.
+It runs only the BoringCache product lane when selected through the canary
+dispatcher, enables CLI-owned mount offload, and forces PostHog's existing
+`frontend-build`, `node-scripts-build`, and `posthog-build` stages so the pnpm
+and uv mounts are exercised during both cold publication and fresh-builder
+restore. It does not add the optional Turbo cache mounts.
+
 Stable fresh and rolling workflows install the verified BoringCache CLI
 `v1.15.0` release. Canary dispatches must provide an exact immutable CLI tag.
 

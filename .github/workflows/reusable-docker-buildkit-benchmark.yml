@@ -61,6 +61,16 @@ on:
         required: false
         type: string
         default: ghcr.io/boringcache/buildkit:v0.30.0-bc
+      buildkit_mountcache_offloader:
+        description: 'Enable CLI-owned cache-mount archive offload for the managed BoringCache lane.'
+        required: false
+        type: boolean
+        default: false
+      warm_docker_build_args:
+        description: 'Optional newline-delimited Docker build arguments used by focused fresh-builder probes.'
+        required: false
+        type: string
+        default: ''
       benchmark_workspace:
         required: false
         type: string
@@ -239,6 +249,7 @@ jobs:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
           BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.buildkit_mountcache_offloader && '1' || '' }}
           BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BUILDER: ${{ inputs.strategy == 'actions-cache' && steps.buildx.outputs.name || '' }}
           CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
@@ -454,6 +465,7 @@ jobs:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ''
           BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.buildkit_mountcache_offloader && '1' || '' }}
           BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
           BUILDER: ${{ inputs.strategy == 'actions-cache' && steps.warm_buildx.outputs.name || '' }}
           CACHE_SCOPE: ${{ inputs.strategy == 'actions-cache' && steps.cold_baseline_build.outputs.cache_scope || steps.scope.outputs.cache_scope }}
@@ -461,6 +473,7 @@ jobs:
           IMAGE_TAG: ${{ inputs.image_tag }}
           DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
           BENCHMARK_DOCKER_CONTEXT: ${{ inputs.docker_context }}
+          DOCKER_BUILD_ARGS_INPUT: ${{ inputs.warm_docker_build_args }}
         run: |
           set -euo pipefail
           docker_platform_args=()
@@ -468,9 +481,13 @@ jobs:
             docker_platform_args=(--platform "$DOCKER_PLATFORM")
           fi
           docker_build_extra_args=""
-          if ((${#docker_platform_args[@]})); then
-            docker_build_extra_args="$(printf '%s\n' "${docker_platform_args[@]}")"
-          fi
+          {
+            if ((${#docker_platform_args[@]})); then
+              printf '%s\n' "${docker_platform_args[@]}"
+            fi
+            printf '%s\n' "${DOCKER_BUILD_ARGS_INPUT}"
+          } > "${RUNNER_TEMP}/docker-build-extra-args"
+          docker_build_extra_args="$(sed '/^[[:space:]]*$/d' "${RUNNER_TEMP}/docker-build-extra-args")"
 
           if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
             metrics_file="${RUNNER_TEMP}/warm-build-metrics.env"

@@ -20,6 +20,19 @@ on:
         required: false
         type: string
         default: ""
+      lane_filter:
+        description: "Run both comparison lanes or only the BoringCache product lane."
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - boringcache
+      mountcache_probe:
+        description: "Exercise PostHog's existing pnpm and uv cache mounts through the CLI-owned archive worker."
+        required: false
+        type: boolean
+        default: false
       runner_label:
         description: "Optional native runner label override. It must match the selected platform; empty uses the benchmark defaults."
         required: false
@@ -40,6 +53,7 @@ permissions:
 jobs:
   github-actions-cache:
     name: GHA amd64
+    if: ${{ inputs.lane_filter != 'boringcache' }}
     uses: ./.github/workflows/reusable-docker-buildkit-benchmark.yml
     with:
       strategy: actions-cache
@@ -72,6 +86,14 @@ jobs:
       cli_platform: linux-amd64
       cli_version: ${{ inputs.cli_version }}
       buildkit_image: ${{ inputs.buildkit_image || 'ghcr.io/boringcache/buildkit:v0.30.0-bc' }}
+      buildkit_mountcache_offloader: ${{ inputs.mountcache_probe }}
+      warm_docker_build_args: |-
+        ${{ inputs.mountcache_probe && '--no-cache-filter' || '' }}
+        ${{ inputs.mountcache_probe && 'frontend-build' || '' }}
+        ${{ inputs.mountcache_probe && '--no-cache-filter' || '' }}
+        ${{ inputs.mountcache_probe && 'node-scripts-build' || '' }}
+        ${{ inputs.mountcache_probe && '--no-cache-filter' || '' }}
+        ${{ inputs.mountcache_probe && 'posthog-build' || '' }}
       benchmark_workspace: ${{ github.repository }}
       free_disk_space: true
     secrets: inherit

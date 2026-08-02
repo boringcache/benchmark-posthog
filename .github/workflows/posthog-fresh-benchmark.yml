@@ -14,7 +14,7 @@ on:
         description: "Exact BoringCache CLI release tag; immutable canary tags are also accepted."
         required: false
         type: string
-        default: "v1.16.3"
+        default: "v1.16.4"
       benchmark_id_suffix:
         description: "Optional suffix appended to built-in benchmark/cache scopes for isolated comparison runs."
         required: false

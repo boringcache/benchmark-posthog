@@ -18,7 +18,7 @@ on:
         description: "Exact BoringCache CLI release tag used by rolling lanes."
         required: false
         type: string
-        default: "v1.16.3"
+        default: "v1.16.4"
       benchmark_id_suffix:
         description: "Optional suffix appended to built-in benchmark/cache scopes for isolated comparison runs."
         required: false
@@ -184,7 +184,7 @@ jobs:
       BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
       BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
       BUILDKIT_IMAGE: ${{ matrix.platform.cli_platform == 'linux-arm64' && (inputs.buildkit_image_arm64 || inputs.buildkit_image) || inputs.buildkit_image }}
-      BORINGCACHE_CLI_VERSION: ${{ inputs.cli_version || 'v1.16.3' }}
+      BORINGCACHE_CLI_VERSION: ${{ inputs.cli_version || 'v1.16.4' }}
     steps:
       - name: Skip disabled lane
         if: ${{ (github.event_name == 'pull_request' && !matrix.lane.run_on_pull_request) || (github.event_name == 'workflow_dispatch' && inputs.lane_filter != 'all' && inputs.lane_filter != matrix.lane.lane_filter) || (github.event_name == 'workflow_dispatch' && inputs.platform_filter != 'all' && inputs.platform_filter != matrix.platform.label) }}

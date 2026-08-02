@@ -29,7 +29,7 @@ manager mounts without patching the upstream build. The optional
 experiments but is not part of the default rolling lane.
 
 Stable fresh and rolling workflows install the verified BoringCache CLI
-`v1.16.3` release. Canary dispatches must provide an exact immutable CLI tag.
+`v1.16.4` release. Canary dispatches must provide an exact immutable CLI tag.
 
 The amd64 lane preserves the existing `posthog` cache scope and benchmark
 history. A native arm64 BoringCache lane uses an `arm-` prefix so it cannot
@@ -73,8 +73,8 @@ scripts/run-boringbuild-ec2-shape-sweep.sh --shapes 8c,16c --parallel
 - [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml)
   runs the BoringCache, BoringCache tool-cache, BoringCache mount-cache, and
   GHA rolling lanes.
-- [`.github/workflows/rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml)
-  dispatches the rolling benchmark after upstream sync.
+- [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml)
+  runs the rolling product lanes when an upstream sync updates `main`.
 - [`.github/workflows/sync.yml`](.github/workflows/sync.yml) checks for newer
   pinned upstream source commits.
 

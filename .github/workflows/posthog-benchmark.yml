@@ -60,6 +60,7 @@ on:
         options:
           - all
           - boringcache
+          - mountcache
       runner_label:
         description: "Optional native runner label override. It must match the selected platform; empty uses the benchmark defaults."
         required: false
@@ -148,6 +149,15 @@ jobs:
             turbo_cache_mounts: false
             lane_filter: boringcache
             run_on_pull_request: true
+          - label: BoringCache + mountcache
+            strategy: boringcache
+            benchmark_id: posthog-mountcache
+            dockerfile_path: upstream/Dockerfile
+            docker_tool_cache: ""
+            buildkit_mountcache_offloader: true
+            turbo_cache_mounts: false
+            lane_filter: mountcache
+            run_on_pull_request: false
         include:
           - platform:
               label: arm64

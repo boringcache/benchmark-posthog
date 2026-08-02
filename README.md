@@ -10,18 +10,21 @@ workspace, and independent workflow history.
 
 ## Product lanes
 
-The benchmark has three lanes:
+The benchmark has four lanes:
 
 - **BoringCache** uses the CLI-managed BuildKit builder and the native
   `type=boringcache` cache backend. This is the product baseline for the
   tool-cache comparison.
 - **BoringCache + toolcache** uses the same managed builder and cache backend,
   with the CLI's native Turbo tool-cache integration enabled.
+- **BoringCache + mountcache** uses the same managed builder and cache backend,
+  with CLI-owned cache-mount offload enabled for PostHog's real pnpm and uv
+  cache mounts.
 - **GHA** is the GitHub Actions Cache comparison lane.
 
 All lanes build the pinned `upstream/Dockerfile` with `upstream/` as the build
-context. The BoringCache lanes can also exercise managed BuildKit cache-mount
-offload. The optional
+context. The mount-cache lane exercises the Dockerfile's existing package
+manager mounts without patching the upstream build. The optional
 `scenarios/posthog-turbo-cache-mounts.patch` remains available for focused
 experiments but is not part of the default rolling lane.
 
@@ -68,7 +71,8 @@ scripts/run-boringbuild-ec2-shape-sweep.sh --shapes 8c,16c --parallel
 - [`scripts/run-boringcache-buildkit-benchmark.sh`](scripts/run-boringcache-buildkit-benchmark.sh)
   runs the managed BoringCache lane.
 - [`.github/workflows/posthog-benchmark.yml`](.github/workflows/posthog-benchmark.yml)
-  runs the BoringCache, BoringCache tool-cache, and GHA rolling lanes.
+  runs the BoringCache, BoringCache tool-cache, BoringCache mount-cache, and
+  GHA rolling lanes.
 - [`.github/workflows/rolling-dispatch.yml`](.github/workflows/rolling-dispatch.yml)
   dispatches the rolling benchmark after upstream sync.
 - [`.github/workflows/sync.yml`](.github/workflows/sync.yml) checks for newer

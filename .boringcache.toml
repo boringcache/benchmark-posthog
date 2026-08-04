@@ -1,4 +1,4 @@
-workspace = "boringcache/benchmark-posthog"
+workspace = "boringcache/benchmark-cache-cadence"
 
 [adapters.docker]
 tag = "posthog-docker"

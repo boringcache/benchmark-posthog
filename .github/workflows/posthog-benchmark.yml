@@ -101,6 +101,19 @@ permissions:
   packages: read
 
 jobs:
+  benchmark-contracts:
+    name: Benchmark contracts
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout benchmark repo
+        uses: actions/checkout@v6
+
+      - name: Test mountcache evidence contract
+        shell: bash
+        run: ./scripts/test-assert-boringcache-mountcache-run.sh
+
   docker-benchmark:
     name: ${{ format('{0} {1}', matrix.lane.label, matrix.platform.label) }}
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
@@ -125,6 +138,7 @@ jobs:
             dockerfile_path: upstream/Dockerfile
             docker_tool_cache: ""
             buildkit_mountcache_offloader: false
+            force_mountcache_exec: false
             turbo_cache_mounts: false
             lane_filter: all
             run_on_pull_request: true
@@ -137,6 +151,7 @@ jobs:
             # behavior-safe managed exporter defaults.
             docker_tool_cache: ""
             buildkit_mountcache_offloader: false
+            force_mountcache_exec: false
             turbo_cache_mounts: false
             lane_filter: boringcache
             run_on_pull_request: true
@@ -146,6 +161,7 @@ jobs:
             dockerfile_path: upstream/Dockerfile
             docker_tool_cache: turbo
             buildkit_mountcache_offloader: false
+            force_mountcache_exec: false
             turbo_cache_mounts: false
             lane_filter: boringcache
             run_on_pull_request: true
@@ -155,6 +171,9 @@ jobs:
             dockerfile_path: upstream/Dockerfile
             docker_tool_cache: ""
             buildkit_mountcache_offloader: true
+            # Keep the lane focused and provable: node-scripts-build contains a
+            # pnpm cache mount and is cheaper to re-run than frontend-build.
+            force_mountcache_exec: true
             turbo_cache_mounts: false
             lane_filter: mountcache
             run_on_pull_request: false
@@ -174,6 +193,7 @@ jobs:
               # Keep ARM behavior-identical to AMD; see the lane above.
               docker_tool_cache: ""
               buildkit_mountcache_offloader: false
+              force_mountcache_exec: false
               turbo_cache_mounts: false
               lane_filter: boringcache
               run_on_pull_request: false
@@ -243,8 +263,8 @@ jobs:
           docker_build_args: |-
             ${{ inputs.force_turbo_exec && '--no-cache-filter' || '' }}
             ${{ inputs.force_turbo_exec && 'frontend-build' || '' }}
-            ${{ inputs.force_turbo_exec && '--no-cache-filter' || '' }}
-            ${{ inputs.force_turbo_exec && 'node-scripts-build' || '' }}
+            ${{ (inputs.force_turbo_exec || matrix.lane.force_mountcache_exec) && '--no-cache-filter' || '' }}
+            ${{ (inputs.force_turbo_exec || matrix.lane.force_mountcache_exec) && 'node-scripts-build' || '' }}
           project_repo: PostHog/posthog
           project_ref: ${{ inputs.upstream_ref }}
           dockerfile_path: ${{ matrix.lane.dockerfile_path }}

@@ -21,6 +21,13 @@ buildkit_mountcache_offloader="${BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER:-}"
 cache_args=()
 export BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS="${BORINGCACHE_OBSERVABILITY_INCLUDE_CACHE_OPS:-1}"
 
+mountcache_offloader_enabled() {
+  case "$(printf '%s' "$buildkit_mountcache_offloader" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 docker_tool_cache_enabled() {
   local requested_tool="$1"
   local tool
@@ -646,6 +653,9 @@ while true; do
     write_build_metrics
     write_build_diagnostics
     ./scripts/assert-boringcache-docker-product-run.sh "${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}"
+    if mountcache_offloader_enabled; then
+      ./scripts/assert-boringcache-mountcache-run.sh "${BORINGCACHE_OBSERVABILITY_JSONL_PATH:-}"
+    fi
     break
   fi
 

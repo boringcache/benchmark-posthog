@@ -184,6 +184,7 @@ jobs:
       BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
       BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
       BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
+      BORINGCACHE_STORAGE_RANGE_RESCUE_SEGMENT_MB: ${{ vars.BORINGCACHE_STORAGE_RANGE_RESCUE_SEGMENT_MB || '' }}
       BUILDKIT_IMAGE: ${{ matrix.platform.cli_platform == 'linux-arm64' && (inputs.buildkit_image_arm64 || inputs.buildkit_image) || inputs.buildkit_image }}
       BORINGCACHE_CLI_VERSION: ${{ inputs.cli_version || 'v1.16.4' }}
     steps:

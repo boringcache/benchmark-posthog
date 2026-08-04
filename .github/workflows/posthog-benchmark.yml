@@ -252,5 +252,5 @@ jobs:
           image_tag: posthog-benchmark:latest
           cli_platform: ${{ matrix.platform.cli_platform }}
           cli_version: ${{ env.BORINGCACHE_CLI_VERSION }}
-          benchmark_workspace: ${{ github.repository }}
+          benchmark_workspace: boringcache/benchmark-cache-cadence
           docker_tool_cache: ${{ matrix.lane.docker_tool_cache }}

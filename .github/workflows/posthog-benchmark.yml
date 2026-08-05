@@ -30,6 +30,11 @@ on:
         required: false
         type: string
         default: ""
+      runner_label:
+        description: "Optional amd64 runner label for a manual main-branch experiment."
+        required: false
+        type: string
+        default: ""
   push:
     branches:
       - main
@@ -40,9 +45,9 @@ on:
     paths:
       - ".boringcache.toml"
       - ".gitmodules"
+      - ".github/actions/posthog-docker-benchmark/**"
       - ".github/workflows/posthog-benchmark.yml"
       - ".github/workflows/posthog-fresh-benchmark.yml"
-      - ".github/workflows/reusable-posthog-docker-benchmark.yml"
       - "README.md"
       - "scripts/**"
       - "upstream"
@@ -56,70 +61,167 @@ permissions:
   actions: write
   packages: read
 
+env:
+  BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+  BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+  BORINGCACHE_NO_GIT: "true"
+
 jobs:
-  benchmark:
-    name: ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: GHA / amd64
-            strategy: actions-cache
-            benchmark_id: posthog
-            runner_label: ubuntu-latest-8-cores
-            platform: linux/amd64
-            docker_tool_cache: false
-            mountcache: false
-            no_cache: false
-            run_on_pull_request: true
-          - name: BC / amd64
-            strategy: boringcache
-            benchmark_id: posthog
-            runner_label: ubuntu-latest-8-cores
-            platform: linux/amd64
-            docker_tool_cache: false
-            mountcache: false
-            no_cache: false
-            run_on_pull_request: true
-          - name: BC + Turbo / amd64
-            strategy: boringcache
-            benchmark_id: posthog-toolcache
-            runner_label: ubuntu-latest-8-cores
-            platform: linux/amd64
-            docker_tool_cache: true
-            mountcache: false
-            no_cache: false
-            run_on_pull_request: true
-          - name: BC + mount cache / amd64
-            strategy: boringcache
-            benchmark_id: posthog-mountcache
-            runner_label: ubuntu-latest-8-cores
-            platform: linux/amd64
-            docker_tool_cache: false
-            mountcache: true
-            no_cache: true
-            run_on_pull_request: false
-          - name: BC / arm64
-            strategy: boringcache
-            benchmark_id: posthog
-            runner_label: ubuntu-24.04-arm
-            platform: linux/arm64
-            docker_tool_cache: false
-            mountcache: false
-            no_cache: false
-            run_on_pull_request: false
-    uses: ./.github/workflows/reusable-posthog-docker-benchmark.yml
-    with:
-      enabled: ${{ github.event_name != 'pull_request' || matrix.run_on_pull_request }}
-      strategy: ${{ matrix.strategy }}
-      cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
-      benchmark_id: ${{ format('{0}{1}', matrix.benchmark_id, inputs.benchmark_id_suffix) }}
-      runner_label: ${{ matrix.runner_label }}
-      platform: ${{ matrix.platform }}
-      docker_tool_cache: ${{ matrix.docker_tool_cache }}
-      mountcache: ${{ matrix.mountcache }}
-      no_cache: ${{ matrix.no_cache }}
-      cli_version: ${{ inputs.cli_version }}
-      buildkit_image: ${{ matrix.platform == 'linux/arm64' && (inputs.buildkit_image_arm64 || inputs.buildkit_image) || inputs.buildkit_image }}
-      upstream_ref: ${{ inputs.upstream_ref }}
-    secrets: inherit
+  gha-amd64:
+    name: GitHub Actions amd64 ${{ github.event_name == 'pull_request' && 'cold' || 'commit' }}
+    if: inputs.runner_label == '' || github.ref_name == 'main'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: actions-cache
+          phase: publish
+          cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          upstream_ref: ${{ inputs.upstream_ref }}
+
+  gha-amd64-warm:
+    name: GitHub Actions amd64 warm
+    needs: gha-amd64
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: actions-cache
+          phase: warm
+          cache_lane: fresh
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          upstream_ref: ${{ inputs.upstream_ref }}
+          cache_scope: ${{ needs.gha-amd64.outputs.cache_scope }}
+
+  boringcache-amd64:
+    name: BoringCache amd64 ${{ github.event_name == 'pull_request' && 'cold' || 'commit' }}
+    if: inputs.runner_label == '' || github.ref_name == 'main'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: publish
+          cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}
+
+  boringcache-amd64-warm:
+    name: BoringCache amd64 warm
+    needs: boringcache-amd64
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: warm
+          cache_lane: fresh
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}
+          cache_scope: ${{ needs.boringcache-amd64.outputs.cache_scope }}
+
+  boringcache-turbo-amd64:
+    name: BoringCache Turbo amd64 ${{ github.event_name == 'pull_request' && 'cold' || 'commit' }}
+    if: inputs.runner_label == '' || github.ref_name == 'main'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: publish
+          cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
+          benchmark_id: ${{ format('posthog-toolcache{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          docker_tool_cache: "true"
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}
+
+  boringcache-turbo-amd64-warm:
+    name: BoringCache Turbo amd64 warm
+    needs: boringcache-turbo-amd64
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: warm
+          cache_lane: fresh
+          benchmark_id: ${{ format('posthog-toolcache{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          docker_tool_cache: "true"
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}
+          cache_scope: ${{ needs.boringcache-turbo-amd64.outputs.cache_scope }}
+
+  boringcache-mountcache-amd64:
+    name: BoringCache mount cache amd64 commit
+    if: github.event_name != 'pull_request' && (inputs.runner_label == '' || github.ref_name == 'main')
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: publish
+          cache_lane: rolling
+          benchmark_id: ${{ format('posthog-mountcache{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          mountcache: "true"
+          no_cache: "true"
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}
+
+  boringcache-arm64:
+    name: BoringCache arm64 commit
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: publish
+          cache_lane: rolling
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/arm64
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image_arm64 || inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}

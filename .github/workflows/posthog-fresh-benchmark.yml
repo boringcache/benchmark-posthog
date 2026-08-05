@@ -1,6 +1,6 @@
 name: "PostHog Fresh"
 run-name: >-
-  ${{ format('Benchmark {0} | {1}', inputs.cli_version != '' && 'Canary' || 'Fresh', github.event_name == 'schedule' && 'Weekly' || format('Manual dispatch ({0})', github.ref_name)) }}
+  ${{ format('Benchmark {0} | {1}', github.event_name == 'pull_request' && 'Validation' || inputs.cli_version != '' && 'Canary' || 'Fresh', github.event_name == 'schedule' && 'Weekly' || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name)) }}
 
 on:
   workflow_dispatch:
@@ -27,6 +27,16 @@ on:
         default: ""
   schedule:
     - cron: "0 3 * * 3"
+  pull_request:
+    paths:
+      - ".boringcache.toml"
+      - ".gitmodules"
+      - ".github/actions/posthog-docker-benchmark/**"
+      - ".github/workflows/posthog-benchmark.yml"
+      - ".github/workflows/posthog-fresh-benchmark.yml"
+      - "README.md"
+      - "scripts/**"
+      - "upstream"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -114,3 +124,43 @@ jobs:
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image }}
           cache_scope: ${{ needs.boringcache-cold.outputs.cache_scope }}
+
+  boringcache-turbo-cold:
+    name: BoringCache Turbo amd64 cold
+    if: inputs.runner_label == '' || github.ref_name == 'main'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: publish
+          cache_lane: fresh
+          benchmark_id: ${{ format('posthog-toolcache{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          docker_tool_cache: "true"
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+
+  boringcache-turbo-warm:
+    name: BoringCache Turbo amd64 warm
+    needs: boringcache-turbo-cold
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: warm
+          cache_lane: fresh
+          benchmark_id: ${{ format('posthog-toolcache{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          docker_tool_cache: "true"
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          cache_scope: ${{ needs.boringcache-turbo-cold.outputs.cache_scope }}

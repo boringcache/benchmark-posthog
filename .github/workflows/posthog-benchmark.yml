@@ -101,7 +101,7 @@ jobs:
             run_on_pull_request: false
           - name: BC / arm64
             strategy: boringcache
-            benchmark_id: arm-posthog
+            benchmark_id: posthog
             runner_label: ubuntu-24.04-arm
             platform: linux/arm64
             docker_tool_cache: false

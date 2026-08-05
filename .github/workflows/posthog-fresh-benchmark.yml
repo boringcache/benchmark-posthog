@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: ""
+      runner_label:
+        description: "Optional runner label for a manual main-branch experiment."
+        required: false
+        type: string
+        default: ""
   schedule:
     - cron: "0 3 * * 3"
 
@@ -32,24 +37,80 @@ permissions:
   actions: write
   packages: read
 
+env:
+  BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+  BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+  BORINGCACHE_NO_GIT: "true"
+
 jobs:
-  benchmark:
-    name: ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: GHA / amd64
-            strategy: actions-cache
-          - name: BC / amd64
-            strategy: boringcache
-    uses: ./.github/workflows/reusable-posthog-docker-benchmark.yml
-    with:
-      strategy: ${{ matrix.strategy }}
-      cache_lane: fresh
-      benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
-      runner_label: ubuntu-latest-8-cores
-      platform: linux/amd64
-      cli_version: ${{ inputs.cli_version }}
-      buildkit_image: ${{ inputs.buildkit_image }}
-    secrets: inherit
+  gha-cold:
+    name: GitHub Actions amd64 cold
+    if: inputs.runner_label == '' || github.ref_name == 'main'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: actions-cache
+          phase: publish
+          cache_lane: fresh
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+
+  gha-warm:
+    name: GitHub Actions amd64 warm
+    needs: gha-cold
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: actions-cache
+          phase: warm
+          cache_lane: fresh
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          cache_scope: ${{ needs.gha-cold.outputs.cache_scope }}
+
+  boringcache-cold:
+    name: BoringCache amd64 cold
+    if: inputs.runner_label == '' || github.ref_name == 'main'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: publish
+          cache_lane: fresh
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+
+  boringcache-warm:
+    name: BoringCache amd64 warm
+    needs: boringcache-cold
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: warm
+          cache_lane: fresh
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          platform: linux/amd64
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          cache_scope: ${{ needs.boringcache-cold.outputs.cache_scope }}

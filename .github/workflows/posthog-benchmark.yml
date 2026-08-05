@@ -1,6 +1,7 @@
 name: "PostHog Benchmark"
 run-name: >-
   ${{ format('Benchmark {0} | {1}', github.event_name == 'pull_request' && 'Validation' || 'Rolling', github.event_name == 'push' && 'Upstream update' || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name)) }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -15,66 +16,20 @@ on:
         type: string
         default: ""
       cli_version:
-        description: "Exact BoringCache CLI release tag used by rolling lanes."
+        description: "Optional exact BoringCache CLI release tag."
         required: false
         type: string
-        default: "v1.16.4"
+        default: ""
       benchmark_id_suffix:
-        description: "Optional suffix appended to built-in benchmark/cache scopes for isolated comparison runs."
+        description: "Optional suffix for isolated comparison runs."
         required: false
         type: string
         default: ""
-      cache_scope_ref_slug:
-        description: "Optional cache-scope ref slug to replay against, for example main."
-        required: false
-        type: string
-        default: ""
-      build_mode:
-        description: "Benchmark script mode for BoringCache lanes."
-        required: false
-        type: choice
-        default: full
-        options:
-          - full
-          - partial-warm
-      turbo_cache_mounts:
-        description: "Patch the prepared PostHog Dockerfile to mount Turbo cache directories."
-        required: false
-        type: boolean
-        default: false
-      force_turbo_exec:
-        description: "Force PostHog Turbo stages to execute while keeping source inputs stable, useful for tool-cache canary probes."
-        required: false
-        type: boolean
-        default: false
       upstream_ref:
-        description: "Optional PostHog ref/SHA to benchmark instead of the pinned upstream submodule commit."
+        description: "Optional PostHog ref or SHA instead of the pinned submodule commit."
         required: false
         type: string
         default: ""
-      lane_filter:
-        description: "Optional manual-dispatch lane filter."
-        required: false
-        type: choice
-        default: all
-        options:
-          - all
-          - boringcache
-          - mountcache
-      runner_label:
-        description: "Optional native runner label override. It must match the selected platform; empty uses the benchmark defaults."
-        required: false
-        type: string
-        default: ""
-      platform_filter:
-        description: "Optional manual-dispatch platform filter."
-        required: false
-        type: choice
-        default: all
-        options:
-          - all
-          - amd64
-          - arm64
   push:
     branches:
       - main
@@ -83,16 +38,17 @@ on:
       - "upstream"
   pull_request:
     paths:
+      - ".boringcache.toml"
       - ".gitmodules"
-      - ".github/actions/docker-rolling-benchmark/**"
       - ".github/workflows/posthog-benchmark.yml"
+      - ".github/workflows/posthog-fresh-benchmark.yml"
+      - ".github/workflows/reusable-posthog-docker-benchmark.yml"
       - "README.md"
-      - "scenarios/**"
       - "scripts/**"
       - "upstream"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -101,176 +57,69 @@ permissions:
   packages: read
 
 jobs:
-  benchmark-contracts:
-    name: Benchmark contracts
-    if: ${{ github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout benchmark repo
-        uses: actions/checkout@v6
-
-      - name: Test mountcache evidence contract
-        shell: bash
-        run: ./scripts/test-assert-boringcache-mountcache-run.sh
-
-  docker-benchmark:
-    name: ${{ format('{0} {1}', matrix.lane.label, matrix.platform.label) }}
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
-    # Apply a manual runner override only to the matrix entries that will run.
-    # Disabled entries should use their cheap defaults and exit immediately.
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) && (inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && inputs.runner_label || matrix.platform.runner_label }}
-    timeout-minutes: 180
+  benchmark:
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - label: amd64
-            runner_label: ubuntu-latest
-            cli_platform: linux-amd64
-            docker_platform: linux/amd64
-            benchmark_id_prefix: ""
-            setup_qemu: false
-        lane:
-          - label: GHA
+        include:
+          - name: GHA / amd64
             strategy: actions-cache
             benchmark_id: posthog
-            dockerfile_path: upstream/Dockerfile
-            docker_tool_cache: ""
-            buildkit_mountcache_offloader: false
-            force_mountcache_exec: false
-            turbo_cache_mounts: false
-            lane_filter: all
+            runner_label: ubuntu-latest-8-cores
+            platform: linux/amd64
+            docker_tool_cache: false
+            mountcache: false
+            no_cache: false
             run_on_pull_request: true
-          - label: BoringCache
+          - name: BC / amd64
             strategy: boringcache
             benchmark_id: posthog
-            dockerfile_path: upstream/Dockerfile
-            # PostHog's Turbo build inputs omit frontend/public, so remote hits
-            # can restore stale static assets. Keep the graduated lane on the
-            # behavior-safe managed exporter defaults.
-            docker_tool_cache: ""
-            buildkit_mountcache_offloader: false
-            force_mountcache_exec: false
-            turbo_cache_mounts: false
-            lane_filter: boringcache
+            runner_label: ubuntu-latest-8-cores
+            platform: linux/amd64
+            docker_tool_cache: false
+            mountcache: false
+            no_cache: false
             run_on_pull_request: true
-          - label: BoringCache + toolcache
+          - name: BC + Turbo / amd64
             strategy: boringcache
             benchmark_id: posthog-toolcache
-            dockerfile_path: upstream/Dockerfile
-            docker_tool_cache: turbo
-            buildkit_mountcache_offloader: false
-            force_mountcache_exec: false
-            turbo_cache_mounts: false
-            lane_filter: boringcache
+            runner_label: ubuntu-latest-8-cores
+            platform: linux/amd64
+            docker_tool_cache: true
+            mountcache: false
+            no_cache: false
             run_on_pull_request: true
-          - label: BoringCache + mountcache
+          - name: BC + mount cache / amd64
             strategy: boringcache
             benchmark_id: posthog-mountcache
-            dockerfile_path: upstream/Dockerfile
-            docker_tool_cache: ""
-            buildkit_mountcache_offloader: true
-            # Keep the lane focused and provable: node-scripts-build contains a
-            # pnpm cache mount and is cheaper to re-run than frontend-build.
-            force_mountcache_exec: true
-            turbo_cache_mounts: false
-            lane_filter: mountcache
+            runner_label: ubuntu-latest-8-cores
+            platform: linux/amd64
+            docker_tool_cache: false
+            mountcache: true
+            no_cache: true
             run_on_pull_request: false
-        include:
-          - platform:
-              label: arm64
-              runner_label: ubuntu-24.04-arm
-              cli_platform: linux-arm64
-              docker_platform: linux/arm64
-              benchmark_id_prefix: arm-
-              setup_qemu: false
-            lane:
-              label: BoringCache
-              strategy: boringcache
-              benchmark_id: posthog
-              dockerfile_path: upstream/Dockerfile
-              # Keep ARM behavior-identical to AMD; see the lane above.
-              docker_tool_cache: ""
-              buildkit_mountcache_offloader: false
-              force_mountcache_exec: false
-              turbo_cache_mounts: false
-              lane_filter: boringcache
-              run_on_pull_request: false
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-      BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
-      BORINGCACHE_GHCR_READ_USER: ${{ vars.BORINGCACHE_GHCR_READ_USER || github.actor }}
-      BORINGCACHE_GHCR_READ_TOKEN: ${{ secrets.BORINGCACHE_GHCR_READ_TOKEN }}
-      BORINGCACHE_STORAGE_RANGE_RESCUE_SEGMENT_MB: ${{ vars.BORINGCACHE_STORAGE_RANGE_RESCUE_SEGMENT_MB || '' }}
-      BUILDKIT_IMAGE: ${{ matrix.platform.cli_platform == 'linux-arm64' && (inputs.buildkit_image_arm64 || inputs.buildkit_image) || inputs.buildkit_image }}
-      BORINGCACHE_CLI_VERSION: ${{ inputs.cli_version || 'v1.16.4' }}
-    steps:
-      - name: Skip disabled lane
-        if: ${{ (github.event_name == 'pull_request' && !matrix.lane.run_on_pull_request) || (github.event_name == 'workflow_dispatch' && inputs.lane_filter != 'all' && inputs.lane_filter != matrix.lane.lane_filter) || (github.event_name == 'workflow_dispatch' && inputs.platform_filter != 'all' && inputs.platform_filter != matrix.platform.label) }}
-        shell: bash
-        run: |
-          echo "Skipping ${{ matrix.lane.label }} ${{ matrix.platform.label }} for this event/configuration."
-
-      - name: Validate native runner architecture
-        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
-        shell: bash
-        env:
-          CLI_PLATFORM: ${{ matrix.platform.cli_platform }}
-        run: |
-          case "${CLI_PLATFORM}:${RUNNER_ARCH}" in
-            linux-amd64:X64|linux-arm64:ARM64)
-              ;;
-            *)
-              echo "::error::Runner architecture ${RUNNER_ARCH} does not match ${CLI_PLATFORM}. Choose a native runner label for this platform."
-              exit 1
-              ;;
-          esac
-
-      - name: Checkout benchmark repo
-        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          submodules: false
-
-      - name: Free disk space
-        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
-        shell: bash
-        run: ./scripts/free-runner-disk.sh
-
-      - name: Set up QEMU for arm64 Docker builds
-        if: ${{ matrix.platform.setup_qemu && (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: ${{ format('{0} {1}', matrix.lane.label, matrix.platform.label) }}
-        if: ${{ (github.event_name != 'pull_request' || matrix.lane.run_on_pull_request) && (github.event_name != 'workflow_dispatch' || inputs.lane_filter == 'all' || inputs.lane_filter == matrix.lane.lane_filter) && (github.event_name != 'workflow_dispatch' || inputs.platform_filter == 'all' || inputs.platform_filter == matrix.platform.label) }}
-        uses: ./.github/actions/docker-rolling-benchmark
-        env:
-          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ matrix.lane.buildkit_mountcache_offloader && '1' || '' }}
-        with:
-          strategy: ${{ matrix.lane.strategy }}
-          buildkit_mountcache_offloader: ${{ matrix.lane.buildkit_mountcache_offloader }}
-          build_mode: ${{ inputs.build_mode || 'full' }}
-          cache_scope_ref_slug: ${{ inputs.cache_scope_ref_slug }}
-          turbo_cache_mounts: ${{ matrix.lane.turbo_cache_mounts && 'true' || 'false' }}
-          buildkit_image: ${{ env.BUILDKIT_IMAGE }}
-          benchmark_id: ${{ format('{0}{1}{2}', matrix.platform.benchmark_id_prefix, matrix.lane.benchmark_id, inputs.benchmark_id_suffix) }}
-          docker_platform: ${{ matrix.platform.docker_platform }}
-          docker_build_args: |-
-            ${{ inputs.force_turbo_exec && '--no-cache-filter' || '' }}
-            ${{ inputs.force_turbo_exec && 'frontend-build' || '' }}
-            ${{ (inputs.force_turbo_exec || matrix.lane.force_mountcache_exec) && '--no-cache-filter' || '' }}
-            ${{ (inputs.force_turbo_exec || matrix.lane.force_mountcache_exec) && 'node-scripts-build' || '' }}
-          project_repo: PostHog/posthog
-          project_ref: ${{ inputs.upstream_ref }}
-          dockerfile_path: ${{ matrix.lane.dockerfile_path }}
-          docker_context: upstream
-          image_tag: posthog-benchmark:latest
-          cli_platform: ${{ matrix.platform.cli_platform }}
-          cli_version: ${{ env.BORINGCACHE_CLI_VERSION }}
-          benchmark_workspace: ${{ github.repository }}
-          docker_tool_cache: ${{ matrix.lane.docker_tool_cache }}
+          - name: BC / arm64
+            strategy: boringcache
+            benchmark_id: arm-posthog
+            runner_label: ubuntu-24.04-arm
+            platform: linux/arm64
+            docker_tool_cache: false
+            mountcache: false
+            no_cache: false
+            run_on_pull_request: false
+    uses: ./.github/workflows/reusable-posthog-docker-benchmark.yml
+    with:
+      enabled: ${{ github.event_name != 'pull_request' || matrix.run_on_pull_request }}
+      strategy: ${{ matrix.strategy }}
+      cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
+      benchmark_id: ${{ format('{0}{1}', matrix.benchmark_id, inputs.benchmark_id_suffix) }}
+      runner_label: ${{ matrix.runner_label }}
+      platform: ${{ matrix.platform }}
+      docker_tool_cache: ${{ matrix.docker_tool_cache }}
+      mountcache: ${{ matrix.mountcache }}
+      no_cache: ${{ matrix.no_cache }}
+      cli_version: ${{ inputs.cli_version }}
+      buildkit_image: ${{ matrix.platform == 'linux/arm64' && (inputs.buildkit_image_arm64 || inputs.buildkit_image) || inputs.buildkit_image }}
+      upstream_ref: ${{ inputs.upstream_ref }}
+    secrets: inherit

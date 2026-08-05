@@ -1,6 +1,6 @@
 name: "PostHog Benchmark"
 run-name: >-
-  ${{ format('Benchmark {0} | {1}', github.event_name == 'pull_request' && 'Validation' || 'Rolling', github.event_name == 'push' && 'Upstream update' || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name)) }}
+  ${{ format('Benchmark {0} | {1}', inputs.cli_version != '' && 'Canary' || 'Rolling', github.event_name == 'push' && 'Upstream update' || format('Manual dispatch ({0})', github.ref_name)) }}
 
 on:
   workflow_dispatch:
@@ -41,16 +41,6 @@ on:
     paths:
       - ".gitmodules"
       - "upstream"
-  pull_request:
-    paths:
-      - ".boringcache.toml"
-      - ".gitmodules"
-      - ".github/actions/posthog-docker-benchmark/**"
-      - ".github/workflows/posthog-benchmark.yml"
-      - ".github/workflows/posthog-fresh-benchmark.yml"
-      - "README.md"
-      - "scripts/**"
-      - "upstream"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -68,7 +58,7 @@ env:
 
 jobs:
   gha-amd64:
-    name: GitHub Actions amd64 ${{ github.event_name == 'pull_request' && 'cold' || 'commit' }}
+    name: GitHub Actions amd64 commit
     if: inputs.runner_label == '' || github.ref_name == 'main'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
     timeout-minutes: 180
@@ -81,31 +71,13 @@ jobs:
         with:
           strategy: actions-cache
           phase: publish
-          cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
+          cache_lane: rolling
           benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
           platform: linux/amd64
           upstream_ref: ${{ inputs.upstream_ref }}
-
-  gha-amd64-warm:
-    name: GitHub Actions amd64 warm
-    needs: gha-amd64
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/posthog-docker-benchmark
-        with:
-          strategy: actions-cache
-          phase: warm
-          cache_lane: fresh
-          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
-          platform: linux/amd64
-          upstream_ref: ${{ inputs.upstream_ref }}
-          cache_scope: ${{ needs.gha-amd64.outputs.cache_scope }}
 
   boringcache-amd64:
-    name: BoringCache amd64 ${{ github.event_name == 'pull_request' && 'cold' || 'commit' }}
+    name: BoringCache amd64 commit
     if: inputs.runner_label == '' || github.ref_name == 'main'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
     timeout-minutes: 180
@@ -118,35 +90,15 @@ jobs:
         with:
           strategy: boringcache
           phase: publish
-          cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
+          cache_lane: rolling
           benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
           platform: linux/amd64
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image }}
           upstream_ref: ${{ inputs.upstream_ref }}
-
-  boringcache-amd64-warm:
-    name: BoringCache amd64 warm
-    needs: boringcache-amd64
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/posthog-docker-benchmark
-        with:
-          strategy: boringcache
-          phase: warm
-          cache_lane: fresh
-          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
-          platform: linux/amd64
-          cli_version: ${{ inputs.cli_version }}
-          buildkit_image: ${{ inputs.buildkit_image }}
-          upstream_ref: ${{ inputs.upstream_ref }}
-          cache_scope: ${{ needs.boringcache-amd64.outputs.cache_scope }}
 
   boringcache-turbo-amd64:
-    name: BoringCache Turbo amd64 ${{ github.event_name == 'pull_request' && 'cold' || 'commit' }}
+    name: BoringCache Turbo amd64 commit
     if: inputs.runner_label == '' || github.ref_name == 'main'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
     timeout-minutes: 180
@@ -159,38 +111,17 @@ jobs:
         with:
           strategy: boringcache
           phase: publish
-          cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
+          cache_lane: rolling
           benchmark_id: ${{ format('posthog-toolcache{0}', inputs.benchmark_id_suffix) }}
           platform: linux/amd64
           docker_tool_cache: "true"
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image }}
           upstream_ref: ${{ inputs.upstream_ref }}
-
-  boringcache-turbo-amd64-warm:
-    name: BoringCache Turbo amd64 warm
-    needs: boringcache-turbo-amd64
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/posthog-docker-benchmark
-        with:
-          strategy: boringcache
-          phase: warm
-          cache_lane: fresh
-          benchmark_id: ${{ format('posthog-toolcache{0}', inputs.benchmark_id_suffix) }}
-          platform: linux/amd64
-          docker_tool_cache: "true"
-          cli_version: ${{ inputs.cli_version }}
-          buildkit_image: ${{ inputs.buildkit_image }}
-          upstream_ref: ${{ inputs.upstream_ref }}
-          cache_scope: ${{ needs.boringcache-turbo-amd64.outputs.cache_scope }}
 
   boringcache-mountcache-amd64:
     name: BoringCache mount cache amd64 commit
-    if: github.event_name != 'pull_request' && (inputs.runner_label == '' || github.ref_name == 'main')
+    if: inputs.runner_label == '' || github.ref_name == 'main'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
     timeout-minutes: 180
     steps:
@@ -210,7 +141,6 @@ jobs:
 
   boringcache-arm64:
     name: BoringCache arm64 commit
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 180
     steps:

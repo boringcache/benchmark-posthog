@@ -129,7 +129,6 @@ runs:
           --tag posthog-benchmark:latest \
           --cache-from "type=gha,scope=${CACHE_SCOPE}" \
           --cache-to "type=gha,scope=${CACHE_SCOPE},mode=max" \
-          --load \
           upstream
 
     - name: Publish with BoringCache
@@ -145,7 +144,7 @@ runs:
         image: posthog-benchmark
         tags: latest
         platforms: ${{ inputs.platform }}
-        load: true
+        load: false
         no-cache: ${{ inputs.no_cache }}
         docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
         fail-on-cache-error: true
@@ -167,7 +166,7 @@ runs:
         image: posthog-benchmark
         tags: latest
         platforms: ${{ inputs.platform }}
-        load: true
+        load: false
         no-cache: ${{ inputs.no_cache }}
         docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
         fail-on-cache-miss: true
@@ -176,7 +175,3 @@ runs:
         managed-buildkit-image: ${{ inputs.buildkit_image }}
       env:
         BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.mountcache == 'true' && '1' || '' }}
-
-    - name: Verify the PostHog image
-      shell: bash
-      run: docker image inspect posthog-benchmark:latest >/dev/null

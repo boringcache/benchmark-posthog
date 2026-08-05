@@ -108,7 +108,7 @@ git -C upstream checkout --detach a0598d99ea23845630262be50f940fd49ec3f5fb
 POSTHOG_BORINGBUILD_LANE=buildkit \
 POSTHOG_BORINGBUILD_SCOPE_SUFFIX=local-buildkit-mountcache \
 BORINGCACHE_OBSERVABILITY_JSONL_PATH=/tmp/posthog-buildkit-mountcache.jsonl \
-./scripts/run-boringbuild-docker-lane.sh full
+gh workflow run posthog-benchmark.yml --ref main
 ```
 
 Until BuildKit emits vertex-demand events, this only proves the high-level behavior.

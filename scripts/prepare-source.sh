@@ -9,9 +9,6 @@ git -C "${repo_root}/upstream" clean -fdx
 
 case "${scenario}" in
   base|warm1)
-    if [[ "${POSTHOG_TURBO_CACHE_MOUNTS:-}" == "1" ]]; then
-      git -C "${repo_root}/upstream" apply --unidiff-zero "${repo_root}/scenarios/posthog-turbo-cache-mounts.patch"
-    fi
     ;;
   *)
     echo "Unknown scenario: ${scenario}" >&2

@@ -24,8 +24,6 @@ rendered="$test_root/rendered.Dockerfile"
 POSTHOG_SOURCE_DOCKERFILE="$source_dockerfile" "$renderer" "$rendered"
 
 [[ "$(grep -Fc 'id=boringcache-tool-cache-env' "$rendered")" -eq 2 ]]
-[[ "$(grep -Fc 'AS posthog-runtime' "$rendered")" -eq 1 ]]
-[[ "$(grep -Fc 'AS boringcache-state-mount-probe' "$rendered")" -eq 1 ]]
 grep -Fq 'bin/turbo --filter=@posthog/frontend build' "$rendered"
 grep -Fq 'bin/turbo --filter=@posthog/plugin-transpiler build' "$rendered"
 

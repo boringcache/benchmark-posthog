@@ -1,0 +1,241 @@
+name: "Reusable PostHog Docker Benchmark"
+
+on:
+  workflow_call:
+    inputs:
+      enabled:
+        required: false
+        type: boolean
+        default: true
+      strategy:
+        required: true
+        type: string
+      cache_lane:
+        required: true
+        type: string
+      benchmark_id:
+        required: true
+        type: string
+      runner_label:
+        required: true
+        type: string
+      platform:
+        required: true
+        type: string
+      docker_tool_cache:
+        required: false
+        type: boolean
+        default: false
+      mountcache:
+        required: false
+        type: boolean
+        default: false
+      no_cache:
+        required: false
+        type: boolean
+        default: false
+      cli_version:
+        required: false
+        type: string
+        default: ""
+      buildkit_image:
+        required: false
+        type: string
+        default: ""
+      upstream_ref:
+        required: false
+        type: string
+        default: ""
+
+env:
+  BENCHMARK_ID: ${{ inputs.benchmark_id }}
+  CACHE_LANE: ${{ inputs.cache_lane }}
+  IMAGE: posthog-benchmark
+
+jobs:
+  publish:
+    name: ${{ inputs.cache_lane == 'rolling' && 'Commit' || 'Cold' }}
+    if: inputs.enabled
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.scope.outputs.cache_scope }}
+      dockerfile: ${{ steps.dockerfile.outputs.path }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+      - name: Free runner disk space
+        run: ./scripts/free-runner-disk.sh
+      - name: Checkout pinned PostHog source
+        env:
+          UPSTREAM_REF: ${{ inputs.upstream_ref }}
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+          if [[ -n "$UPSTREAM_REF" ]]; then
+            git -C upstream fetch --depth 1 origin "$UPSTREAM_REF"
+            git -C upstream checkout --detach FETCH_HEAD
+          fi
+      - name: Prepare clean PostHog source
+        run: ./scripts/prepare-source.sh base
+      - name: Prepare the product Dockerfile
+        id: dockerfile
+        env:
+          DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
+        run: |
+          set -euo pipefail
+          if [[ "$DOCKER_TOOL_CACHE" == "true" ]]; then
+            mkdir -p .benchmark
+            ./scripts/render-posthog-toolcache-dockerfile.sh .benchmark/PostHog.Dockerfile
+            echo "path=.benchmark/PostHog.Dockerfile" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=upstream/Dockerfile" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Select the cache cohort
+        id: scope
+        run: |
+          set -euo pipefail
+          ref_slug="$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9._-' '-')"
+          ref_slug="${ref_slug#-}"
+          ref_slug="${ref_slug%-}"
+          ref_slug="${ref_slug:-main}"
+          if [[ "$CACHE_LANE" == "rolling" ]]; then
+            cache_scope="${BENCHMARK_ID}-rolling-${ref_slug}"
+          else
+            cache_scope="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          fi
+          ./scripts/scope-boringcache-run.sh "$cache_scope"
+          echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
+      - name: Set up Buildx for the GitHub Actions comparison
+        if: inputs.strategy == 'actions-cache'
+        uses: docker/setup-buildx-action@v4
+      - name: Build with the GitHub Actions cache
+        if: inputs.strategy == 'actions-cache'
+        env:
+          CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
+          DOCKERFILE: ${{ steps.dockerfile.outputs.path }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          docker buildx build \
+            --file "$DOCKERFILE" \
+            --platform "$PLATFORM" \
+            --tag "${IMAGE}:latest" \
+            --cache-from "type=gha,scope=${CACHE_SCOPE}" \
+            --cache-to "type=gha,scope=${CACHE_SCOPE},mode=max" \
+            --load \
+            upstream
+      - name: Build with BoringCache
+        if: inputs.strategy == 'boringcache'
+        uses: boringcache/one@09e053620cda4d3472f26a3ddd181144a108e2c2 # v1.16.8
+        with:
+          cli-version: ${{ inputs.cli_version }}
+          setup: none
+          mode: docker
+          trust-policy: publish
+          context: upstream
+          dockerfile: ${{ steps.dockerfile.outputs.path }}
+          image: posthog-benchmark
+          tags: latest
+          platforms: ${{ inputs.platform }}
+          load: true
+          no-cache: ${{ inputs.no_cache }}
+          docker-tool-cache: ${{ inputs.docker_tool_cache && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
+          fail-on-cache-error: true
+          metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=${{ inputs.cache_lane == 'rolling' && 'rolling' || 'fresh-cold' }}
+          managed-buildkit-image: ${{ inputs.buildkit_image }}
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+          BORINGCACHE_NO_GIT: "true"
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.mountcache && '1' || '' }}
+      - name: Verify the PostHog image
+        run: docker image inspect "${IMAGE}:latest" >/dev/null
+
+  restore:
+    name: Warm
+    needs: publish
+    if: inputs.enabled && inputs.cache_lane == 'fresh'
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          submodules: false
+      - name: Free runner disk space
+        run: ./scripts/free-runner-disk.sh
+      - name: Checkout pinned PostHog source
+        env:
+          UPSTREAM_REF: ${{ inputs.upstream_ref }}
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+          if [[ -n "$UPSTREAM_REF" ]]; then
+            git -C upstream fetch --depth 1 origin "$UPSTREAM_REF"
+            git -C upstream checkout --detach FETCH_HEAD
+          fi
+      - name: Prepare clean PostHog source
+        run: ./scripts/prepare-source.sh warm1
+      - name: Prepare the product Dockerfile
+        id: dockerfile
+        env:
+          DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
+        run: |
+          set -euo pipefail
+          if [[ "$DOCKER_TOOL_CACHE" == "true" ]]; then
+            mkdir -p .benchmark
+            ./scripts/render-posthog-toolcache-dockerfile.sh .benchmark/PostHog.Dockerfile
+            echo "path=.benchmark/PostHog.Dockerfile" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=upstream/Dockerfile" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Select the published cache cohort
+        run: ./scripts/scope-boringcache-run.sh "${{ needs.publish.outputs.cache_scope }}"
+      - name: Set up Buildx for the GitHub Actions comparison
+        if: inputs.strategy == 'actions-cache'
+        uses: docker/setup-buildx-action@v4
+      - name: Build with the exact GitHub Actions cache
+        if: inputs.strategy == 'actions-cache'
+        env:
+          CACHE_SCOPE: ${{ needs.publish.outputs.cache_scope }}
+          DOCKERFILE: ${{ steps.dockerfile.outputs.path }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          docker buildx build \
+            --file "$DOCKERFILE" \
+            --platform "$PLATFORM" \
+            --tag "${IMAGE}:latest" \
+            --cache-from "type=gha,scope=${CACHE_SCOPE}" \
+            --cache-to "type=gha,scope=${CACHE_SCOPE},mode=max" \
+            --load \
+            upstream
+      - name: Restore the exact BoringCache Docker cache
+        if: inputs.strategy == 'boringcache'
+        uses: boringcache/one@09e053620cda4d3472f26a3ddd181144a108e2c2 # v1.16.8
+        with:
+          cli-version: ${{ inputs.cli_version }}
+          setup: none
+          mode: docker
+          trust-policy: restore
+          context: upstream
+          dockerfile: ${{ steps.dockerfile.outputs.path }}
+          image: posthog-benchmark
+          tags: latest
+          platforms: ${{ inputs.platform }}
+          load: true
+          no-cache: ${{ inputs.no_cache }}
+          docker-tool-cache: ${{ inputs.docker_tool_cache && format('turbo:{0}-turbo', needs.publish.outputs.cache_scope) || '' }}
+          fail-on-cache-miss: true
+          fail-on-cache-error: true
+          metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=fresh-warm
+          managed-buildkit-image: ${{ inputs.buildkit_image }}
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_NO_GIT: "true"
+          BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.mountcache && '1' || '' }}
+      - name: Verify the restored PostHog image
+        run: docker image inspect "${IMAGE}:latest" >/dev/null

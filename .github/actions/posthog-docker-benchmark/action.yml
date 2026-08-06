@@ -46,6 +46,10 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Start the workflow timer
+      id: workflow_timer
+      shell: bash
+      run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
     - name: Free runner disk space
       shell: bash
       run: ./scripts/free-runner-disk.sh
@@ -92,6 +96,7 @@ runs:
         CACHE_LANE: ${{ inputs.cache_lane }}
         PHASE: ${{ inputs.phase }}
         PUBLISHED_SCOPE: ${{ inputs.cache_scope }}
+        PLATFORM: ${{ inputs.platform }}
       run: |
         set -euo pipefail
         if [[ "$PHASE" == "warm" ]]; then
@@ -110,11 +115,34 @@ runs:
         fi
         ./scripts/scope-boringcache-run.sh "$cache_scope"
         echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
-
+        source_url="$(git config -f .gitmodules submodule.upstream.url)"
+        echo "source_repository=$(printf '%s' "${source_url#https://github.com/}" | sed 's/\.git$//')" >> "$GITHUB_OUTPUT"
+        echo "source_sha=$(git -C upstream rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        if [[ "$PLATFORM" == "linux/amd64" ]]; then
+          echo "variant=" >> "$GITHUB_OUTPUT"
+          echo "variant_suffix=" >> "$GITHUB_OUTPUT"
+        else
+          echo "variant=${PLATFORM}" >> "$GITHUB_OUTPUT"
+          echo "variant_suffix=-$(printf '%s' "$PLATFORM" | tr '/' '-')" >> "$GITHUB_OUTPUT"
+        fi
+    - name: Start the provider setup timer
+      id: setup_timer
+      shell: bash
+      run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
     - name: Set up Buildx for the GitHub Actions comparison
       if: inputs.strategy == 'actions-cache'
       uses: docker/setup-buildx-action@v4
 
+    - name: Start the build timer
+      id: build_timer
+      shell: bash
+      env:
+        SETUP_STARTED_AT: ${{ steps.setup_timer.outputs.started_at }}
+      run: |
+        set -euo pipefail
+        now="$(date +%s)"
+        echo "setup_seconds=$(( now - SETUP_STARTED_AT ))" >> "$GITHUB_OUTPUT"
+        echo "started_at=${now}" >> "$GITHUB_OUTPUT"
     - name: Build with the GitHub Actions cache
       if: inputs.strategy == 'actions-cache'
       uses: docker/build-push-action@v6
@@ -128,6 +156,7 @@ runs:
         cache-to: type=gha,scope=${{ steps.scope.outputs.cache_scope }},mode=max
 
     - name: Publish with BoringCache
+      id: publish
       if: inputs.strategy == 'boringcache' && inputs.phase == 'publish'
       uses: boringcache/one@b372edd91cda127cb03c64967df35c3836d47f2a # v1 / 1.17.0
       with:
@@ -150,6 +179,7 @@ runs:
         BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.mountcache == 'true' && '1' || '' }}
 
     - name: Restore with BoringCache
+      id: restore
       if: inputs.strategy == 'boringcache' && inputs.phase == 'warm'
       uses: boringcache/one@b372edd91cda127cb03c64967df35c3836d47f2a # v1 / 1.17.0
       with:
@@ -171,3 +201,52 @@ runs:
         managed-buildkit-image: ${{ inputs.buildkit_image }}
       env:
         BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.mountcache == 'true' && '1' || '' }}
+    - name: Capture the build timing
+      id: build_timing
+      shell: bash
+      env:
+        BUILD_STARTED_AT: ${{ steps.build_timer.outputs.started_at }}
+      run: echo "build_seconds=$(( $(date +%s) - BUILD_STARTED_AT ))" >> "$GITHUB_OUTPUT"
+    - name: Write the benchmark phase evidence
+      shell: bash
+      env:
+        BENCHMARK_ID: ${{ inputs.benchmark_id }}
+        STRATEGY: ${{ inputs.strategy }}
+        CACHE_LANE: ${{ inputs.cache_lane }}
+        REPORT_PHASE: ${{ inputs.cache_lane == 'rolling' && 'commit' || inputs.phase == 'warm' && 'warm' || 'cold' }}
+        REPORT_VARIANT: ${{ steps.scope.outputs.variant }}
+        WORKFLOW_STARTED_AT: ${{ steps.workflow_timer.outputs.started_at }}
+        SETUP_SECONDS: ${{ steps.build_timer.outputs.setup_seconds }}
+        BUILD_SECONDS: ${{ steps.build_timing.outputs.build_seconds }}
+        CACHE_HIT: ${{ steps.publish.outputs.cache-hit || steps.restore.outputs.cache-hit }}
+        CACHE_IMPORT_READY: ${{ steps.publish.outputs.docker-cache-import-ready || steps.restore.outputs.docker-cache-import-ready }}
+        CACHE_TAG: ${{ steps.publish.outputs.cache-tag || steps.restore.outputs.cache-tag }}
+        CACHE_WORKSPACE: ${{ steps.publish.outputs.workspace || steps.restore.outputs.workspace }}
+        EVIDENCE_PATH: ${{ steps.publish.outputs.evidence-path || steps.restore.outputs.evidence-path }}
+        SOURCE_REPOSITORY: ${{ steps.scope.outputs.source_repository }}
+        SOURCE_SHA: ${{ steps.scope.outputs.source_sha }}
+      run: |
+        set -euo pipefail
+        python3 ./scripts/benchmark-report.py phase \
+          --benchmark "$BENCHMARK_ID" \
+          --strategy "$STRATEGY" \
+          --lane "$CACHE_LANE" \
+          --phase "$REPORT_PHASE" \
+          --mode docker \
+          --variant "$REPORT_VARIANT" \
+          --restore-or-setup-seconds "$SETUP_SECONDS" \
+          --workflow-seconds "$(( $(date +%s) - WORKFLOW_STARTED_AT ))" \
+          --build-seconds "$BUILD_SECONDS" \
+          --cache-hit "$CACHE_HIT" \
+          --cache-import-ready "$CACHE_IMPORT_READY" \
+          --cache-tag "$CACHE_TAG" \
+          --workspace "$CACHE_WORKSPACE" \
+          --source-repository "$SOURCE_REPOSITORY" \
+          --source-sha "$SOURCE_SHA" \
+          --evidence "$EVIDENCE_PATH"
+    - name: Retain the benchmark phase evidence
+      uses: actions/upload-artifact@v6
+      with:
+        name: phase-${{ inputs.benchmark_id }}-${{ inputs.strategy }}${{ steps.scope.outputs.variant_suffix }}-${{ inputs.cache_lane }}-${{ inputs.cache_lane == 'rolling' && 'commit' || inputs.phase == 'warm' && 'warm' || 'cold' }}
+        path: benchmark-results/
+        if-no-files-found: error

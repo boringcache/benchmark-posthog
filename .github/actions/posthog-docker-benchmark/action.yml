@@ -233,6 +233,7 @@ runs:
         BUILD_SECONDS: ${{ steps.build_timing.outputs.build_seconds }}
         CACHE_HIT: ${{ steps.publish.outputs.cache-hit || steps.restore.outputs.cache-hit }}
         CACHE_IMPORT_READY: ${{ steps.publish.outputs.docker-cache-import-ready || steps.restore.outputs.docker-cache-import-ready }}
+        CACHE_IMPORT_REFS: ${{ steps.publish.outputs.docker-cache-from-refs || steps.restore.outputs.docker-cache-from-refs }}
         CACHE_TAG: ${{ steps.publish.outputs.cache-tag || steps.restore.outputs.cache-tag }}
         CACHE_WORKSPACE: ${{ steps.publish.outputs.workspace || steps.restore.outputs.workspace }}
         EVIDENCE_PATH: ${{ steps.publish.outputs.evidence-path || steps.restore.outputs.evidence-path }}
@@ -252,6 +253,7 @@ runs:
           --build-seconds "$BUILD_SECONDS" \
           --cache-hit "$CACHE_HIT" \
           --cache-import-ready "$CACHE_IMPORT_READY" \
+          --cache-import-refs "$CACHE_IMPORT_REFS" \
           --cache-tag "$CACHE_TAG" \
           --workspace "$CACHE_WORKSPACE" \
           --source-repository "$SOURCE_REPOSITORY" \

@@ -117,19 +117,15 @@ runs:
 
     - name: Build with the GitHub Actions cache
       if: inputs.strategy == 'actions-cache'
-      shell: bash
-      env:
-        CACHE_SCOPE: ${{ steps.scope.outputs.cache_scope }}
-        DOCKERFILE: ${{ steps.dockerfile.outputs.path }}
-        PLATFORM: ${{ inputs.platform }}
-      run: |
-        docker buildx build \
-          --file "$DOCKERFILE" \
-          --platform "$PLATFORM" \
-          --tag posthog-benchmark:latest \
-          --cache-from "type=gha,scope=${CACHE_SCOPE}" \
-          --cache-to "type=gha,scope=${CACHE_SCOPE},mode=max" \
-          upstream
+      uses: docker/build-push-action@v6
+      with:
+        context: upstream
+        file: ${{ steps.dockerfile.outputs.path }}
+        platforms: ${{ inputs.platform }}
+        tags: posthog-benchmark:latest
+        provenance: false
+        cache-from: type=gha,scope=${{ steps.scope.outputs.cache_scope }}
+        cache-to: type=gha,scope=${{ steps.scope.outputs.cache_scope }},mode=max
 
     - name: Publish with BoringCache
       if: inputs.strategy == 'boringcache' && inputs.phase == 'publish'

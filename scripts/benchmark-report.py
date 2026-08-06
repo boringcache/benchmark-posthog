@@ -58,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     phase.add_argument("--workflow-seconds", type=int, default=0)
     phase.add_argument("--cache-hit", default="")
     phase.add_argument("--cache-import-ready", default="")
+    phase.add_argument("--cache-import-refs", default="")
     phase.add_argument("--cache-tag", default="")
     phase.add_argument("--workspace", default="")
     phase.add_argument("--source-repository", default="")
@@ -151,6 +152,7 @@ def write_phase(args: argparse.Namespace) -> int:
         "cache": {
             "hit": cache_hit,
             "import_ready": import_ready,
+            "import_refs": len([ref for ref in args.cache_import_refs.splitlines() if ref.strip()]),
             "tag": args.cache_tag or None,
             "workspace": args.workspace or None,
             "storage_bytes": None,
@@ -209,6 +211,7 @@ def merge_lane(benchmark: str, strategy: str, lane: str, phases: list[dict[str, 
         payload["phase"]: {
             "cache_hit": payload["cache"]["hit"],
             "cache_import_ready": payload["cache"]["import_ready"],
+            "cache_import_refs": payload["cache"].get("import_refs"),
         }
         for payload in phases
     }
@@ -250,10 +253,28 @@ def format_delta(baseline: Any, candidate: Any) -> str:
     return f"{abs(change):.0f}% slower"
 
 
+IMPORT_MODES = ("docker", "buildkit")
+
+
+def imported(mode: str | None, observed: dict[str, Any]) -> bool:
+    if observed.get("cache_import_ready") is False:
+        return False
+    if mode in IMPORT_MODES:
+        return bool(observed.get("cache_import_refs"))
+    return observed.get("cache_hit") is not False
+
+
 def cache_state(payload: dict[str, Any]) -> str:
     cache = payload["cache"]
-    if cache["import_ready"] is False:
+    if cache.get("import_ready") is False:
         return "import not ready"
+    if payload.get("mode") in IMPORT_MODES:
+        refs = cache.get("import_refs")
+        if refs:
+            return f"imported {refs} ref{'s' if refs > 1 else ''}"
+        if refs == 0:
+            return "nothing to import"
+        return "not reported"
     if cache["hit"] is True:
         return "hit"
     if cache["hit"] is False:
@@ -352,7 +373,7 @@ def render_benchmark(
                 if before is None or after is None:
                     continue
                 observed = (candidate.get("phase_observations") or {}).get(phase_name, {})
-                if phase_name != "cold" and (observed.get("cache_hit") is False or observed.get("cache_import_ready") is False):
+                if phase_name != "cold" and not imported(candidate.get("mode"), observed):
                     lines.append(
                         f"- {PHASE_LABELS[phase_name]}: {PROVIDER_LABELS[CANDIDATE_STRATEGY]} found no cache to import, "
                         "so these timings are not like-for-like."

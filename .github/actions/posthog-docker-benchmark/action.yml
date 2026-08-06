@@ -13,6 +13,9 @@ inputs:
     required: true
   benchmark_id:
     required: true
+  push_image:
+    required: false
+    default: "false"
   platform:
     required: true
   docker_tool_cache:
@@ -126,7 +129,7 @@ runs:
           echo "variant_suffix=-$(printf '%s' "$PLATFORM" | tr '/' '-')" >> "$GITHUB_OUTPUT"
         fi
     - name: Log in to the GitHub Container Registry
-      if: github.event_name != 'pull_request'
+      if: inputs.push_image == 'true' && github.ref == 'refs/heads/main'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
@@ -158,7 +161,7 @@ runs:
         file: ${{ steps.dockerfile.outputs.path }}
         platforms: ${{ inputs.platform }}
         tags: ghcr.io/${{ github.repository_owner }}/posthog-benchmark:actions-cache
-        push: ${{ github.event_name != 'pull_request' }}
+        push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
         provenance: false
         cache-from: type=gha,scope=${{ steps.scope.outputs.cache_scope }}
         cache-to: type=gha,scope=${{ steps.scope.outputs.cache_scope }},mode=max
@@ -176,7 +179,7 @@ runs:
         dockerfile: ${{ steps.dockerfile.outputs.path }}
         image: ghcr.io/${{ github.repository_owner }}/posthog-benchmark
         tags: boringcache
-        push: ${{ github.event_name != 'pull_request' }}
+        push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
         platforms: ${{ inputs.platform }}
         load: false
         no-cache: ${{ inputs.no_cache }}
@@ -200,7 +203,7 @@ runs:
         dockerfile: ${{ steps.dockerfile.outputs.path }}
         image: ghcr.io/${{ github.repository_owner }}/posthog-benchmark
         tags: boringcache
-        push: ${{ github.event_name != 'pull_request' }}
+        push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
         platforms: ${{ inputs.platform }}
         load: false
         no-cache: ${{ inputs.no_cache }}

@@ -73,6 +73,7 @@ jobs:
           phase: publish
           cache_lane: rolling
           benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
           platform: linux/amd64
           upstream_ref: ${{ inputs.upstream_ref }}
 
@@ -92,6 +93,7 @@ jobs:
           phase: publish
           cache_lane: rolling
           benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
           platform: linux/amd64
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image }}
@@ -113,6 +115,7 @@ jobs:
           phase: publish
           cache_lane: rolling
           benchmark_id: ${{ format('posthog-toolcache{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
           platform: linux/amd64
           docker_tool_cache: "true"
           cli_version: ${{ inputs.cli_version }}
@@ -132,6 +135,7 @@ jobs:
           phase: publish
           cache_lane: rolling
           benchmark_id: ${{ format('posthog-mountcache{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
           platform: linux/amd64
           mountcache: "true"
           no_cache: "true"
@@ -151,6 +155,7 @@ jobs:
           phase: publish
           cache_lane: rolling
           benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
           platform: linux/arm64
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image_arm64 || inputs.buildkit_image }}

@@ -155,3 +155,45 @@ jobs:
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image_arm64 || inputs.buildkit_image }}
           upstream_ref: ${{ inputs.upstream_ref }}
+  report:
+    name: PostHog Docker rolling report
+    needs: [gha-amd64, boringcache-amd64, boringcache-turbo-amd64, boringcache-mountcache-amd64, boringcache-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download the benchmark phase evidence
+        uses: actions/download-artifact@v6
+        with:
+          pattern: phase-*
+          path: phase-evidence
+      - name: Publish the PostHog Docker benchmark report
+        run: |
+          python3 ./scripts/benchmark-report.py summarize \
+            --title "PostHog Docker rolling benchmark" \
+            --input-dir phase-evidence \
+            --output-dir benchmark-results
+      - name: Retain the posthog BoringCache rolling result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog-boringcache-rolling
+          path: benchmark-results/posthog-boringcache-rolling.json
+          if-no-files-found: error
+      - name: Retain the posthog GitHub Actions rolling result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog-actions-cache-rolling
+          path: benchmark-results/posthog-actions-cache-rolling.json
+          if-no-files-found: error
+      - name: Retain the posthog-toolcache BoringCache rolling result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog-toolcache-boringcache-rolling
+          path: benchmark-results/posthog-toolcache-boringcache-rolling.json
+          if-no-files-found: error
+      - name: Retain the posthog-mountcache BoringCache rolling result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog-mountcache-boringcache-rolling
+          path: benchmark-results/posthog-mountcache-boringcache-rolling.json
+          if-no-files-found: error

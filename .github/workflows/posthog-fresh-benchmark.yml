@@ -164,3 +164,39 @@ jobs:
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image }}
           cache_scope: ${{ needs.boringcache-turbo-cold.outputs.cache_scope }}
+  report:
+    name: PostHog Docker fresh report
+    needs: [gha-warm, boringcache-warm, boringcache-turbo-warm]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download the benchmark phase evidence
+        uses: actions/download-artifact@v6
+        with:
+          pattern: phase-*
+          path: phase-evidence
+      - name: Publish the PostHog Docker benchmark report
+        run: |
+          python3 ./scripts/benchmark-report.py summarize \
+            --title "PostHog Docker fresh benchmark" \
+            --input-dir phase-evidence \
+            --output-dir benchmark-results
+      - name: Retain the posthog BoringCache fresh result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog-boringcache-fresh
+          path: benchmark-results/posthog-boringcache-fresh.json
+          if-no-files-found: error
+      - name: Retain the posthog GitHub Actions fresh result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog-actions-cache-fresh
+          path: benchmark-results/posthog-actions-cache-fresh.json
+          if-no-files-found: error
+      - name: Retain the posthog-toolcache BoringCache fresh result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog-toolcache-boringcache-fresh
+          path: benchmark-results/posthog-toolcache-boringcache-fresh.json
+          if-no-files-found: error

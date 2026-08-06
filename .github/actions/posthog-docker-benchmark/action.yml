@@ -125,6 +125,13 @@ runs:
           echo "variant=${PLATFORM}" >> "$GITHUB_OUTPUT"
           echo "variant_suffix=-$(printf '%s' "$PLATFORM" | tr '/' '-')" >> "$GITHUB_OUTPUT"
         fi
+    - name: Log in to the GitHub Container Registry
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
     - name: Start the provider setup timer
       id: setup_timer
       shell: bash
@@ -150,7 +157,8 @@ runs:
         context: upstream
         file: ${{ steps.dockerfile.outputs.path }}
         platforms: ${{ inputs.platform }}
-        tags: posthog-benchmark:latest
+        tags: ghcr.io/${{ github.repository_owner }}/posthog-benchmark:actions-cache
+        push: ${{ github.event_name != 'pull_request' }}
         provenance: false
         cache-from: type=gha,scope=${{ steps.scope.outputs.cache_scope }}
         cache-to: type=gha,scope=${{ steps.scope.outputs.cache_scope }},mode=max
@@ -166,8 +174,9 @@ runs:
         trust-policy: publish
         context: upstream
         dockerfile: ${{ steps.dockerfile.outputs.path }}
-        image: posthog-benchmark
-        tags: latest
+        image: ghcr.io/${{ github.repository_owner }}/posthog-benchmark
+        tags: boringcache
+        push: ${{ github.event_name != 'pull_request' }}
         platforms: ${{ inputs.platform }}
         load: false
         no-cache: ${{ inputs.no_cache }}
@@ -189,8 +198,9 @@ runs:
         trust-policy: restore
         context: upstream
         dockerfile: ${{ steps.dockerfile.outputs.path }}
-        image: posthog-benchmark
-        tags: latest
+        image: ghcr.io/${{ github.repository_owner }}/posthog-benchmark
+        tags: boringcache
+        push: ${{ github.event_name != 'pull_request' }}
         platforms: ${{ inputs.platform }}
         load: false
         no-cache: ${{ inputs.no_cache }}

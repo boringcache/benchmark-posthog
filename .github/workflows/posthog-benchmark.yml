@@ -49,7 +49,7 @@ concurrency:
 permissions:
   contents: read
   actions: write
-  packages: read
+  packages: write
 
 env:
   BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}

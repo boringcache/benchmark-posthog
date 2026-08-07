@@ -156,6 +156,9 @@ runs:
     - name: Build with the GitHub Actions cache
       if: inputs.strategy == 'actions-cache'
       uses: docker/build-push-action@v6
+      env:
+        DOCKER_BUILD_SUMMARY: "false"
+        DOCKER_BUILD_RECORD_UPLOAD: "false"
       with:
         context: upstream
         file: ${{ steps.dockerfile.outputs.path }}

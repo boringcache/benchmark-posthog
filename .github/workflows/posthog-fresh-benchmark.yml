@@ -185,18 +185,18 @@ jobs:
       - name: Retain the posthog BoringCache fresh result
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-posthog-boringcache-fresh
-          path: benchmark-results/posthog-boringcache-fresh.json
+          name: benchmark-posthog${{ inputs.benchmark_id_suffix }}-boringcache-fresh
+          path: benchmark-results/posthog${{ inputs.benchmark_id_suffix }}-boringcache-fresh.json
           if-no-files-found: error
       - name: Retain the posthog GitHub Actions fresh result
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-posthog-actions-cache-fresh
-          path: benchmark-results/posthog-actions-cache-fresh.json
+          name: benchmark-posthog${{ inputs.benchmark_id_suffix }}-actions-cache-fresh
+          path: benchmark-results/posthog${{ inputs.benchmark_id_suffix }}-actions-cache-fresh.json
           if-no-files-found: error
       - name: Retain the posthog-toolcache BoringCache fresh result
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-posthog-toolcache-boringcache-fresh
-          path: benchmark-results/posthog-toolcache-boringcache-fresh.json
+          name: benchmark-posthog-toolcache${{ inputs.benchmark_id_suffix }}-boringcache-fresh
+          path: benchmark-results/posthog-toolcache${{ inputs.benchmark_id_suffix }}-boringcache-fresh.json
           if-no-files-found: error

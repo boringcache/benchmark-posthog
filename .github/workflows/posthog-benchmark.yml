@@ -181,24 +181,30 @@ jobs:
       - name: Retain the posthog BoringCache rolling result
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-posthog-boringcache-rolling
-          path: benchmark-results/posthog-boringcache-rolling.json
+          name: benchmark-posthog${{ inputs.benchmark_id_suffix }}-boringcache-rolling
+          path: benchmark-results/posthog${{ inputs.benchmark_id_suffix }}-boringcache-rolling.json
           if-no-files-found: error
       - name: Retain the posthog GitHub Actions rolling result
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-posthog-actions-cache-rolling
-          path: benchmark-results/posthog-actions-cache-rolling.json
+          name: benchmark-posthog${{ inputs.benchmark_id_suffix }}-actions-cache-rolling
+          path: benchmark-results/posthog${{ inputs.benchmark_id_suffix }}-actions-cache-rolling.json
+          if-no-files-found: error
+      - name: Retain the posthog arm64 BoringCache rolling result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog${{ inputs.benchmark_id_suffix }}-boringcache-linux-arm64-rolling
+          path: benchmark-results/posthog${{ inputs.benchmark_id_suffix }}-boringcache-linux-arm64-rolling.json
           if-no-files-found: error
       - name: Retain the posthog-toolcache BoringCache rolling result
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-posthog-toolcache-boringcache-rolling
-          path: benchmark-results/posthog-toolcache-boringcache-rolling.json
+          name: benchmark-posthog-toolcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling
+          path: benchmark-results/posthog-toolcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling.json
           if-no-files-found: error
       - name: Retain the posthog-mountcache BoringCache rolling result
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-posthog-mountcache-boringcache-rolling
-          path: benchmark-results/posthog-mountcache-boringcache-rolling.json
+          name: benchmark-posthog-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling
+          path: benchmark-results/posthog-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling.json
           if-no-files-found: error

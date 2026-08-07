@@ -260,6 +260,8 @@ def imported(mode: str | None, observed: dict[str, Any]) -> bool:
     if observed.get("cache_import_ready") is False:
         return False
     if mode in IMPORT_MODES:
+        if observed.get("cache_import_ready") is None:
+            return True
         return bool(observed.get("cache_import_refs"))
     return observed.get("cache_hit") is not False
 
@@ -269,6 +271,8 @@ def cache_state(payload: dict[str, Any]) -> str:
     if cache.get("import_ready") is False:
         return "import not ready"
     if payload.get("mode") in IMPORT_MODES:
+        if cache.get("import_ready") is None:
+            return "not reported"
         refs = cache.get("import_refs")
         if refs:
             return f"imported {refs} ref{'s' if refs > 1 else ''}"

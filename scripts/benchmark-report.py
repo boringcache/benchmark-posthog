@@ -67,7 +67,6 @@ def parse_args() -> argparse.Namespace:
     phase.add_argument("--output-dir", default="benchmark-results")
 
     summarize = subparsers.add_parser("summarize")
-    summarize.add_argument("--benchmark", default="")
     summarize.add_argument("--title", required=True)
     summarize.add_argument("--input-dir", required=True)
     summarize.add_argument("--output-dir", default="benchmark-results")

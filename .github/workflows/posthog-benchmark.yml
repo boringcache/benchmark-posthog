@@ -10,6 +10,11 @@ on:
         required: false
         type: string
         default: ""
+      buildkit_image_arm64:
+        description: "Optional arm64 managed BuildKit image override."
+        required: false
+        type: string
+        default: ""
       cli_version:
         description: "Optional exact BoringCache CLI release tag."
         required: false
@@ -52,8 +57,8 @@ env:
   BORINGCACHE_NO_GIT: "true"
 
 jobs:
-  gha-multiarch:
-    name: GitHub Actions multi-platform commit
+  gha-amd64:
+    name: GitHub Actions amd64 commit
     if: inputs.runner_label == '' || github.ref_name == 'main'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
     timeout-minutes: 180
@@ -69,11 +74,11 @@ jobs:
           cache_lane: rolling
           benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
           push_image: "true"
-          platform: linux/arm64,linux/amd64
+          platform: linux/amd64
           upstream_ref: ${{ inputs.upstream_ref }}
 
-  boringcache-multiarch:
-    name: BoringCache multi-platform commit
+  boringcache-amd64:
+    name: BoringCache amd64 commit
     if: inputs.runner_label == '' || github.ref_name == 'main'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
     timeout-minutes: 180
@@ -89,7 +94,7 @@ jobs:
           cache_lane: rolling
           benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
           push_image: "true"
-          platform: linux/arm64,linux/amd64
+          platform: linux/amd64
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image }}
           upstream_ref: ${{ inputs.upstream_ref }}
@@ -138,9 +143,26 @@ jobs:
           buildkit_image: ${{ inputs.buildkit_image }}
           upstream_ref: ${{ inputs.upstream_ref }}
 
+  boringcache-arm64:
+    name: BoringCache arm64 commit
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: publish
+          cache_lane: rolling
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
+          platform: linux/arm64
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image_arm64 || inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}
   report:
     name: PostHog Docker rolling report
-    needs: [gha-multiarch, boringcache-multiarch, boringcache-turbo-amd64, boringcache-mountcache-amd64]
+    needs: [gha-amd64, boringcache-amd64, boringcache-turbo-amd64, boringcache-mountcache-amd64, boringcache-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

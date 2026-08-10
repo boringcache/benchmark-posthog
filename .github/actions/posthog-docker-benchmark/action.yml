@@ -70,6 +70,10 @@ runs:
           git -C upstream checkout --detach FETCH_HEAD
         fi
 
+    - name: Verify the upstream benchmark recipe
+      shell: bash
+      run: python3 ./scripts/verify-upstream-recipe.py
+
     - name: Prepare clean PostHog source
       shell: bash
       env:
@@ -165,6 +169,7 @@ runs:
         platforms: ${{ inputs.platform }}
         tags: ghcr.io/${{ github.repository_owner }}/posthog-benchmark:actions-cache
         push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
+        build-args: COMMIT_HASH=${{ steps.scope.outputs.source_sha }}
         provenance: false
         cache-from: type=gha,scope=${{ steps.scope.outputs.cache_scope }}
         cache-to: type=gha,scope=${{ steps.scope.outputs.cache_scope }},mode=max
@@ -184,6 +189,7 @@ runs:
         tags: boringcache
         push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
         platforms: ${{ inputs.platform }}
+        build-args: COMMIT_HASH=${{ steps.scope.outputs.source_sha }}
         load: false
         no-cache: ${{ inputs.no_cache }}
         docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
@@ -208,6 +214,7 @@ runs:
         tags: boringcache
         push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
         platforms: ${{ inputs.platform }}
+        build-args: COMMIT_HASH=${{ steps.scope.outputs.source_sha }}
         load: false
         no-cache: ${{ inputs.no_cache }}
         docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}

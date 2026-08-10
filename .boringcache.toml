@@ -2,11 +2,6 @@ workspace = "boringcache/benchmark-posthog"
 
 [adapters.docker]
 tag = "posthog-docker-local"
-metadata-hints = ["benchmark=posthog", "upstream-job=build-and-push"]
-command = [
-  "bash", "-euo", "pipefail", "-c",
-  "source_sha=$(git -C upstream rev-parse HEAD); dockerfile=${POSTHOG_DOCKERFILE:-upstream/Dockerfile}; platform=${POSTHOG_PLATFORM:-linux/arm64,linux/amd64}; exec docker buildx build --file ${dockerfile} --platform ${platform} --build-arg COMMIT_HASH=${source_sha} --tag posthog-benchmark:local upstream",
-]
 
 [adapters.turbo]
 tag = "posthog-turbo-local"

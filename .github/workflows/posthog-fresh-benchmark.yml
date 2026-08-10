@@ -69,7 +69,7 @@ jobs:
           phase: publish
           cache_lane: fresh
           benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
-          platform: linux/amd64
+          platform: linux/arm64,linux/amd64
 
   gha-warm:
     name: GitHub Actions amd64 warm
@@ -84,7 +84,7 @@ jobs:
           phase: warm
           cache_lane: fresh
           benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
-          platform: linux/amd64
+          platform: linux/arm64,linux/amd64
           cache_scope: ${{ needs.gha-cold.outputs.cache_scope }}
 
   boringcache-cold:
@@ -103,7 +103,7 @@ jobs:
           phase: publish
           cache_lane: fresh
           benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
-          platform: linux/amd64
+          platform: linux/arm64,linux/amd64
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image }}
 
@@ -120,7 +120,7 @@ jobs:
           phase: warm
           cache_lane: fresh
           benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
-          platform: linux/amd64
+          platform: linux/arm64,linux/amd64
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image }}
           cache_scope: ${{ needs.boringcache-cold.outputs.cache_scope }}

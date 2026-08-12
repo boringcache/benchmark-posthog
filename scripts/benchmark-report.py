@@ -8,6 +8,14 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 1
+PRODUCT_REF_FIELDS = (
+    "schema_version",
+    "cli_version",
+    "action_ref",
+    "action_sha",
+    "web_revision",
+    "api_url",
+)
 
 PROVIDER_LABELS = {
     "actions-cache": "GitHub Actions",
@@ -127,6 +135,19 @@ def evidence_action_versions(evidence: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def evidence_product_refs(evidence: dict[str, Any] | None) -> dict[str, Any]:
+    if not evidence:
+        return {}
+    product_refs = evidence.get("product_refs")
+    if not isinstance(product_refs, dict):
+        return {}
+    return {
+        key: product_refs[key]
+        for key in PRODUCT_REF_FIELDS
+        if product_refs.get(key) not in (None, "")
+    }
+
+
 def write_phase(args: argparse.Namespace) -> int:
     cache_hit = optional_bool(args.cache_hit)
     import_ready = optional_bool(args.cache_import_ready)
@@ -161,6 +182,7 @@ def write_phase(args: argparse.Namespace) -> int:
             "repository": args.source_repository or None,
             "sha": args.source_sha or None,
         },
+        "product_refs": evidence_product_refs(evidence),
         "action": evidence_action_versions(evidence),
         "github": github_identity(),
         "run_uid": run_uid(),
@@ -206,6 +228,17 @@ def merge_lane(benchmark: str, strategy: str, lane: str, phases: list[dict[str, 
     if reference is None:
         raise SystemExit(f"no usable phase evidence for {benchmark} {strategy} {lane}")
 
+    phase_product_refs = [
+        payload.get("product_refs")
+        for payload in phases
+        if isinstance(payload.get("product_refs"), dict) and payload.get("product_refs")
+    ]
+    product_refs = reference.get("product_refs") or (phase_product_refs[0] if phase_product_refs else {})
+    product_refs_consistent = None
+    if phase_product_refs:
+        signatures = {json.dumps(refs, sort_keys=True) for refs in phase_product_refs}
+        product_refs_consistent = len(phase_product_refs) == len(phases) and len(signatures) == 1
+
     observations = {
         payload["phase"]: {
             "cache_hit": payload["cache"]["hit"],
@@ -226,6 +259,8 @@ def merge_lane(benchmark: str, strategy: str, lane: str, phases: list[dict[str, 
         "speed": {"warm_average_seconds": warm["timing"]["total_seconds"] if warm else None},
         "cache": reference["cache"],
         "source": reference["source"],
+        "product_refs": product_refs,
+        "product_refs_consistent": product_refs_consistent,
         "phase_observations": observations,
         "workspace": reference["cache"]["workspace"],
         "cache_tag": reference["cache"]["tag"],

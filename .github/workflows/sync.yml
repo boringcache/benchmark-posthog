@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: false
-          token: ${{ github.token }}
+          token: ${{ secrets.BOT_PUBLIC_GITHUB_TOKEN }}
 
       - name: Sync upstream submodule
         id: sync

@@ -21,10 +21,7 @@ inputs:
   docker_tool_cache:
     required: false
     default: "false"
-  mountcache:
-    required: false
-    default: "false"
-  no_cache:
+  docker_mount_cache:
     required: false
     default: "false"
   cli_version:
@@ -185,13 +182,11 @@ runs:
         push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
         platforms: ${{ inputs.platform }}
         load: false
-        no-cache: ${{ inputs.no_cache }}
         docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
+        docker-mount-cache: ${{ inputs.docker_mount_cache }}
         fail-on-cache-error: true
         metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=${{ inputs.cache_lane == 'rolling' && 'rolling' || 'fresh-cold' }}
         managed-buildkit-image: ${{ inputs.buildkit_image }}
-      env:
-        BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.mountcache == 'true' && '1' || '' }}
 
     - name: Restore with BoringCache
       id: restore
@@ -209,14 +204,12 @@ runs:
         push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
         platforms: ${{ inputs.platform }}
         load: false
-        no-cache: ${{ inputs.no_cache }}
         docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
+        docker-mount-cache: ${{ inputs.docker_mount_cache }}
         fail-on-cache-miss: true
         fail-on-cache-error: true
         metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=fresh-warm
         managed-buildkit-image: ${{ inputs.buildkit_image }}
-      env:
-        BORINGCACHE_BUILDKIT_MOUNTCACHE_OFFLOADER: ${{ inputs.mountcache == 'true' && '1' || '' }}
     - name: Capture the build timing
       id: build_timing
       shell: bash

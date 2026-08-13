@@ -125,8 +125,8 @@ jobs:
           buildkit_image: ${{ inputs.buildkit_image }}
           cache_scope: ${{ needs.boringcache-cold.outputs.cache_scope }}
 
-  boringcache-turbo-cold:
-    name: BoringCache Turbo amd64 cold
+  boringcache-combined-cold:
+    name: BoringCache layer + tool + mount cache amd64 cold
     if: inputs.runner_label == '' || github.ref_name == 'main'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
     timeout-minutes: 180
@@ -140,15 +140,16 @@ jobs:
           strategy: boringcache
           phase: publish
           cache_lane: fresh
-          benchmark_id: ${{ format('posthog-toolcache{0}', inputs.benchmark_id_suffix) }}
+          benchmark_id: ${{ format('posthog-toolcache-mountcache{0}', inputs.benchmark_id_suffix) }}
           platform: linux/amd64
           docker_tool_cache: "true"
+          docker_mount_cache: "true"
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image }}
 
-  boringcache-turbo-warm:
-    name: BoringCache Turbo amd64 warm
-    needs: boringcache-turbo-cold
+  boringcache-combined-warm:
+    name: BoringCache layer + tool + mount cache amd64 warm
+    needs: boringcache-combined-cold
     runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
     timeout-minutes: 180
     steps:
@@ -158,15 +159,16 @@ jobs:
           strategy: boringcache
           phase: warm
           cache_lane: fresh
-          benchmark_id: ${{ format('posthog-toolcache{0}', inputs.benchmark_id_suffix) }}
+          benchmark_id: ${{ format('posthog-toolcache-mountcache{0}', inputs.benchmark_id_suffix) }}
           platform: linux/amd64
           docker_tool_cache: "true"
+          docker_mount_cache: "true"
           cli_version: ${{ inputs.cli_version }}
           buildkit_image: ${{ inputs.buildkit_image }}
-          cache_scope: ${{ needs.boringcache-turbo-cold.outputs.cache_scope }}
+          cache_scope: ${{ needs.boringcache-combined-cold.outputs.cache_scope }}
   report:
     name: PostHog Docker fresh report
-    needs: [gha-warm, boringcache-warm, boringcache-turbo-warm]
+    needs: [gha-warm, boringcache-warm, boringcache-combined-warm]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -194,9 +196,9 @@ jobs:
           name: benchmark-posthog${{ inputs.benchmark_id_suffix }}-actions-cache-fresh
           path: benchmark-results/posthog${{ inputs.benchmark_id_suffix }}-actions-cache-fresh.json
           if-no-files-found: error
-      - name: Retain the posthog-toolcache BoringCache fresh result
+      - name: Retain the combined-cache BoringCache fresh result
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-posthog-toolcache${{ inputs.benchmark_id_suffix }}-boringcache-fresh
-          path: benchmark-results/posthog-toolcache${{ inputs.benchmark_id_suffix }}-boringcache-fresh.json
+          name: benchmark-posthog-toolcache-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-fresh
+          path: benchmark-results/posthog-toolcache-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-fresh.json
           if-no-files-found: error

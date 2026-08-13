@@ -24,6 +24,14 @@ inputs:
   docker_mount_cache:
     required: false
     default: "false"
+  docker_apt_mount_cache:
+    description: "Render persistent apt package and index cache mounts."
+    required: false
+    default: "false"
+  no_cache:
+    description: "Disable Docker layer-cache reuse while preserving tool and mount caches."
+    required: false
+    default: "false"
   cli_version:
     required: false
     default: ""
@@ -78,6 +86,7 @@ runs:
       shell: bash
       env:
         DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
+        DOCKER_APT_MOUNT_CACHE: ${{ inputs.docker_apt_mount_cache }}
       run: |
         set -euo pipefail
         if [[ "$DOCKER_TOOL_CACHE" == "true" ]]; then
@@ -184,6 +193,7 @@ runs:
         load: false
         docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
         docker-mount-cache: ${{ inputs.docker_mount_cache }}
+        no-cache: ${{ inputs.no_cache }}
         fail-on-cache-error: true
         metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=${{ inputs.cache_lane == 'rolling' && 'rolling' || 'fresh-cold' }}
         managed-buildkit-image: ${{ inputs.buildkit_image }}
@@ -206,6 +216,7 @@ runs:
         load: false
         docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
         docker-mount-cache: ${{ inputs.docker_mount_cache }}
+        no-cache: ${{ inputs.no_cache }}
         fail-on-cache-miss: true
         fail-on-cache-error: true
         metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=fresh-warm

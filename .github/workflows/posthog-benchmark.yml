@@ -123,6 +123,32 @@ jobs:
           buildkit_image: ${{ inputs.buildkit_image }}
           upstream_ref: ${{ inputs.upstream_ref }}
 
+  boringcache-no-layer-tool-mount-amd64:
+    name: BoringCache no layer + tool + mount cache amd64 commit
+    if: inputs.runner_label == '' || github.ref_name == 'main'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: publish
+          cache_lane: rolling
+          benchmark_id: ${{ format('posthog-no-layer-toolcache-mountcache{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
+          platform: linux/amd64
+          docker_tool_cache: "true"
+          docker_mount_cache: "true"
+          docker_apt_mount_cache: "true"
+          no_cache: "true"
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}
+
   boringcache-arm64:
     name: BoringCache arm64 commit
     runs-on: ubuntu-24.04-arm
@@ -142,7 +168,7 @@ jobs:
           upstream_ref: ${{ inputs.upstream_ref }}
   report:
     name: PostHog Docker rolling report
-    needs: [gha-amd64, boringcache-amd64, boringcache-combined-amd64, boringcache-arm64]
+    needs: [gha-amd64, boringcache-amd64, boringcache-combined-amd64, boringcache-no-layer-tool-mount-amd64, boringcache-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -181,4 +207,10 @@ jobs:
         with:
           name: benchmark-posthog-toolcache-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling
           path: benchmark-results/posthog-toolcache-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling.json
+          if-no-files-found: error
+      - name: Retain the no-layer tool-and-mount-cache BoringCache rolling result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog-no-layer-toolcache-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling
+          path: benchmark-results/posthog-no-layer-toolcache-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling.json
           if-no-files-found: error

@@ -32,6 +32,16 @@ sed '1s/$/ # exact-source-variant/' "$source_dockerfile" > "$variant_source"
 POSTHOG_SOURCE_DOCKERFILE="$variant_source" "$renderer" "$test_root/variant-rendered.Dockerfile"
 grep -Fq '# exact-source-variant' "$test_root/variant-rendered.Dockerfile"
 
+apt_rendered="$test_root/apt-rendered.Dockerfile"
+DOCKER_APT_MOUNT_CACHE=true "$renderer" "$apt_rendered"
+[[ "$(grep -Fc 'target=/var/cache/apt,sharing=locked' "$apt_rendered")" -eq 5 ]]
+[[ "$(grep -Fc 'target=/var/lib/apt,sharing=locked' "$apt_rendered")" -eq 5 ]]
+[[ "$(grep -Fc 'rm -f /etc/apt/apt.conf.d/docker-clean' "$apt_rendered")" -eq 5 ]]
+if grep -Fq 'rm -rf /var/lib/apt/lists/*' "$apt_rendered"; then
+  echo "Expected apt cache mounts to retain package indexes" >&2
+  exit 1
+fi
+
 unsupported_source="$test_root/unsupported.Dockerfile"
 sed 's/bin\/turbo --filter=@posthog\/frontend build/bin\/turbo --filter=@posthog\/frontend build:changed/' \
   "$source_dockerfile" > "$unsupported_source"

@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
           submodules: false
-          token: ${{ secrets.BOT_PUBLIC_GITHUB_TOKEN }}
+          token: ${{ github.token }}
 
       - name: Sync upstream submodule
         id: sync
@@ -95,4 +95,4 @@ jobs:
         if: steps.sync.outputs.updated == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run posthog-benchmark.yml --ref main
+        run: gh workflow run posthog-benchmark.yml --repo "$GITHUB_REPOSITORY" --ref main

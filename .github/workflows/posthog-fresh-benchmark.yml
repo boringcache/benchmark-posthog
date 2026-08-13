@@ -65,6 +65,7 @@ jobs:
       - id: benchmark
         uses: ./.github/actions/posthog-docker-benchmark
         with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
           strategy: actions-cache
           phase: publish
           cache_lane: fresh
@@ -80,6 +81,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/posthog-docker-benchmark
         with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
           strategy: actions-cache
           phase: warm
           cache_lane: fresh
@@ -99,6 +101,7 @@ jobs:
       - id: benchmark
         uses: ./.github/actions/posthog-docker-benchmark
         with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
           strategy: boringcache
           phase: publish
           cache_lane: fresh
@@ -116,6 +119,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/posthog-docker-benchmark
         with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
           strategy: boringcache
           phase: warm
           cache_lane: fresh
@@ -137,6 +141,7 @@ jobs:
       - id: benchmark
         uses: ./.github/actions/posthog-docker-benchmark
         with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
           strategy: boringcache
           phase: publish
           cache_lane: fresh
@@ -156,6 +161,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/posthog-docker-benchmark
         with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
           strategy: boringcache
           phase: warm
           cache_lane: fresh

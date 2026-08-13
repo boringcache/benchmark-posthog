@@ -6,6 +6,7 @@ on:
     - cron: "21,51 * * * *"
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -23,11 +24,13 @@ jobs:
         with:
           fetch-depth: 0
           submodules: false
-          token: ${{ secrets.BOT_PUBLIC_GITHUB_TOKEN }}
+          token: ${{ github.token }}
 
       - name: Sync upstream submodule
+        id: sync
         run: |
           set -euo pipefail
+          echo "updated=false" >> "$GITHUB_OUTPUT"
 
           retry() {
             local attempt=1
@@ -73,6 +76,7 @@ jobs:
 
           for attempt in 1 2 3; do
             if git push origin HEAD:main; then
+              echo "updated=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
 
@@ -86,3 +90,9 @@ jobs:
             git rebase origin/main
             sleep 5
           done
+
+      - name: Dispatch rolling benchmark
+        if: steps.sync.outputs.updated == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run posthog-benchmark.yml --ref main

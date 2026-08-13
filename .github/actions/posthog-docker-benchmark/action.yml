@@ -32,6 +32,10 @@ inputs:
     description: "Disable Docker layer-cache reuse while preserving tool and mount caches."
     required: false
     default: "false"
+  posthog_sourcemap_api_key:
+    description: "Optional PostHog personal API key used by the upstream sourcemap upload stage."
+    required: false
+    default: ""
   cli_version:
     required: false
     default: ""
@@ -172,6 +176,7 @@ runs:
         tags: ghcr.io/${{ github.repository_owner }}/posthog-benchmark:actions-cache
         push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
         provenance: false
+        secrets: ${{ inputs.posthog_sourcemap_api_key != '' && format('posthog_upload_sourcemaps_cli_api_key={0}', inputs.posthog_sourcemap_api_key) || '' }}
         cache-from: type=gha,scope=${{ steps.scope.outputs.cache_scope }}
         cache-to: type=gha,scope=${{ steps.scope.outputs.cache_scope }},mode=max
 
@@ -194,6 +199,7 @@ runs:
         docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
         docker-mount-cache: ${{ inputs.docker_mount_cache }}
         no-cache: ${{ inputs.no_cache }}
+        secrets: ${{ inputs.posthog_sourcemap_api_key != '' && format('posthog_upload_sourcemaps_cli_api_key={0}', inputs.posthog_sourcemap_api_key) || '' }}
         fail-on-cache-error: true
         metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=${{ inputs.cache_lane == 'rolling' && 'rolling' || 'fresh-cold' }}
         managed-buildkit-image: ${{ inputs.buildkit_image }}
@@ -217,6 +223,7 @@ runs:
         docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
         docker-mount-cache: ${{ inputs.docker_mount_cache }}
         no-cache: ${{ inputs.no_cache }}
+        secrets: ${{ inputs.posthog_sourcemap_api_key != '' && format('posthog_upload_sourcemaps_cli_api_key={0}', inputs.posthog_sourcemap_api_key) || '' }}
         fail-on-cache-miss: true
         fail-on-cache-error: true
         metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=fresh-warm

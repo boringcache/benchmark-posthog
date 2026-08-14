@@ -183,7 +183,7 @@ runs:
     - name: Publish with BoringCache
       id: publish
       if: inputs.strategy == 'boringcache' && inputs.phase == 'publish'
-      uses: boringcache/one@e24257b122813ad11d53b9ed024b474ca4946ad2 # v1 / 1.19.1
+      uses: boringcache/one@71fdb67f0aa0afc1c4ac616c8c57d0d535f15bd9 # v1 / 1.19.2
       with:
         cli-version: ${{ inputs.cli_version }}
         setup: none
@@ -207,7 +207,7 @@ runs:
     - name: Restore with BoringCache
       id: restore
       if: inputs.strategy == 'boringcache' && inputs.phase == 'warm'
-      uses: boringcache/one@e24257b122813ad11d53b9ed024b474ca4946ad2 # v1 / 1.19.1
+      uses: boringcache/one@71fdb67f0aa0afc1c4ac616c8c57d0d535f15bd9 # v1 / 1.19.2
       with:
         cli-version: ${{ inputs.cli_version }}
         setup: none

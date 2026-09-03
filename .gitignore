@@ -1,8 +1,0 @@
-.DS_Store
-benchmark-diagnostics/
-benchmark-results/
-benchmark-session-summary/
-benchmark-storage/
-boringbuild/
-boringcache-linux-musl-amd64.local
-config/*.local.yml

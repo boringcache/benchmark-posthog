@@ -1,0 +1,7 @@
+workspace = "boringcache/benchmark-posthog"
+
+[adapters.docker]
+tag = "posthog-docker-local"
+
+[adapters.turbo]
+tag = "posthog-turbo-local"

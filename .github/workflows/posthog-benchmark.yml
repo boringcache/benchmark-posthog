@@ -1,0 +1,221 @@
+name: "PostHog Benchmark"
+run-name: >-
+  ${{ format('Benchmark {0} | {1}', inputs.cli_version != '' && 'Canary' || 'Rolling', github.event_name == 'push' && 'Upstream update' || format('Manual dispatch ({0})', github.ref_name)) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      buildkit_image:
+        description: "Optional amd64 or multi-platform managed BuildKit image."
+        required: false
+        type: string
+        default: ""
+      buildkit_image_arm64:
+        description: "Optional arm64 managed BuildKit image override."
+        required: false
+        type: string
+        default: ""
+      cli_version:
+        description: "Optional exact BoringCache CLI release tag."
+        required: false
+        type: string
+        default: ""
+      benchmark_id_suffix:
+        description: "Optional suffix for isolated comparison runs."
+        required: false
+        type: string
+        default: ""
+      upstream_ref:
+        description: "Optional PostHog ref or SHA instead of the pinned submodule commit."
+        required: false
+        type: string
+        default: ""
+      runner_label:
+        description: "Optional amd64 runner label for a manual main-branch experiment."
+        required: false
+        type: string
+        default: ""
+  push:
+    branches:
+      - main
+    paths:
+      - ".gitmodules"
+      - "upstream"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+  packages: write
+
+env:
+  BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+  BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+  BORINGCACHE_NO_GIT: "true"
+
+jobs:
+  gha-amd64:
+    name: GitHub Actions amd64 commit
+    if: inputs.runner_label == '' || github.ref_name == 'main'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: actions-cache
+          phase: publish
+          cache_lane: rolling
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
+          platform: linux/amd64
+          upstream_ref: ${{ inputs.upstream_ref }}
+
+  boringcache-amd64:
+    name: BoringCache amd64 commit
+    if: inputs.runner_label == '' || github.ref_name == 'main'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: boringcache
+          phase: publish
+          cache_lane: rolling
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
+          platform: linux/amd64
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}
+
+  boringcache-combined-amd64:
+    name: BoringCache layer + tool + mount cache amd64 commit
+    if: inputs.runner_label == '' || github.ref_name == 'main'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: boringcache
+          phase: publish
+          cache_lane: rolling
+          benchmark_id: ${{ format('posthog-toolcache-mountcache{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
+          platform: linux/amd64
+          docker_tool_cache: "true"
+          docker_mount_cache: "true"
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}
+
+  boringcache-no-layer-tool-mount-amd64:
+    name: BoringCache no layer + tool + mount cache amd64 commit
+    if: inputs.runner_label == '' || github.ref_name == 'main'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: boringcache
+          phase: publish
+          cache_lane: rolling
+          benchmark_id: ${{ format('posthog-no-layer-toolcache-mountcache{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
+          platform: linux/amd64
+          docker_tool_cache: "true"
+          docker_mount_cache: "true"
+          docker_apt_mount_cache: "true"
+          no_cache: "true"
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}
+
+  boringcache-arm64:
+    name: BoringCache arm64 commit
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: boringcache
+          phase: publish
+          cache_lane: rolling
+          benchmark_id: ${{ format('posthog{0}', inputs.benchmark_id_suffix) }}
+          push_image: "true"
+          platform: linux/arm64
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image_arm64 || inputs.buildkit_image }}
+          upstream_ref: ${{ inputs.upstream_ref }}
+  report:
+    name: PostHog Docker rolling report
+    needs: [gha-amd64, boringcache-amd64, boringcache-combined-amd64, boringcache-no-layer-tool-mount-amd64, boringcache-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download the benchmark phase evidence
+        uses: actions/download-artifact@v6
+        with:
+          pattern: phase-*
+          path: phase-evidence
+      - name: Publish the PostHog Docker benchmark report
+        run: |
+          python3 ./scripts/benchmark-report.py summarize \
+            --title "PostHog Docker rolling benchmark" \
+            --input-dir phase-evidence \
+            --output-dir benchmark-results
+      - name: Retain the posthog BoringCache rolling result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog${{ inputs.benchmark_id_suffix }}-boringcache-rolling
+          path: benchmark-results/posthog${{ inputs.benchmark_id_suffix }}-boringcache-rolling.json
+          if-no-files-found: error
+      - name: Retain the posthog GitHub Actions rolling result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog${{ inputs.benchmark_id_suffix }}-actions-cache-rolling
+          path: benchmark-results/posthog${{ inputs.benchmark_id_suffix }}-actions-cache-rolling.json
+          if-no-files-found: error
+      - name: Retain the posthog arm64 BoringCache rolling result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog${{ inputs.benchmark_id_suffix }}-boringcache-linux-arm64-rolling
+          path: benchmark-results/posthog${{ inputs.benchmark_id_suffix }}-boringcache-linux-arm64-rolling.json
+          if-no-files-found: error
+      - name: Retain the combined-cache BoringCache rolling result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog-toolcache-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling
+          path: benchmark-results/posthog-toolcache-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling.json
+          if-no-files-found: error
+      - name: Retain the no-layer tool-and-mount-cache BoringCache rolling result
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-posthog-no-layer-toolcache-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling
+          path: benchmark-results/posthog-no-layer-toolcache-mountcache${{ inputs.benchmark_id_suffix }}-boringcache-rolling.json
+          if-no-files-found: error

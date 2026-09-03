@@ -1,0 +1,281 @@
+name: "Run PostHog Docker benchmark phase"
+description: "Runs one PostHog cache provider and phase through the public product path."
+
+inputs:
+  strategy:
+    description: "actions-cache or boringcache"
+    required: true
+  phase:
+    description: "publish or warm"
+    required: true
+  cache_lane:
+    description: "rolling or fresh"
+    required: true
+  benchmark_id:
+    required: true
+  push_image:
+    required: false
+    default: "false"
+  platform:
+    required: true
+  docker_tool_cache:
+    required: false
+    default: "false"
+  docker_mount_cache:
+    required: false
+    default: "false"
+  docker_apt_mount_cache:
+    description: "Render persistent apt package and index cache mounts."
+    required: false
+    default: "false"
+  no_cache:
+    description: "Disable Docker layer-cache reuse while preserving tool and mount caches."
+    required: false
+    default: "false"
+  posthog_sourcemap_api_key:
+    description: "Optional PostHog personal API key used by the upstream sourcemap upload stage."
+    required: false
+    default: ""
+  cli_version:
+    required: false
+    default: ""
+  buildkit_image:
+    required: false
+    default: ""
+  upstream_ref:
+    required: false
+    default: ""
+  cache_scope:
+    description: "Exact published cohort used by a warm phase."
+    required: false
+    default: ""
+
+outputs:
+  cache_scope:
+    description: "Published cache cohort."
+    value: ${{ steps.scope.outputs.cache_scope }}
+
+runs:
+  using: composite
+  steps:
+    - name: Start the workflow timer
+      id: workflow_timer
+      shell: bash
+      run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+    - name: Free runner disk space
+      shell: bash
+      run: ./scripts/free-runner-disk.sh
+
+    - name: Checkout pinned PostHog source
+      shell: bash
+      env:
+        UPSTREAM_REF: ${{ inputs.upstream_ref }}
+      run: |
+        set -euo pipefail
+        git submodule sync --recursive
+        git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
+        if [[ -n "$UPSTREAM_REF" ]]; then
+          git -C upstream fetch --depth 1 origin "$UPSTREAM_REF"
+          git -C upstream checkout --detach FETCH_HEAD
+        fi
+
+    - name: Prepare clean PostHog source
+      shell: bash
+      env:
+        PREPARE_PHASE: ${{ inputs.phase == 'warm' && 'warm1' || 'base' }}
+      run: ./scripts/prepare-source.sh "$PREPARE_PHASE"
+
+    - name: Prepare the product Dockerfile
+      id: dockerfile
+      shell: bash
+      env:
+        DOCKER_TOOL_CACHE: ${{ inputs.docker_tool_cache }}
+        DOCKER_APT_MOUNT_CACHE: ${{ inputs.docker_apt_mount_cache }}
+      run: |
+        set -euo pipefail
+        if [[ "$DOCKER_TOOL_CACHE" == "true" ]]; then
+          mkdir -p .benchmark
+          ./scripts/render-posthog-toolcache-dockerfile.sh .benchmark/PostHog.Dockerfile
+          echo "path=.benchmark/PostHog.Dockerfile" >> "$GITHUB_OUTPUT"
+        else
+          echo "path=upstream/Dockerfile" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Select the cache cohort
+      id: scope
+      shell: bash
+      env:
+        BENCHMARK_ID: ${{ inputs.benchmark_id }}
+        CACHE_LANE: ${{ inputs.cache_lane }}
+        PHASE: ${{ inputs.phase }}
+        PUBLISHED_SCOPE: ${{ inputs.cache_scope }}
+        PLATFORM: ${{ inputs.platform }}
+      run: |
+        set -euo pipefail
+        if [[ "$PHASE" == "warm" ]]; then
+          [[ -n "$PUBLISHED_SCOPE" ]]
+          cache_scope="$PUBLISHED_SCOPE"
+        else
+          ref_slug="$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9._-' '-')"
+          ref_slug="${ref_slug#-}"
+          ref_slug="${ref_slug%-}"
+          ref_slug="${ref_slug:-main}"
+          if [[ "$CACHE_LANE" == "rolling" ]]; then
+            cache_scope="${BENCHMARK_ID}-rolling-${ref_slug}"
+          else
+            cache_scope="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          fi
+        fi
+        ./scripts/scope-boringcache-run.sh "$cache_scope"
+        echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
+        source_url="$(git config -f .gitmodules submodule.upstream.url)"
+        echo "source_repository=$(printf '%s' "${source_url#https://github.com/}" | sed 's/\.git$//')" >> "$GITHUB_OUTPUT"
+        echo "source_sha=$(git -C upstream rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        if [[ "$PLATFORM" == "linux/amd64" ]]; then
+          echo "variant=" >> "$GITHUB_OUTPUT"
+          echo "variant_suffix=" >> "$GITHUB_OUTPUT"
+        else
+          echo "variant=${PLATFORM}" >> "$GITHUB_OUTPUT"
+          echo "variant_suffix=-$(printf '%s' "$PLATFORM" | tr '/' '-')" >> "$GITHUB_OUTPUT"
+        fi
+    - name: Log in to the GitHub Container Registry
+      if: inputs.push_image == 'true' && github.ref == 'refs/heads/main'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    - name: Start the provider setup timer
+      id: setup_timer
+      shell: bash
+      run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+    - name: Set up Buildx for the GitHub Actions comparison
+      if: inputs.strategy == 'actions-cache'
+      uses: docker/setup-buildx-action@v4
+
+    - name: Start the build timer
+      id: build_timer
+      shell: bash
+      env:
+        SETUP_STARTED_AT: ${{ steps.setup_timer.outputs.started_at }}
+      run: |
+        set -euo pipefail
+        now="$(date +%s)"
+        echo "setup_seconds=$(( now - SETUP_STARTED_AT ))" >> "$GITHUB_OUTPUT"
+        echo "started_at=${now}" >> "$GITHUB_OUTPUT"
+    - name: Build with the GitHub Actions cache
+      if: inputs.strategy == 'actions-cache'
+      uses: docker/build-push-action@v6
+      env:
+        DOCKER_BUILD_SUMMARY: "false"
+        DOCKER_BUILD_RECORD_UPLOAD: "false"
+      with:
+        context: upstream
+        file: ${{ steps.dockerfile.outputs.path }}
+        platforms: ${{ inputs.platform }}
+        tags: ghcr.io/${{ github.repository_owner }}/posthog-benchmark:actions-cache
+        push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
+        provenance: false
+        secrets: ${{ inputs.posthog_sourcemap_api_key != '' && format('posthog_upload_sourcemaps_cli_api_key={0}', inputs.posthog_sourcemap_api_key) || '' }}
+        cache-from: type=gha,scope=${{ steps.scope.outputs.cache_scope }}
+        cache-to: type=gha,scope=${{ steps.scope.outputs.cache_scope }},mode=max
+
+    - name: Publish with BoringCache
+      id: publish
+      if: inputs.strategy == 'boringcache' && inputs.phase == 'publish'
+      uses: boringcache/one@20202f4c4b789cdee581ae3f117dfafb8293b19c # v1 / 1.20.0
+      with:
+        cli-version: ${{ inputs.cli_version }}
+        setup: none
+        mode: docker
+        trust-policy: publish
+        context: upstream
+        dockerfile: ${{ steps.dockerfile.outputs.path }}
+        image: ghcr.io/${{ github.repository_owner }}/posthog-benchmark
+        tags: boringcache
+        push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
+        platforms: ${{ inputs.platform }}
+        load: false
+        docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
+        docker-mount-cache: ${{ inputs.docker_mount_cache }}
+        no-cache: ${{ inputs.no_cache }}
+        secrets: ${{ inputs.posthog_sourcemap_api_key != '' && format('posthog_upload_sourcemaps_cli_api_key={0}', inputs.posthog_sourcemap_api_key) || '' }}
+        fail-on-cache-error: true
+        metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=${{ inputs.cache_lane == 'rolling' && 'rolling' || 'fresh-cold' }}
+        managed-buildkit-image: ${{ inputs.buildkit_image }}
+
+    - name: Restore with BoringCache
+      id: restore
+      if: inputs.strategy == 'boringcache' && inputs.phase == 'warm'
+      uses: boringcache/one@20202f4c4b789cdee581ae3f117dfafb8293b19c # v1 / 1.20.0
+      with:
+        cli-version: ${{ inputs.cli_version }}
+        setup: none
+        mode: docker
+        trust-policy: restore
+        context: upstream
+        dockerfile: ${{ steps.dockerfile.outputs.path }}
+        image: ghcr.io/${{ github.repository_owner }}/posthog-benchmark
+        tags: boringcache
+        push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
+        platforms: ${{ inputs.platform }}
+        load: false
+        docker-tool-cache: ${{ inputs.docker_tool_cache == 'true' && format('turbo:{0}-turbo', steps.scope.outputs.cache_scope) || '' }}
+        docker-mount-cache: ${{ inputs.docker_mount_cache }}
+        no-cache: ${{ inputs.no_cache }}
+        secrets: ${{ inputs.posthog_sourcemap_api_key != '' && format('posthog_upload_sourcemaps_cli_api_key={0}', inputs.posthog_sourcemap_api_key) || '' }}
+        fail-on-cache-miss: true
+        fail-on-cache-error: true
+        metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=fresh-warm
+        managed-buildkit-image: ${{ inputs.buildkit_image }}
+    - name: Capture the build timing
+      id: build_timing
+      shell: bash
+      env:
+        BUILD_STARTED_AT: ${{ steps.build_timer.outputs.started_at }}
+      run: echo "build_seconds=$(( $(date +%s) - BUILD_STARTED_AT ))" >> "$GITHUB_OUTPUT"
+    - name: Write the benchmark phase evidence
+      shell: bash
+      env:
+        BENCHMARK_ID: ${{ inputs.benchmark_id }}
+        STRATEGY: ${{ inputs.strategy }}
+        CACHE_LANE: ${{ inputs.cache_lane }}
+        REPORT_PHASE: ${{ inputs.cache_lane == 'rolling' && 'commit' || inputs.phase == 'warm' && 'warm' || 'cold' }}
+        REPORT_VARIANT: ${{ steps.scope.outputs.variant }}
+        WORKFLOW_STARTED_AT: ${{ steps.workflow_timer.outputs.started_at }}
+        SETUP_SECONDS: ${{ steps.build_timer.outputs.setup_seconds }}
+        BUILD_SECONDS: ${{ steps.build_timing.outputs.build_seconds }}
+        CACHE_HIT: ${{ steps.publish.outputs.cache-hit || steps.restore.outputs.cache-hit }}
+        CACHE_IMPORT_READY: ${{ steps.publish.outputs.docker-cache-import-ready || steps.restore.outputs.docker-cache-import-ready }}
+        CACHE_IMPORT_REFS: ${{ steps.publish.outputs.docker-cache-from-refs || steps.restore.outputs.docker-cache-from-refs }}
+        CACHE_TAG: ${{ steps.publish.outputs.cache-tag || steps.restore.outputs.cache-tag }}
+        CACHE_WORKSPACE: ${{ steps.publish.outputs.workspace || steps.restore.outputs.workspace }}
+        EVIDENCE_PATH: ${{ steps.publish.outputs.evidence-path || steps.restore.outputs.evidence-path }}
+        SOURCE_REPOSITORY: ${{ steps.scope.outputs.source_repository }}
+        SOURCE_SHA: ${{ steps.scope.outputs.source_sha }}
+      run: |
+        set -euo pipefail
+        python3 ./scripts/benchmark-report.py phase \
+          --benchmark "$BENCHMARK_ID" \
+          --strategy "$STRATEGY" \
+          --lane "$CACHE_LANE" \
+          --phase "$REPORT_PHASE" \
+          --mode docker \
+          --variant "$REPORT_VARIANT" \
+          --restore-or-setup-seconds "$SETUP_SECONDS" \
+          --workflow-seconds "$(( $(date +%s) - WORKFLOW_STARTED_AT ))" \
+          --build-seconds "$BUILD_SECONDS" \
+          --cache-hit "$CACHE_HIT" \
+          --cache-import-ready "$CACHE_IMPORT_READY" \
+          --cache-import-refs "$CACHE_IMPORT_REFS" \
+          --cache-tag "$CACHE_TAG" \
+          --workspace "$CACHE_WORKSPACE" \
+          --source-repository "$SOURCE_REPOSITORY" \
+          --source-sha "$SOURCE_SHA" \
+          --evidence "$EVIDENCE_PATH"
+    - name: Retain the benchmark phase evidence
+      uses: actions/upload-artifact@v6
+      with:
+        name: phase-${{ inputs.benchmark_id }}-${{ inputs.strategy }}${{ steps.scope.outputs.variant_suffix }}-${{ inputs.cache_lane }}-${{ inputs.cache_lane == 'rolling' && 'commit' || inputs.phase == 'warm' && 'warm' || 'cold' }}
+        path: benchmark-results/
+        if-no-files-found: error

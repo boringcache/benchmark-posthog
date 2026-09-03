@@ -148,10 +148,45 @@ def evidence_product_refs(evidence: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def evidence_restore_phase(evidence: dict[str, Any] | None) -> dict[str, Any]:
+    if not evidence:
+        return {}
+    phases = evidence.get("phases")
+    if not isinstance(phases, dict):
+        return {}
+    restore = phases.get("restore")
+    return restore if isinstance(restore, dict) else {}
+
+
+def evidence_buildkit_cache(restore: dict[str, Any]) -> dict[str, Any]:
+    mode_evidence = restore.get("mode_evidence")
+    if not isinstance(mode_evidence, dict):
+        return {}
+    buildkit_cache = mode_evidence.get("buildkit_cache")
+    return buildkit_cache if isinstance(buildkit_cache, dict) else {}
+
+
+def evidence_string(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def evidence_strings(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
 def write_phase(args: argparse.Namespace) -> int:
     cache_hit = optional_bool(args.cache_hit)
     import_ready = optional_bool(args.cache_import_ready)
     evidence = load_evidence(args.evidence)
+    restore_evidence = evidence_restore_phase(evidence)
+    buildkit_cache = evidence_buildkit_cache(restore_evidence)
+    cache_import_refs = [
+        ref for ref in args.cache_import_refs.splitlines() if ref.strip()
+    ] or evidence_strings(buildkit_cache.get("cache_from_refs"))
+    cache_tag = args.cache_tag or evidence_string(restore_evidence.get("cache_tag"))
+    workspace = args.workspace or evidence_string(restore_evidence.get("workspace"))
     total_seconds = args.restore_or_setup_seconds + args.build_seconds
 
     payload = {
@@ -172,9 +207,9 @@ def write_phase(args: argparse.Namespace) -> int:
         "cache": {
             "hit": cache_hit,
             "import_ready": import_ready,
-            "import_refs": len([ref for ref in args.cache_import_refs.splitlines() if ref.strip()]),
-            "tag": args.cache_tag or None,
-            "workspace": args.workspace or None,
+            "import_refs": len(cache_import_refs),
+            "tag": cache_tag or None,
+            "workspace": workspace or None,
             "storage_bytes": None,
             "storage_source": None,
         },

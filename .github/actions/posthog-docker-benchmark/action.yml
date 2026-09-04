@@ -205,7 +205,7 @@ runs:
     - name: Publish with BoringCache
       id: publish
       if: inputs.strategy == 'boringcache' && inputs.phase == 'publish'
-      uses: boringcache/one@4d152565a19570e669c54269f537ad2394bf1fe5 # v1 / 1.20.1
+      uses: boringcache/one@c62af42c5c1e29388ceeea77b6a7f1db51f641e7 # v1 / 1.20.2
       env:
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         POSTHOG_SOURCEMAP_API_KEY: ${{ inputs.posthog_sourcemap_api_key }}
@@ -217,7 +217,7 @@ runs:
     - name: Restore with BoringCache
       id: restore
       if: inputs.strategy == 'boringcache' && inputs.phase == 'warm'
-      uses: boringcache/one@4d152565a19570e669c54269f537ad2394bf1fe5 # v1 / 1.20.1
+      uses: boringcache/one@c62af42c5c1e29388ceeea77b6a7f1db51f641e7 # v1 / 1.20.2
       env:
         BORINGCACHE_MANAGED_BUILDKIT_IMAGE: ${{ inputs.buildkit_image }}
         POSTHOG_SOURCEMAP_API_KEY: ${{ inputs.posthog_sourcemap_api_key }}

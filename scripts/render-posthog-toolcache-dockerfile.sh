@@ -30,6 +30,7 @@ awk -v apt_mount_cache="$apt_mount_cache" '
     frontend_hooks = 0
     plugin_hooks = 0
     apt_hooks = 0
+    apt_updates = 0
     apt_stage = "runtime"
     in_apt_run = 0
     in_node_scripts = 0
@@ -43,6 +44,9 @@ awk -v apt_mount_cache="$apt_mount_cache" '
     }
   }
   /^FROM .* AS node-scripts-build$/ { in_node_scripts = 1 }
+  apt_mount_cache == "true" && $0 !~ /^[[:space:]]*#/ && /apt-get update/ {
+    apt_updates += 1
+  }
   apt_mount_cache == "true" && $0 == "RUN --mount=type=secret,id=posthog_upload_sourcemaps_cli_api_key \\" {
     print
     print "    --mount=type=cache,id=apt-cache-" apt_stage ",target=/var/cache/apt,sharing=locked \\"
@@ -108,8 +112,8 @@ awk -v apt_mount_cache="$apt_mount_cache" '
       printf "unsupported PostHog Dockerfile: expected one frontend hook and one plugin hook; found %d and %d\n", frontend_hooks, plugin_hooks > "/dev/stderr"
       exit 1
     }
-    if (apt_mount_cache == "true" && apt_hooks != 5) {
-      printf "unsupported PostHog Dockerfile: expected five apt cache hooks; found %d\n", apt_hooks > "/dev/stderr"
+    if (apt_mount_cache == "true" && (apt_updates == 0 || apt_hooks != apt_updates)) {
+      printf "unsupported PostHog Dockerfile: expected a cache hook for each apt update; found %d hooks for %d updates\n", apt_hooks, apt_updates > "/dev/stderr"
       exit 1
     }
   }

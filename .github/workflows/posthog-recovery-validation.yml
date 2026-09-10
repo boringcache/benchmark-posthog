@@ -1,0 +1,59 @@
+name: PostHog transfer recovery validation
+run-name: PostHog transfer recovery | ${{ inputs.cli_version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      cli_version:
+        description: Exact BoringCache CLI canary tag.
+        required: true
+        type: string
+      upstream_ref:
+        description: Exact PostHog source used by the comparison.
+        required: true
+        type: string
+        default: b7999dd0577f0c8862a02469bcce46f8eb3028a1
+      cache_scope:
+        description: Existing published cache cohort to restore.
+        required: true
+        type: string
+        default: posthog-rolling-main
+
+concurrency:
+  group: posthog-transfer-recovery-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+  BORINGCACHE_NO_GIT: "true"
+  RUST_LOG: error,boring_cache_cli::storage_transfer=info
+
+jobs:
+  restore:
+    name: Restore and build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          strategy: boringcache
+          phase: warm
+          cache_lane: rolling
+          benchmark_id: posthog
+          cache_scope: ${{ inputs.cache_scope }}
+          platform: ${{ matrix.platform }}
+          cli_version: ${{ inputs.cli_version }}
+          upstream_ref: ${{ inputs.upstream_ref }}
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}

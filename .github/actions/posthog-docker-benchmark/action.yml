@@ -247,7 +247,6 @@ runs:
         CACHE_HIT: ${{ steps.publish.outputs.cache-hit || steps.restore.outputs.cache-hit }}
         EVIDENCE_PATH: ${{ steps.publish.outputs.evidence-path || steps.restore.outputs.evidence-path }}
         STORAGE_KEY: ${{ steps.scope.outputs.cache_scope }}
-        BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
         GITHUB_TOKEN: ${{ github.token }}
         SOURCE_REPOSITORY: ${{ steps.scope.outputs.source_repository }}
         SOURCE_SHA: ${{ steps.scope.outputs.source_sha }}

@@ -23,8 +23,8 @@ jobs:
       - name: Select the S3 benchmark workspace
         run: |
           set -euo pipefail
-          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3"|' .boringcache.toml
-          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3"' .boringcache.toml
+          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3-clean"|' .boringcache.toml
+          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3-clean"' .boringcache.toml
       - name: Install the released BoringCache CLI
         run: |
           set -euo pipefail

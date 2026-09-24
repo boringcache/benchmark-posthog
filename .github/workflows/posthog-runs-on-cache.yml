@@ -129,8 +129,8 @@ jobs:
         if: inputs.storage_backend == 's3'
         run: |
           set -euo pipefail
-          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3"|' .boringcache.toml
-          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3"' .boringcache.toml
+          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3-clean"|' .boringcache.toml
+          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3-clean"' .boringcache.toml
       - id: benchmark
         uses: ./.github/actions/posthog-docker-benchmark
         with:
@@ -158,8 +158,8 @@ jobs:
         if: inputs.storage_backend == 's3'
         run: |
           set -euo pipefail
-          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3"|' .boringcache.toml
-          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3"' .boringcache.toml
+          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3-clean"|' .boringcache.toml
+          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3-clean"' .boringcache.toml
       - uses: ./.github/actions/posthog-docker-benchmark
         with:
           posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
@@ -188,8 +188,8 @@ jobs:
         if: inputs.storage_backend == 's3'
         run: |
           set -euo pipefail
-          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3"|' .boringcache.toml
-          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3"' .boringcache.toml
+          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3-clean"|' .boringcache.toml
+          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3-clean"' .boringcache.toml
       - uses: ./.github/actions/posthog-docker-benchmark
         with:
           posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}

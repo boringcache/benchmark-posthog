@@ -23,6 +23,7 @@ PRODUCT_REF_FIELDS = (
 
 PROVIDER_LABELS = {
     "actions-cache": "GitHub Actions",
+    "runs-on-cache": "RunsOn Magic Cache",
     "boringcache": "BoringCache",
     "boringcache-mountcache": "BoringCache mountcache",
     "boringcache-native": "BoringCache native",
@@ -39,17 +40,19 @@ CANDIDATE_STRATEGY = "boringcache"
 PHASE_LABELS = {
     "cold": "Cold build",
     "warm": "Warm build",
+    "source_change": "Changed-source build",
     "commit": "Commit build",
 }
 
 LANE_PHASES = {
-    "fresh": ("cold", "warm"),
+    "fresh": ("cold", "warm", "source_change"),
     "rolling": ("commit",),
 }
 
 PHASE_RUN_FIELDS = {
     "cold": ("cold_seconds", "cold_build_seconds", "cold_restore_or_setup_seconds"),
     "warm": ("warm1_seconds", "warm1_build_seconds", "warm1_restore_or_setup_seconds"),
+    "source_change": ("source_change_seconds", "source_change_build_seconds", "source_change_restore_or_setup_seconds"),
     "commit": ("rolling_first_build_seconds", None, None),
 }
 
@@ -83,6 +86,8 @@ def parse_args() -> argparse.Namespace:
     summarize.add_argument("--title", required=True)
     summarize.add_argument("--input-dir", required=True)
     summarize.add_argument("--output-dir", default="benchmark-results")
+    summarize.add_argument("--baseline-strategy", default=BASELINE_STRATEGY)
+    summarize.add_argument("--no-deltas", action="store_true")
 
     return parser.parse_args()
 
@@ -447,7 +452,7 @@ def merge_lane(benchmark: str, strategy: str, lane: str, phases: list[dict[str, 
             runs[setup_field] = timing["restore_or_setup_seconds"]
 
     warm = by_phase.get("warm")
-    reference = by_phase.get("commit") or by_phase.get("warm") or by_phase.get("cold")
+    reference = by_phase.get("source_change") or by_phase.get("commit") or by_phase.get("warm") or by_phase.get("cold")
     if reference is None:
         raise SystemExit(f"no usable phase evidence for {benchmark} {strategy} {lane}")
 
@@ -545,7 +550,7 @@ def cache_state(payload: dict[str, Any]) -> str:
     return "not reported"
 
 
-def render_markdown(title: str, lanes: dict[tuple[str, str, str, str], dict[str, Any]], phases: list[dict[str, Any]]) -> str:
+def render_markdown(title: str, lanes: dict[tuple[str, str, str, str], dict[str, Any]], phases: list[dict[str, Any]], baseline_strategy: str = BASELINE_STRATEGY, show_deltas: bool = True) -> str:
     lines = [f"## {title}", ""]
     benchmarks = sorted({payload["benchmark"] for payload in phases})
 
@@ -553,11 +558,21 @@ def render_markdown(title: str, lanes: dict[tuple[str, str, str, str], dict[str,
         if len(benchmarks) > 1:
             lines.append(f"### {benchmark}")
             lines.append("")
-        lines.extend(render_benchmark(benchmark, lanes, phases, depth=4 if len(benchmarks) > 1 else 3))
+        lines.extend(render_benchmark(benchmark, lanes, phases, depth=4 if len(benchmarks) > 1 else 3, baseline_strategy=baseline_strategy, show_deltas=show_deltas))
 
-    source = next((payload["source"] for payload in phases if payload["source"].get("sha")), None)
-    if source and source.get("repository"):
-        lines.append(f"Source: `{source['repository']}@{source['sha'][:7]}`")
+    sources = {
+        payload["phase"]: payload["source"]
+        for payload in phases
+        if payload["source"].get("repository") and payload["source"].get("sha")
+    }
+    if sources:
+        if len({source["sha"] for source in sources.values()}) == 1:
+            source = next(iter(sources.values()))
+            lines.append(f"Source: `{source['repository']}@{source['sha'][:7]}`")
+        else:
+            for phase_name in ("cold", "warm", "source_change", "commit"):
+                if source := sources.get(phase_name):
+                    lines.append(f"{PHASE_LABELS[phase_name]} source: `{source['repository']}@{source['sha'][:7]}`")
         lines.append("")
 
     return "\n".join(lines)
@@ -573,6 +588,8 @@ def render_benchmark(
     all_lanes: dict[tuple[str, str, str, str], dict[str, Any]],
     all_phases: list[dict[str, Any]],
     depth: int,
+    baseline_strategy: str,
+    show_deltas: bool,
 ) -> list[str]:
     lines: list[str] = []
     heading = "#" * depth
@@ -585,7 +602,7 @@ def render_benchmark(
     lane_names = sorted({lane for _, _, lane in lanes})
 
     for lane in lane_names:
-        baseline = lanes.get((BASELINE_STRATEGY, "", lane))
+        baseline = lanes.get((baseline_strategy, "", lane))
         candidate = lanes.get((CANDIDATE_STRATEGY, "", lane))
         reference = candidate or baseline
         if reference is None:
@@ -593,7 +610,7 @@ def render_benchmark(
 
         lane_providers = sorted(
             {(strategy, variant) for strategy, variant, item in lanes if item == lane},
-            key=lambda entry: (entry[0] != CANDIDATE_STRATEGY, entry[0] != BASELINE_STRATEGY, bool(entry[1]), entry),
+            key=lambda entry: (entry[0] != CANDIDATE_STRATEGY, entry[0] != baseline_strategy, bool(entry[1]), entry),
         )
 
         lines.append(f"{heading} {lane.capitalize()} lane")
@@ -628,7 +645,7 @@ def render_benchmark(
 
         lines.append("")
 
-        if baseline and candidate:
+        if baseline and candidate and show_deltas:
             for phase_name in LANE_PHASES[lane]:
                 total_field = PHASE_RUN_FIELDS[phase_name][0]
                 before = baseline["runs"].get(total_field)
@@ -644,7 +661,7 @@ def render_benchmark(
                     continue
                 lines.append(
                     f"- {PHASE_LABELS[phase_name]}: {PROVIDER_LABELS[CANDIDATE_STRATEGY]} {format_seconds(after)} "
-                    f"vs {PROVIDER_LABELS[BASELINE_STRATEGY]} {format_seconds(before)} — **{format_delta(before, after)}**"
+                    f"vs {PROVIDER_LABELS[baseline_strategy]} {format_seconds(before)} — **{format_delta(before, after)}**"
                 )
             lines.append("")
 
@@ -656,16 +673,16 @@ def summarize(args: argparse.Namespace) -> int:
     if not phases:
         raise SystemExit(f"no benchmark phase evidence found under {args.input_dir}")
 
-    source_shas: dict[tuple[str, str], set[str]] = {}
+    source_shas: dict[tuple[str, str, str], set[str]] = {}
     for phase in phases:
         source = phase.get("source") or {}
         sha = source.get("sha")
         if not sha:
             raise SystemExit(f"missing source SHA for {phase['benchmark']} {phase['strategy']}")
-        source_shas.setdefault((phase["benchmark"], phase["lane"]), set()).add(sha)
-    for (benchmark, lane), shas in source_shas.items():
+        source_shas.setdefault((phase["benchmark"], phase["lane"], phase["phase"]), set()).add(sha)
+    for (benchmark, lane, phase_name), shas in source_shas.items():
         if len(shas) != 1:
-            raise SystemExit(f"mixed source SHAs for {benchmark} {lane}: {', '.join(sorted(shas))}")
+            raise SystemExit(f"mixed source SHAs for {benchmark} {lane} {phase_name}: {', '.join(sorted(shas))}")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -685,7 +702,7 @@ def summarize(args: argparse.Namespace) -> int:
         output_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
         print(output_path)
 
-    markdown = render_markdown(args.title, lanes, phases)
+    markdown = render_markdown(args.title, lanes, phases, args.baseline_strategy, not args.no_deltas)
     (output_dir / "comparison.md").write_text(markdown)
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")

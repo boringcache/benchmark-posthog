@@ -57,6 +57,23 @@ class ActivateDockerPlanTest(unittest.TestCase):
         self.assertIn("--push", docker["command"])
         self.assertEqual(plan["adapters"]["turbo"]["tag"], "posthog-turbo-local")
 
+    def test_load_case_produces_a_local_image(self) -> None:
+        plan = self.activate(
+            "--dockerfile", "upstream/Dockerfile",
+            "--platform", "linux/amd64",
+            "--tool-cache", "false",
+            "--mount-cache", "false",
+            "--no-cache", "false",
+            "--sourcemap-secret", "false",
+            "--push", "false",
+            "--load", "true",
+            "--image", "ghcr.io/acme/posthog:boringcache",
+        )
+        command = plan["adapters"]["docker"]["command"]
+        self.assertIn("--load", command)
+        self.assertNotIn("--push", command)
+        self.assertIn("posthog-benchmark:local", command)
+
 
 if __name__ == "__main__":
     unittest.main()

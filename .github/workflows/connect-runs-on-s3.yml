@@ -1,0 +1,44 @@
+name: Connect PostHog RunsOn S3 benchmark workspace
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  BORINGCACHE_CLI_VERSION: "1.31.0"
+  BORINGCACHE_CLI_SHA256: 012986106db03390d434d7da8736bdc690cdc749f46b2b5b4f5f580738e57003
+  BORINGCACHE_TOKEN_FILE: /dev/null
+
+jobs:
+  connect:
+    name: Connect PostHog to the S3 workspace
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Select the S3 benchmark workspace
+        run: |
+          set -euo pipefail
+          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3"|' .boringcache.toml
+          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3"' .boringcache.toml
+      - name: Install the released BoringCache CLI
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/boringcache-bin"
+          install -d -m 0755 "${install_dir}"
+          curl --fail --location --silent --show-error \
+            "https://github.com/boringcache/cli/releases/download/v${BORINGCACHE_CLI_VERSION}/boringcache-linux-amd64" \
+            --output "${install_dir}/boringcache"
+          printf '%s  %s\n' "${BORINGCACHE_CLI_SHA256}" "${install_dir}/boringcache" | sha256sum --check
+          chmod 0755 "${install_dir}/boringcache"
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+      - name: Request the OIDC connection
+        run: |
+          set -euo pipefail
+          script --quiet --return --flush \
+            --command 'boringcache ci connect --oidc-provider github-actions' \
+            /dev/null

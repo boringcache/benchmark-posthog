@@ -22,9 +22,12 @@ def main() -> int:
     parser.add_argument("--no-cache", choices=("true", "false"), required=True)
     parser.add_argument("--sourcemap-secret", choices=("true", "false"), required=True)
     parser.add_argument("--push", choices=("true", "false"), required=True)
+    parser.add_argument("--load", choices=("true", "false"), default="false")
     parser.add_argument("--image", required=True)
     parser.add_argument("--plan", type=Path, default=PLAN)
     args = parser.parse_args()
+    if args.push == "true" and args.load == "true":
+        raise SystemExit("choose either --push or --load")
 
     dockerfile = PurePosixPath(args.dockerfile)
     if dockerfile.is_absolute() or ".." in dockerfile.parts:
@@ -58,6 +61,8 @@ def main() -> int:
     command.extend(["--tag", output_image])
     if args.push == "true":
         command.append("--push")
+    if args.load == "true":
+        command.append("--load")
     command.append("upstream")
 
     rendered = (

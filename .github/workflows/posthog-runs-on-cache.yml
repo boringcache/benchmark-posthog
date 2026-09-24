@@ -1,0 +1,235 @@
+name: "PostHog RunsOn cache comparison"
+run-name: ${{ format('PostHog RunsOn Magic Cache vs BoringCache | {0}', inputs.storage_backend) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      storage_backend:
+        description: BoringCache storage for this comparison.
+        required: true
+        type: choice
+        options: [s3, managed]
+        default: s3
+      cold_ref:
+        description: Exact PostHog revision used to fill each cache.
+        required: true
+        type: string
+        default: 01449eb1ffe783af5bc2815ad7f793634d146002
+      warm_ref:
+        description: Exact adjacent PostHog revision used after a same-revision warm build.
+        required: true
+        type: string
+        default: 9d6b1eff1fd06766f9a9e5ce3a5f29136f23a618
+      cli_version:
+        description: Optional exact BoringCache CLI release tag.
+        required: false
+        type: string
+        default: ""
+      buildkit_image:
+        description: Optional managed BoringCache BuildKit image.
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ inputs.storage_backend }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+  packages: write
+  id-token: write
+
+env:
+  BORINGCACHE_RESTORE_TOKEN: ${{ inputs.storage_backend == 'managed' && secrets.BORINGCACHE_RESTORE_TOKEN || '' }}
+  BORINGCACHE_SAVE_TOKEN: ${{ inputs.storage_backend == 'managed' && secrets.BORINGCACHE_SAVE_TOKEN || '' }}
+  BORINGCACHE_NO_GIT: "true"
+  BORINGCACHE_EPHEMERAL_PRIVILEGED_RUNNER: "1"
+  BORINGCACHE_TOKEN_FILE: /dev/null
+
+jobs:
+  magic-cold:
+    name: RunsOn Magic Cache cold
+    if: github.ref_name == 'main' && inputs.cold_ref != inputs.warm_ref
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false/extras=s3-cache
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2.3.1
+      - uses: actions/checkout@v6
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: runs-on-cache
+          phase: publish
+          cache_lane: fresh
+          benchmark_id: posthog-runson-magic
+          platform: linux/amd64
+          push_image: "true"
+          image_tag: magic-${{ github.run_id }}-${{ github.run_attempt }}-cold
+          upstream_ref: ${{ inputs.cold_ref }}
+
+  magic-warm:
+    name: RunsOn Magic Cache warm
+    needs: magic-cold
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false/extras=s3-cache
+    timeout-minutes: 180
+    steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2.3.1
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: runs-on-cache
+          phase: warm
+          cache_lane: fresh
+          benchmark_id: posthog-runson-magic
+          platform: linux/amd64
+          push_image: "true"
+          image_tag: magic-${{ github.run_id }}-${{ github.run_attempt }}-warm
+          upstream_ref: ${{ inputs.cold_ref }}
+          cache_scope: ${{ needs.magic-cold.outputs.cache_scope }}
+
+  magic-source-change:
+    name: RunsOn Magic Cache changed source
+    needs: [magic-cold, magic-warm]
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false/extras=s3-cache
+    timeout-minutes: 180
+    steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2.3.1
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: runs-on-cache
+          phase: warm
+          report_phase: source_change
+          cache_lane: fresh
+          benchmark_id: posthog-runson-magic
+          platform: linux/amd64
+          push_image: "true"
+          image_tag: magic-${{ github.run_id }}-${{ github.run_attempt }}-changed
+          upstream_ref: ${{ inputs.warm_ref }}
+          cache_scope: ${{ needs.magic-cold.outputs.cache_scope }}
+
+  boringcache-cold:
+    name: BoringCache cold
+    if: github.ref_name == 'main' && inputs.cold_ref != inputs.warm_ref
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false
+    timeout-minutes: 180
+    outputs:
+      cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
+    steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2.3.1
+      - uses: actions/checkout@v6
+      - name: Select the S3 benchmark workspace
+        if: inputs.storage_backend == 's3'
+        run: |
+          set -euo pipefail
+          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3"|' .boringcache.toml
+          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3"' .boringcache.toml
+      - id: benchmark
+        uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: boringcache
+          phase: publish
+          cache_lane: fresh
+          benchmark_id: posthog-runson-magic
+          platform: linux/amd64
+          push_image: "true"
+          image_tag: boringcache-${{ github.run_id }}-${{ github.run_attempt }}-cold
+          upstream_ref: ${{ inputs.cold_ref }}
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+
+  boringcache-warm:
+    name: BoringCache warm
+    needs: boringcache-cold
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false
+    timeout-minutes: 180
+    steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2.3.1
+      - uses: actions/checkout@v6
+      - name: Select the S3 benchmark workspace
+        if: inputs.storage_backend == 's3'
+        run: |
+          set -euo pipefail
+          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3"|' .boringcache.toml
+          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3"' .boringcache.toml
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: boringcache
+          phase: warm
+          cache_lane: fresh
+          benchmark_id: posthog-runson-magic
+          platform: linux/amd64
+          push_image: "true"
+          image_tag: boringcache-${{ github.run_id }}-${{ github.run_attempt }}-warm
+          publish_on_warm: "true"
+          upstream_ref: ${{ inputs.cold_ref }}
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          cache_scope: ${{ needs.boringcache-cold.outputs.cache_scope }}
+
+  boringcache-source-change:
+    name: BoringCache changed source
+    needs: [boringcache-cold, boringcache-warm]
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false
+    timeout-minutes: 180
+    steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2.3.1
+      - uses: actions/checkout@v6
+      - name: Select the S3 benchmark workspace
+        if: inputs.storage_backend == 's3'
+        run: |
+          set -euo pipefail
+          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3"|' .boringcache.toml
+          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3"' .boringcache.toml
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: boringcache
+          phase: warm
+          report_phase: source_change
+          cache_lane: fresh
+          benchmark_id: posthog-runson-magic
+          platform: linux/amd64
+          push_image: "true"
+          image_tag: boringcache-${{ github.run_id }}-${{ github.run_attempt }}-changed
+          publish_on_warm: "true"
+          upstream_ref: ${{ inputs.warm_ref }}
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}
+          cache_scope: ${{ needs.boringcache-cold.outputs.cache_scope }}
+
+  report:
+    name: PostHog cache comparison report
+    needs: [magic-source-change, boringcache-source-change]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download phase evidence
+        uses: actions/download-artifact@v6
+        with:
+          pattern: phase-posthog-runson-magic-*
+          path: phase-evidence
+      - name: Summarize the comparison
+        run: |
+          python3 ./scripts/benchmark-report.py summarize \
+            --title "PostHog RunsOn Magic Cache and BoringCache" \
+            --baseline-strategy runs-on-cache \
+            --no-deltas \
+            --input-dir phase-evidence \
+            --output-dir benchmark-results
+      - name: Retain the comparison evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: posthog-runson-magic-${{ inputs.storage_backend }}
+          path: benchmark-results/
+          if-no-files-found: error

@@ -3,17 +3,33 @@ description: "Runs one PostHog cache provider and phase through the public produ
 
 inputs:
   strategy:
-    description: "actions-cache or boringcache"
+    description: "actions-cache, runs-on-cache, or boringcache"
     required: true
   phase:
     description: "publish or warm"
     required: true
+  report_phase:
+    description: "Override the phase name used in the report."
+    required: false
+    default: ""
   cache_lane:
     description: "rolling or fresh"
     required: true
   benchmark_id:
     required: true
   push_image:
+    required: false
+    default: "false"
+  image_tag:
+    description: "Optional image tag for a pushed image."
+    required: false
+    default: ""
+  load_image:
+    description: "Load the completed image into the runner's Docker engine."
+    required: false
+    default: "false"
+  publish_on_warm:
+    description: "Publish the cache after a warm build."
     required: false
     default: "false"
   platform:
@@ -149,7 +165,8 @@ runs:
         NO_CACHE: ${{ inputs.no_cache }}
         SOURCEMAP_SECRET: ${{ inputs.posthog_sourcemap_api_key != '' }}
         PUSH_IMAGE: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
-        IMAGE: ghcr.io/${{ github.repository_owner }}/posthog-benchmark:boringcache
+        LOAD_IMAGE: ${{ inputs.load_image }}
+        IMAGE: ghcr.io/${{ github.repository_owner }}/posthog-benchmark:${{ inputs.image_tag || 'boringcache' }}
       run: >-
         python3 ./scripts/activate-docker-plan.py
         --dockerfile "$DOCKERFILE"
@@ -159,6 +176,7 @@ runs:
         --no-cache "$NO_CACHE"
         --sourcemap-secret "$SOURCEMAP_SECRET"
         --push "$PUSH_IMAGE"
+        --load "$LOAD_IMAGE"
         --image "$IMAGE"
     - name: Log in to the GitHub Container Registry
       if: inputs.push_image == 'true' && github.ref == 'refs/heads/main'
@@ -171,8 +189,8 @@ runs:
       id: setup_timer
       shell: bash
       run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
-    - name: Set up Buildx for the GitHub Actions comparison
-      if: inputs.strategy == 'actions-cache'
+    - name: Set up Buildx for the Actions cache protocol
+      if: inputs.strategy == 'actions-cache' || inputs.strategy == 'runs-on-cache'
       uses: docker/setup-buildx-action@v4
 
     - name: Start the build timer
@@ -185,8 +203,8 @@ runs:
         now="$(date +%s)"
         echo "setup_seconds=$(( now - SETUP_STARTED_AT ))" >> "$GITHUB_OUTPUT"
         echo "started_at=${now}" >> "$GITHUB_OUTPUT"
-    - name: Build with the GitHub Actions cache
-      if: inputs.strategy == 'actions-cache'
+    - name: Build with the Actions cache protocol
+      if: inputs.strategy == 'actions-cache' || inputs.strategy == 'runs-on-cache'
       uses: docker/build-push-action@v6
       env:
         DOCKER_BUILD_SUMMARY: "false"
@@ -195,8 +213,9 @@ runs:
         context: upstream
         file: ${{ steps.dockerfile.outputs.path }}
         platforms: ${{ inputs.platform }}
-        tags: ghcr.io/${{ github.repository_owner }}/posthog-benchmark:actions-cache
+        tags: ghcr.io/${{ github.repository_owner }}/posthog-benchmark:${{ inputs.image_tag || 'actions-cache' }}
         push: ${{ inputs.push_image == 'true' && github.ref == 'refs/heads/main' }}
+        load: ${{ inputs.load_image == 'true' }}
         provenance: false
         secrets: ${{ inputs.posthog_sourcemap_api_key != '' && format('posthog_upload_sourcemaps_cli_api_key={0}', inputs.posthog_sourcemap_api_key) || '' }}
         cache-from: type=gha,scope=${{ steps.scope.outputs.cache_scope }}
@@ -214,7 +233,7 @@ runs:
         mode: docker
         trust-policy: publish
         fail-on-cache-error: true
-    - name: Restore with BoringCache
+    - name: Build from the BoringCache cache
       id: restore
       if: inputs.strategy == 'boringcache' && inputs.phase == 'warm'
       uses: boringcache/one@476c7df90bc1e7c2c4066aa7eb31cc057ef7f8d1 # v1 / 1.32.0
@@ -224,9 +243,22 @@ runs:
       with:
         cli-version: ${{ inputs.cli_version }}
         mode: docker
-        trust-policy: restore
+        trust-policy: ${{ inputs.publish_on_warm == 'true' && 'publish' || 'restore' }}
         fail-on-cache-miss: true
         fail-on-cache-error: true
+    - name: Verify the completed image
+      if: inputs.load_image == 'true'
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.strategy == 'boringcache' && 'posthog-benchmark:local' || format('ghcr.io/{0}/posthog-benchmark:{1}', github.repository_owner, inputs.image_tag || 'actions-cache') }}
+      run: |
+        docker image inspect "$IMAGE" --format 'Image ID: {{.Id}}; size: {{.Size}} bytes'
+    - name: Verify the pushed image
+      if: inputs.push_image == 'true'
+      shell: bash
+      env:
+        IMAGE: ghcr.io/${{ github.repository_owner }}/posthog-benchmark:${{ inputs.image_tag || (inputs.strategy == 'boringcache' && 'boringcache' || 'actions-cache') }}
+      run: docker buildx imagetools inspect "$IMAGE"
     - name: Capture the build timing
       id: build_timing
       shell: bash
@@ -239,7 +271,7 @@ runs:
         BENCHMARK_ID: ${{ inputs.benchmark_id }}
         STRATEGY: ${{ inputs.strategy }}
         CACHE_LANE: ${{ inputs.cache_lane }}
-        REPORT_PHASE: ${{ inputs.cache_lane == 'rolling' && 'commit' || inputs.phase == 'warm' && 'warm' || 'cold' }}
+        REPORT_PHASE: ${{ inputs.report_phase || inputs.cache_lane == 'rolling' && 'commit' || inputs.phase == 'warm' && 'warm' || 'cold' }}
         REPORT_VARIANT: ${{ steps.scope.outputs.variant }}
         WORKFLOW_STARTED_AT: ${{ steps.workflow_timer.outputs.started_at }}
         SETUP_SECONDS: ${{ steps.build_timer.outputs.setup_seconds }}
@@ -270,6 +302,6 @@ runs:
     - name: Retain the benchmark phase evidence
       uses: actions/upload-artifact@v6
       with:
-        name: phase-${{ inputs.benchmark_id }}-${{ inputs.strategy }}${{ steps.scope.outputs.variant_suffix }}-${{ inputs.cache_lane }}-${{ inputs.cache_lane == 'rolling' && 'commit' || inputs.phase == 'warm' && 'warm' || 'cold' }}
+        name: phase-${{ inputs.benchmark_id }}-${{ inputs.strategy }}${{ steps.scope.outputs.variant_suffix }}-${{ inputs.cache_lane }}-${{ inputs.report_phase || inputs.cache_lane == 'rolling' && 'commit' || inputs.phase == 'warm' && 'warm' || 'cold' }}
         path: benchmark-results/
         if-no-files-found: error

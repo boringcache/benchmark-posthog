@@ -27,7 +27,7 @@ on:
         default: "-runson-s3"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ inputs.storage_backend }}
   cancel-in-progress: false
 
 permissions:
@@ -47,7 +47,7 @@ jobs:
   gha-cold:
     name: GitHub Actions amd64 cold
     if: github.ref_name == 'main'
-    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false
     timeout-minutes: 180
     outputs:
       cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
@@ -72,7 +72,7 @@ jobs:
   gha-warm:
     name: GitHub Actions amd64 warm
     needs: gha-cold
-    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
@@ -95,7 +95,7 @@ jobs:
   boringcache-cold:
     name: BoringCache amd64 cold
     if: github.ref_name == 'main'
-    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false
     timeout-minutes: 180
     outputs:
       cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
@@ -122,7 +122,7 @@ jobs:
   boringcache-warm:
     name: BoringCache amd64 warm
     needs: boringcache-cold
-    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
@@ -147,7 +147,7 @@ jobs:
   boringcache-combined-cold:
     name: BoringCache layer + tool + mount cache amd64 cold
     if: github.ref_name == 'main'
-    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false
     timeout-minutes: 180
     outputs:
       cache_scope: ${{ steps.benchmark.outputs.cache_scope }}
@@ -176,7 +176,7 @@ jobs:
   boringcache-combined-warm:
     name: BoringCache layer + tool + mount cache amd64 warm
     needs: boringcache-combined-cold
-    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6

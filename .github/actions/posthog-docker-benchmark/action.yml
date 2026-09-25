@@ -12,6 +12,10 @@ inputs:
     description: "Override the phase name used in the report."
     required: false
     default: ""
+  report_variant:
+    description: "Identifies one source revision in a rolling comparison."
+    required: false
+    default: ""
   cache_lane:
     description: "rolling or fresh"
     required: true
@@ -130,6 +134,8 @@ runs:
         set -euo pipefail
         if [[ "$PHASE" == "warm" ]]; then
           [[ -n "$PUBLISHED_SCOPE" ]]
+        fi
+        if [[ -n "$PUBLISHED_SCOPE" ]]; then
           cache_scope="$PUBLISHED_SCOPE"
         else
           ref_slug="$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9._-' '-')"
@@ -272,7 +278,7 @@ runs:
         STRATEGY: ${{ inputs.strategy }}
         CACHE_LANE: ${{ inputs.cache_lane }}
         REPORT_PHASE: ${{ inputs.report_phase || inputs.cache_lane == 'rolling' && 'commit' || inputs.phase == 'warm' && 'warm' || 'cold' }}
-        REPORT_VARIANT: ${{ steps.scope.outputs.variant }}
+        REPORT_VARIANT: ${{ inputs.report_variant || steps.scope.outputs.variant }}
         WORKFLOW_STARTED_AT: ${{ steps.workflow_timer.outputs.started_at }}
         SETUP_SECONDS: ${{ steps.build_timer.outputs.setup_seconds }}
         BUILD_SECONDS: ${{ steps.build_timing.outputs.build_seconds }}
@@ -299,9 +305,18 @@ runs:
           --source-sha "$SOURCE_SHA" \
           --storage-key "$STORAGE_KEY" \
           --evidence "$EVIDENCE_PATH"
+    - name: Retain BoringCache action evidence
+      if: inputs.strategy == 'boringcache'
+      shell: bash
+      env:
+        EVIDENCE_PATH: ${{ steps.publish.outputs.evidence-path || steps.restore.outputs.evidence-path }}
+      run: |
+        set -euo pipefail
+        test -f "$EVIDENCE_PATH"
+        cp "$EVIDENCE_PATH" benchmark-results/action-evidence.json
     - name: Retain the benchmark phase evidence
       uses: actions/upload-artifact@v6
       with:
-        name: phase-${{ inputs.benchmark_id }}-${{ inputs.strategy }}${{ steps.scope.outputs.variant_suffix }}-${{ inputs.cache_lane }}-${{ inputs.report_phase || inputs.cache_lane == 'rolling' && 'commit' || inputs.phase == 'warm' && 'warm' || 'cold' }}
+        name: phase-${{ inputs.benchmark_id }}-${{ inputs.strategy }}${{ steps.scope.outputs.variant_suffix }}-${{ inputs.cache_lane }}-${{ inputs.report_phase || inputs.cache_lane == 'rolling' && 'commit' || inputs.phase == 'warm' && 'warm' || 'cold' }}${{ inputs.report_variant && format('-{0}', inputs.report_variant) || '' }}
         path: benchmark-results/
         if-no-files-found: error

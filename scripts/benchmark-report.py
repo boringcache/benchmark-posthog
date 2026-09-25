@@ -561,7 +561,7 @@ def render_markdown(title: str, lanes: dict[tuple[str, str, str, str], dict[str,
         lines.extend(render_benchmark(benchmark, lanes, phases, depth=4 if len(benchmarks) > 1 else 3, baseline_strategy=baseline_strategy, show_deltas=show_deltas))
 
     sources = {
-        payload["phase"]: payload["source"]
+        (payload["phase"], payload.get("variant") or ""): payload["source"]
         for payload in phases
         if payload["source"].get("repository") and payload["source"].get("sha")
     }
@@ -569,9 +569,12 @@ def render_markdown(title: str, lanes: dict[tuple[str, str, str, str], dict[str,
         if len({source["sha"] for source in sources.values()}) == 1:
             source = next(iter(sources.values()))
             lines.append(f"Source: `{source['repository']}@{source['sha'][:7]}`")
+        elif any(variant for _, variant in sources):
+            for (_, variant), source in sorted(sources.items(), key=lambda item: item[0][1]):
+                lines.append(f"{variant} source: `{source['repository']}@{source['sha'][:7]}`")
         else:
             for phase_name in ("cold", "warm", "source_change", "commit"):
-                if source := sources.get(phase_name):
+                if source := sources.get((phase_name, "")):
                     lines.append(f"{PHASE_LABELS[phase_name]} source: `{source['repository']}@{source['sha'][:7]}`")
         lines.append("")
 
@@ -604,7 +607,9 @@ def render_benchmark(
     for lane in lane_names:
         baseline = lanes.get((baseline_strategy, "", lane))
         candidate = lanes.get((CANDIDATE_STRATEGY, "", lane))
-        reference = candidate or baseline
+        reference = candidate or baseline or next(
+            (value for (_, _, item), value in lanes.items() if item == lane), None
+        )
         if reference is None:
             continue
 
@@ -673,16 +678,16 @@ def summarize(args: argparse.Namespace) -> int:
     if not phases:
         raise SystemExit(f"no benchmark phase evidence found under {args.input_dir}")
 
-    source_shas: dict[tuple[str, str, str], set[str]] = {}
+    source_shas: dict[tuple[str, str, str, str], set[str]] = {}
     for phase in phases:
         source = phase.get("source") or {}
         sha = source.get("sha")
         if not sha:
             raise SystemExit(f"missing source SHA for {phase['benchmark']} {phase['strategy']}")
-        source_shas.setdefault((phase["benchmark"], phase["lane"], phase["phase"]), set()).add(sha)
-    for (benchmark, lane, phase_name), shas in source_shas.items():
+        source_shas.setdefault((phase["benchmark"], phase["lane"], phase["phase"], phase.get("variant") or ""), set()).add(sha)
+    for (benchmark, lane, phase_name, variant), shas in source_shas.items():
         if len(shas) != 1:
-            raise SystemExit(f"mixed source SHAs for {benchmark} {lane} {phase_name}: {', '.join(sorted(shas))}")
+            raise SystemExit(f"mixed source SHAs for {benchmark} {lane} {phase_name} {variant}: {', '.join(sorted(shas))}")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

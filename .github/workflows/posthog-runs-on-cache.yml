@@ -1,9 +1,15 @@
 name: "PostHog RunsOn cache comparison"
-run-name: ${{ format('PostHog RunsOn Magic Cache vs BoringCache | {0}', inputs.storage_backend) }}
+run-name: ${{ inputs.comparison_mode == 'rolling5' && 'PostHog five-commit RunsOn Docker comparison' || format('PostHog RunsOn Magic Cache vs BoringCache | {0}', inputs.storage_backend) }}
 
 on:
   workflow_dispatch:
     inputs:
+      comparison_mode:
+        description: Run the three-phase comparison or five source commits and a final warm build.
+        required: true
+        type: choice
+        options: [fresh, rolling5]
+        default: fresh
       storage_backend:
         description: BoringCache storage for this comparison.
         required: true
@@ -18,6 +24,11 @@ on:
       warm_ref:
         description: Exact adjacent PostHog revision used after a same-revision warm build.
         required: true
+        type: string
+        default: 9d6b1eff1fd06766f9a9e5ce3a5f29136f23a618
+      rolling_head_ref:
+        description: Final PostHog revision for the five-commit Docker sequence.
+        required: false
         type: string
         default: 9d6b1eff1fd06766f9a9e5ce3a5f29136f23a618
       cli_version:
@@ -51,7 +62,7 @@ env:
 jobs:
   magic-cold:
     name: RunsOn Magic Cache cold
-    if: github.ref_name == 'main' && inputs.cold_ref != inputs.warm_ref
+    if: github.ref_name == 'main' && inputs.comparison_mode == 'fresh' && inputs.cold_ref != inputs.warm_ref
     runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false/extras=s3-cache
     timeout-minutes: 180
     outputs:
@@ -117,7 +128,7 @@ jobs:
 
   boringcache-cold:
     name: BoringCache cold
-    if: github.ref_name == 'main' && inputs.cold_ref != inputs.warm_ref
+    if: github.ref_name == 'main' && inputs.comparison_mode == 'fresh' && inputs.cold_ref != inputs.warm_ref
     runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false
     timeout-minutes: 180
     outputs:
@@ -210,6 +221,7 @@ jobs:
   report:
     name: PostHog cache comparison report
     needs: [magic-source-change, boringcache-source-change]
+    if: inputs.comparison_mode == 'fresh'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -232,4 +244,187 @@ jobs:
         with:
           name: posthog-runson-magic-${{ inputs.storage_backend }}
           path: benchmark-results/
+          if-no-files-found: error
+
+  rolling_source:
+    name: Resolve five first-parent PostHog commits
+    if: inputs.comparison_mode == 'rolling5'
+    runs-on: ubuntu-24.04
+    outputs:
+      shas: ${{ steps.commits.outputs.shas }}
+    steps:
+      - name: Pin the source sequence
+        id: commits
+        env:
+          HEAD_REF: ${{ inputs.rolling_head_ref }}
+          STORAGE_BACKEND: ${{ inputs.storage_backend }}
+        run: |
+          set -euo pipefail
+          test "$STORAGE_BACKEND" = s3
+          git init "$RUNNER_TEMP/source"
+          git -C "$RUNNER_TEMP/source" remote add origin https://github.com/PostHog/posthog.git
+          git -C "$RUNNER_TEMP/source" fetch --no-tags --filter=blob:none --depth=6 origin "$HEAD_REF"
+          mapfile -t shas < <(git -C "$RUNNER_TEMP/source" rev-list --first-parent --max-count=5 "$HEAD_REF" | tac)
+          test "${#shas[@]}" -eq 5
+          test "${shas[4]}" = "$HEAD_REF"
+          echo "shas=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${shas[@]}")" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "${shas[@]}"
+
+  rolling_bucket_before:
+    name: Inspect RunsOn bucket before PostHog builds
+    if: inputs.comparison_mode == 'rolling5'
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false/extras=s3-cache
+    steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2.3.1
+      - uses: actions/checkout@v6
+      - name: Summarize bucket objects
+        run: |
+          mkdir -p benchmark-results
+          python3 ./scripts/report-runs-on-s3.py before benchmark-results/bucket-before.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: posthog-runson-bucket-before
+          path: benchmark-results/bucket-before.json
+          if-no-files-found: error
+
+  rolling_step00:
+    needs: [rolling_source, rolling_bucket_before]
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [runs-on-cache, boringcache]
+    uses: ./.github/workflows/posthog-runs-on-rolling-phase.yml
+    with:
+      provider: ${{ matrix.provider }}
+      source_sha: ${{ fromJSON(needs.rolling_source.outputs.shas)[0] }}
+      step: "step00"
+      phase: publish
+      cli_version: ${{ inputs.cli_version }}
+      buildkit_image: ${{ inputs.buildkit_image }}
+    secrets: inherit
+
+  rolling_step01:
+    needs: [rolling_source, rolling_step00]
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [runs-on-cache, boringcache]
+    uses: ./.github/workflows/posthog-runs-on-rolling-phase.yml
+    with:
+      provider: ${{ matrix.provider }}
+      source_sha: ${{ fromJSON(needs.rolling_source.outputs.shas)[1] }}
+      step: "step01"
+      phase: warm
+      cli_version: ${{ inputs.cli_version }}
+      buildkit_image: ${{ inputs.buildkit_image }}
+    secrets: inherit
+
+  rolling_step02:
+    needs: [rolling_source, rolling_step01]
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [runs-on-cache, boringcache]
+    uses: ./.github/workflows/posthog-runs-on-rolling-phase.yml
+    with:
+      provider: ${{ matrix.provider }}
+      source_sha: ${{ fromJSON(needs.rolling_source.outputs.shas)[2] }}
+      step: "step02"
+      phase: warm
+      cli_version: ${{ inputs.cli_version }}
+      buildkit_image: ${{ inputs.buildkit_image }}
+    secrets: inherit
+
+  rolling_step03:
+    needs: [rolling_source, rolling_step02]
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [runs-on-cache, boringcache]
+    uses: ./.github/workflows/posthog-runs-on-rolling-phase.yml
+    with:
+      provider: ${{ matrix.provider }}
+      source_sha: ${{ fromJSON(needs.rolling_source.outputs.shas)[3] }}
+      step: "step03"
+      phase: warm
+      cli_version: ${{ inputs.cli_version }}
+      buildkit_image: ${{ inputs.buildkit_image }}
+    secrets: inherit
+
+  rolling_step04:
+    needs: [rolling_source, rolling_step03]
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [runs-on-cache, boringcache]
+    uses: ./.github/workflows/posthog-runs-on-rolling-phase.yml
+    with:
+      provider: ${{ matrix.provider }}
+      source_sha: ${{ fromJSON(needs.rolling_source.outputs.shas)[4] }}
+      step: "step04"
+      phase: warm
+      cli_version: ${{ inputs.cli_version }}
+      buildkit_image: ${{ inputs.buildkit_image }}
+    secrets: inherit
+
+  rolling_step05:
+    needs: [rolling_source, rolling_step04]
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [runs-on-cache, boringcache]
+    uses: ./.github/workflows/posthog-runs-on-rolling-phase.yml
+    with:
+      provider: ${{ matrix.provider }}
+      source_sha: ${{ fromJSON(needs.rolling_source.outputs.shas)[4] }}
+      step: "step05"
+      phase: warm
+      cli_version: ${{ inputs.cli_version }}
+      buildkit_image: ${{ inputs.buildkit_image }}
+    secrets: inherit
+
+  rolling_report:
+    name: Compare six PostHog Docker builds
+    needs: rolling_step05
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: phase-posthog-runson-rolling5-*
+          path: phase-evidence
+      - name: Summarize the rolling sequence
+        run: |
+          python3 ./scripts/benchmark-report.py summarize \
+            --title "PostHog five-commit RunsOn Docker comparison" \
+            --baseline-strategy runs-on-cache \
+            --no-deltas \
+            --input-dir phase-evidence \
+            --output-dir benchmark-results
+      - name: Record BuildKit reuse from completed jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ./scripts/report-docker-reuse.py "$GITHUB_RUN_ID" benchmark-results
+      - uses: actions/upload-artifact@v6
+        with:
+          name: posthog-runson-rolling5-comparison
+          path: benchmark-results/
+          if-no-files-found: error
+
+  rolling_bucket_after:
+    name: Inspect RunsOn bucket after PostHog builds
+    needs: rolling_report
+    if: always() && inputs.comparison_mode == 'rolling5'
+    runs-on: runs-on=${{ github.run_id }}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false/extras=s3-cache
+    steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2.3.1
+      - uses: actions/checkout@v6
+      - name: Summarize bucket objects
+        run: |
+          mkdir -p benchmark-results
+          python3 ./scripts/report-runs-on-s3.py after benchmark-results/bucket-after.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: posthog-runson-bucket-after
+          path: benchmark-results/bucket-after.json
           if-no-files-found: error

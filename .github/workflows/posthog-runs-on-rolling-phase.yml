@@ -1,0 +1,70 @@
+name: PostHog RunsOn rolling Docker phase
+
+on:
+  workflow_call:
+    inputs:
+      provider:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      step:
+        required: true
+        type: string
+      phase:
+        required: true
+        type: string
+      cli_version:
+        required: false
+        type: string
+        default: ""
+      buildkit_image:
+        required: false
+        type: string
+        default: ""
+    secrets:
+      POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+  actions: write
+  packages: write
+  id-token: write
+
+env:
+  BORINGCACHE_NO_GIT: "true"
+  BORINGCACHE_EPHEMERAL_PRIVILEGED_RUNNER: "1"
+  BORINGCACHE_TOKEN_FILE: /dev/null
+
+jobs:
+  build:
+    name: ${{ inputs.provider }} ${{ inputs.step }}
+    runs-on: ${{ inputs.provider == 'runs-on-cache' && format('runs-on={0}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false/extras=s3-cache', github.run_id) || format('runs-on={0}/cpu=16/ram=64/family=m7i.*+m7a/image=ubuntu24-full-x64/volume=300gb:gp3/env=benchmark/region=us-east-1/spot=false', github.run_id) }}
+    timeout-minutes: 180
+    steps:
+      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d # v2.3.1
+      - uses: actions/checkout@v6
+      - name: Select the S3 benchmark workspace
+        if: inputs.provider == 'boringcache'
+        run: |
+          set -euo pipefail
+          sed -i 's|^workspace = ".*"|workspace = "boringcache/benchmark-runs-on-s3-clean"|' .boringcache.toml
+          grep -Fx 'workspace = "boringcache/benchmark-runs-on-s3-clean"' .boringcache.toml
+      - uses: ./.github/actions/posthog-docker-benchmark
+        with:
+          posthog_sourcemap_api_key: ${{ secrets.POSTHOG_UPLOAD_SOURCEMAPS_CLI_API_KEY }}
+          strategy: ${{ inputs.provider }}
+          phase: ${{ inputs.phase }}
+          cache_lane: rolling
+          benchmark_id: posthog-runson-rolling5
+          platform: linux/amd64
+          load_image: "true"
+          publish_on_warm: "true"
+          image_tag: ${{ inputs.provider }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.step }}
+          upstream_ref: ${{ inputs.source_sha }}
+          cache_scope: posthog-runson-rolling5-run-r${{ github.run_id }}-a${{ github.run_attempt }}
+          report_variant: ${{ inputs.step }}
+          cli_version: ${{ inputs.cli_version }}
+          buildkit_image: ${{ inputs.buildkit_image }}

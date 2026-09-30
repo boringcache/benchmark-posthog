@@ -1,0 +1,22 @@
+name: CLI Canary
+
+on:
+  schedule:
+    - cron: "21 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: nightly-canary-dispatch
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: boringcache/benchmarks/.github/actions/nightly-canary@eb969469ac977449ff804ac5df4c882be99d4ec6
